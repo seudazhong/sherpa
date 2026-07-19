@@ -1,0 +1,39 @@
+"""Security primitives: KEK keyring, credential vault (AEAD), log redaction."""
+
+from __future__ import annotations
+
+from app.security.keyring import KekMaterial, Keyring, KeyringError, load_keyring
+from app.security.redaction import REDACTED, SENSITIVE_KEYS, is_sensitive, redact
+from app.security.vault import (
+    CapabilityError,
+    ConnectorCapability,
+    CredentialEnvelope,
+    CredentialIdentity,
+    CredentialIntegrityError,
+    VaultError,
+    connector_vault_capability,
+    open_oauth_credential,
+    rewrap_dek,
+    seal_oauth_credential,
+)
+
+__all__ = [
+    "KekMaterial",
+    "Keyring",
+    "KeyringError",
+    "load_keyring",
+    "REDACTED",
+    "SENSITIVE_KEYS",
+    "is_sensitive",
+    "redact",
+    "CapabilityError",
+    "ConnectorCapability",
+    "CredentialEnvelope",
+    "CredentialIdentity",
+    "CredentialIntegrityError",
+    "VaultError",
+    "connector_vault_capability",
+    "open_oauth_credential",
+    "rewrap_dek",
+    "seal_oauth_credential",
+]

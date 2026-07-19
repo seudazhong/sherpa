@@ -35,5 +35,13 @@ class Settings(BaseSettings):
     owner_email: str = "owner@localhost"
     owner_password: str = "sherpa-dev-password"
 
+    # Credential encryption (contract: config-and-secrets.md §3, ADR-019).
+    # KEK is base64 of exactly 32 bytes (AES-256). The dev default keeps tests
+    # runnable; production MUST override KEK/KEK_ID via env and never reuse this.
+    kek: str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    kek_id: str = "env-dev"
+    kek_key_version: int = 1
+    kek_previous_keys: str = "{}"
+
 
 settings = Settings()
