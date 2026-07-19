@@ -277,7 +277,7 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Provider | `PROVIDER_TIMEOUT_SECONDS` | `int`, 1–600 | `60` | No | No | Whole outbound provider request timeout. |
 | Gmail OAuth | `GMAIL_CLIENT_ID` | `str` | None | `web`, `worker` | No | OAuth client identifier. |
 | Gmail OAuth | `GMAIL_CLIENT_SECRET` | `SecretStr` | None | `web`, `worker` | **Yes** | OAuth code exchange and refresh only. |
-| Gmail OAuth | `GMAIL_REDIRECT` | `AnyHttpUrl` | None | `web` | No | Exact registered callback URL; HTTPS in production. |
+| Gmail OAuth | `GMAIL_REDIRECT` | `AnyHttpUrl` | None | `web` | No | Exact registered URL: configurable origin plus fixed `/connectors/gmail/oauth/callback`; HTTPS in production. |
 | Gmail OAuth | `GMAIL_OAUTH_MODE` | `per_deployment \| project_managed \| both` | `per_deployment` | No | No | Operating model remains open in review §5. |
 | Gmail data | `GMAIL_DATA_MODE` | `metadata_snippet \| full_body` | `metadata_snippet` | No | No | v1 safe default stores no full body or attachments. |
 | Gmail data | `GMAIL_RETENTION_DAYS` | `int`, 1–3650 | `90` | No | No | Rolling connector-content retention window. |
@@ -363,7 +363,7 @@ PROVIDER_TIMEOUT_SECONDS=60
 GMAIL_OAUTH_MODE=per_deployment
 GMAIL_CLIENT_ID=REPLACE_WITH_GMAIL_CLIENT_ID
 GMAIL_CLIENT_SECRET=REPLACE_WITH_GMAIL_CLIENT_SECRET  # SECRET
-GMAIL_REDIRECT=http://localhost:8000/api/v1/connectors/gmail/callback
+GMAIL_REDIRECT=http://localhost:8000/connectors/gmail/oauth/callback
 
 # Safe v1 retention: metadata + snippet only, no full body/attachments, rolling 90 days.
 GMAIL_DATA_MODE=metadata_snippet
