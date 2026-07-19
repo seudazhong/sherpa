@@ -2,12 +2,25 @@
 
 本项目讨论中**已锁定**的架构决策，及其理由与替代方案。新决策追加到末尾。
 
+> ✅ **v1 定位已确认（2026-07-19，项目负责人拍板）**：v1 = **自托管、单实例、单用户**的 **Gmail → Action** 助理；**保留 Web 聊天**为次要界面（Candidate Inbox 为主）。据此，下列受影响 ADR 已按[设计评审汇总](reviews/README.md) §4 落地修订（见各 ADR 下「评审修订」块，以及文末新增 ADR-015~022）。
+>
+> 仍待确认的**实现参数**（不阻塞架构，编码时定）：Gmail OAuth 运营模式、Gmail 数据保留范围、初始 model/provider、通知默认值。见 reviews/README.md §5。
+
+## 决策日志（Decisions Log）
+
+| 日期 | 决策点 | 答复 | 影响 |
+|---|---|---|---|
+| 2026-07-19 | v1 产品定位 | ✅ 接受「自托管、单用户 Gmail→Action」 | 新增 ADR-022 |
+| 2026-07-19 | 多租户 vs 单实例单人 | ✅ **单实例、单用户**；不追求托管多租户 | 新增 ADR-015（RLS 降级为"后加"） |
+| 2026-07-19 | Web 聊天界面 | ✅ **v1 保留**（次要界面；Candidate Inbox 为主） | 新增 ADR-022 |
+
 ---
 
 ### ADR-001 · 做云端 agent，不做 local agent
 - **决策**：Sherpa 是多租户云端 Agent 运行时，非本地 CLI agent。
 - **理由**：需求包含多用户登录、云端沙箱、定时任务、主动推送、IM/邮箱通道——本质是长驻服务。
 - **来源**：用户明确要求。
+> **评审修订（2026-07-19）**：长期愿景仍是云端（多租户）运行时；**v1 是其第一个可交付切片 = 自托管、单实例、单用户**（见 ADR-022）。多入口/多租户/团队为后续里程碑。
 
 ### ADR-002 · 技术栈 = Python core + TS 前端
 - **决策**：后端主语言 Python；前端 TypeScript。
@@ -19,57 +32,115 @@
 - **决策**：四层概念分离；会话键格式 `channel:type:external_id`；`identities` 表做身份链接；所有入口汇入 `resolve_inbound()`。
 - **理由**：解决"一人多入口"——同一人从 Web/QQ/邮箱进来归到同一 user、同一记忆、同一 todos。
 - **来源**：AstrBot UMO + OpenClaw identity links。
+> **评审修订（2026-07-19）**：规范键扩展为 内部 UUID + 唯一 `(tenant_id, channel, channel_installation_id, scope_type, external_scope_id)`；群体 actor 身份与 session 身份分离；原始 provider ID 仅留作审计。v1 单用户下 `tenant_id` 恒为单值，但字段/复合键保留（近乎零成本的前向兼容，避免团队/托管成为单向门）。详见 ADR-015。
 
 ### ADR-004 · 两层记忆（user 私有 + tenant 共享）
 - **决策**：记忆分 user 级私有 block 与 tenant 级共享 block；个人=单人工作区，与团队同一套 schema。
 - **理由**：个人助理与小团队协作统一，不必来回改 schema。共享 block 保持小（编辑会 rebuild 所有成员 prompt）。
 - **来源**：Letta memory blocks（many-to-many attach）。
+> **评审修订（2026-07-19）**：v1 单用户 → 只保留 **user 私有记忆**；tenant 共享 block 随团队功能一并推迟（schema 仍留 owner 维度以便未来）。此外 v1 的 memory/RAG（pgvector）整体推迟出 v1（见 ADR-012），先用最简候选/待办数据即可。
 
 ### ADR-005 · 运行时 = 异步 job 优先 + 事件总线流式
 - **决策**：所有 agent 运行都是异步 job；交互式靠 SSE/WS 从事件总线回推。web 进程永不跑 core 循环。
 - **理由**：长任务/定时/主动推送/多用户并发都要求非阻塞、无状态 web、可水平扩。
 - **铁律**：调模型前先持久化输入（durable prompt admission）。
 - **来源**：OpenCode/Kilo 事件总线 + durable admission。
+> **评审修订（2026-07-19，重要）**：明确 **PostgreSQL 规范运行态 + 有序事件日志（event journal）+ 事务性 outbox 为恢复/重放/流式的真相源**；Redis **Streams** 仅加速投递；Redis **pub/sub 永不作为正确性关键**（原文「事件总线」不得读作 pub/sub）。SSE 客户端用 cursor 断线补齐。详见 ADR-016。
 
 ### ADR-006 · core 循环 = 递归/生成器 ReAct + turn 粒度持久化（方案 A）
 - **决策**：双循环（外层 agency / 内层 resilience）；stop-reason 闸；每个 turn 落库，崩溃从最后完成的 turn 重跑。
 - **理由**：练手项目要够健壮又不过度工程；intra-turn 可恢复（方案 B，显式状态机）代码量大得多，后置。
 - **替代**：方案 B（Claude Code 风格显式状态机，intra-turn 可恢复）。
+> **评审修订（2026-07-19）**：turn 粒度恢复可能重跑一个工具 → 每个副作用需 **幂等键 + effect 分类**；结果未知（`effect_unknown`）时 **停下对账，绝不盲重试**。详见 ADR-017。
 
 ### ADR-007 · 沙箱 = ephemeral 每次一容器 + 持久 workspace 卷 + 默认断网 + Docker 后端
 - **决策**：文件持久（对象存储/命名卷）；每次代码执行起一个全新隔离容器；默认 `--network none`；后端先用 Docker-per-run。
 - **理由**：干净（无跨运行状态泄漏）、安全、compose 友好。启动开销用容器池预热缓解。
 - **替代/演进**：persistent 每用户常驻容器（跑 dev server 时后加）；gVisor/Firecracker（跑不可信第三方代码时加固）。
+> **评审修订（2026-07-19）**：沙箱/代码执行 **移出 v1**（降级为 deferred）。重启用前提：后端中立执行契约 + 对不相关租户用 gVisor/Firecracker（或专用节点）+ 出口策略 + 聚合配额 + 威胁评审。v1 不含 `run_code`。
 
 ### ADR-008 · 权限 `ask` = 异步 HITL（走事件总线）
 - **决策**：工具授权走四道闸；`ask` 发 `permission.asked` 事件到任意 surface 渲染审批（correlation-id 协议）。权限代数：last-match 胜，`deny>ask>allow`，默认 `ask`。
 - **理由**：cloud 多端场景下，一个远程 QQ 就能批准 Worker 里的操作，跨端一致。
 - **来源**：OpenClaw/Kilo 权限引擎 + Ch11 approval bus。
+> **评审修订（2026-07-19）**：**现在冻结**版本化语义审批信封契约，但**在首个 `ask` 动作进入范围前不建任何渲染器**（候选确认是独立业务流，不是审批）。详见 ADR-020。
 
 ### ADR-009 · 信任分级工具集（SAFE vs FULL）
 - **决策**：不可信入口（email/webhook）的会话只发 SAFE 工具集（只读，无 shell/沙箱）；已认证用户（web/QQ）发 FULL。工具集 turn 开始时定死、中途不变。
 - **理由**：防提示注入升级为代码执行；同时保住 prompt 缓存。
 - **来源**：Hermes webhook 平台"受限安全工具集"。
+> **评审修订（2026-07-19）**：连接器内容改用**专用 `CONNECTOR_ANALYSIS` 无工具结构化抽取**能力（不给通用 SAFE 工具、不读工作区/记忆、无副作用），只输出候选。原「按来源发 SAFE/FULL 工具集」仅用于已认证用户的交互式会话。
 
 ### ADR-010 · 自治边界 = 读+建todo+通知 全自动，对外代表用户走审批
 - **决策**：连接器读取、建 todo、发通知全自动；代表用户发邮件/回复/建 issue 等对外动作走 `ask` 审批；沙箱写/跑代码走权限闸。
 - **理由**：低风险可撤销的自动化提效；高风险对外可见动作需人确认。
 - **来源**：Ch11 autonomy ladder。
+> **评审修订（2026-07-19）**：改为 **candidate-first**：连接器内容**只自动建「候选（candidate）」**；正式 todo 需用户 accept/edit；通知 **opt-in + 策略门控**（安静时段/配额）。对外代表用户的动作仍走 `ask`。
 
 ### ADR-011 · 调度 = at-most-once（先推进游标 + 原子领取）+ 推送幂等
 - **决策**：scheduler 单 leader（Redis `SET NX`）；领取到期任务时在同一事务推进 `next_run_at`；`FOR UPDATE SKIP LOCKED` 防双领；主动推送用 `sent_log` 幂等键。
 - **理由**：即使崩溃也绝不重复触发/重复发通知。
 - **来源**：Hermes cron at-most-once + Ch15。
+> **评审修订（2026-07-19）**：**用 at-least-once 取代 at-most-once**：持久化唯一 firing + outbox + 至少一次 worker + 幂等/对账投递；按任务类型定「漏发 vs 重发」策略（摘要偏不重发；重要提醒偏最终必达）；显式暴露 missed/failed/unknown，**绝不静默丢失**。详见 ADR-017。
 
 ### ADR-012 · 存储选型 = Postgres(+pgvector) + Redis + MinIO
 - **决策**：主库 Postgres；向量用 pgvector（复用 PG）；队列/总线/锁用 Redis；对象存储用 MinIO。
 - **理由**：为"docker 一键部署"服务，尽量少起服务。无状态设计让将来拆分（Qdrant/独立 broker）不改上层。
+> **评审修订（2026-07-19）**：v1 **推迟 MinIO/文件 与 pgvector/RAG**；受支持部署栈 = **Postgres + Redis + web + worker**（单实例单用户）。对象存储/向量随对应功能再加。
 
 ### ADR-013 · agentic email 与用户 Gmail 是两种信任级别
 - **决策**：Gmail 连接器 = 读用户账户数据（OAuth 最小 scope、只读优先）；agentic email = agent 自有通信身份（收指令/发通知）。两者内容都不可信→SAFE 工具集。
 - **理由**：区分"账户访问可信"与"内容可信"；agent 自有邮箱天然隔离、不碰用户私人号。
+> **评审修订（2026-07-19）**：**agentic email 移出 v1** 与导航；v1 只用普通「摘要邮件」出站。重启用需 provider + 发件人/认证模型 + 信誉 owner + 滥用预算 + 增量价值证据。用户 Gmail 连接器（只读）保留在 v1。
 
 ### ADR-014 · 项目命名 Sherpa
 - **决策**：项目名为 Sherpa。
 - **理由**：为你背负/向导的助手，贴合"个人+团队全能云助理"定位。
 - **来源**：用户选择。
+
+---
+
+## 评审后新增 ADR（2026-07-19，落实设计评审汇总 §4）
+
+### ADR-015 · 租户隔离模型（v1 单用户简化）
+- **决策**：v1 单实例单用户 → 应用以**单一 tenant** 运行；但所有表保留 `tenant_id` 列 + 复合外键（近乎零成本的前向兼容）。**强制 RLS、最小权限 DB 角色、KMS** 推迟到团队/托管里程碑。
+- **理由**：用户确认 v1 单实例单人 → 无需托管多租户的运维门槛（KMS/RBAC/事故响应）；但保留租户维度键，避免未来团队/托管成为单向门。
+- **权衡**：架构师 Phase-1 倾向「RLS-now」（防历史数据跨租户泄漏）；因确认单用户降级为「列在、RLS 后加」。**任何团队/托管模式启用前必须先补齐 RLS + 角色 + KMS**。
+- **来源**：评审 §2.1 / cross-arch §5 单向门 #1；用户决策「单实例单人」。
+
+### ADR-016 · 事件日志 + outbox 为真相源
+- **决策**：PostgreSQL append-only **event journal**（带 session/run 序号、版本化信封、有界/脱敏 payload）+ 事务性 **outbox** 是恢复/重放/投影的真相源；Redis **Streams** 加速投递；**pub/sub 永不正确性关键**。SSE 用 cursor/reset 断线补齐。
+- **理由**：pub/sub fire-and-forget 会丢事件，与 durable-first 冲突；重连客户端需补齐。Sherpa 不必全事件溯源——业务态仍存普通表，日志用于恢复/流式/审计。
+- **单向门**：上线后从 pub/sub 换真相源会留下不可恢复的历史空洞 → 现在定。
+- **来源**：评审 §2.1 / architect-review §4；修订 ADR-005。
+
+### ADR-017 · 副作用/幂等/effect 契约（含调度投递）
+- **决策**：每个副作用**先持久化 invocation 身份**再执行；带**幂等键**；分类可重试性；结果分 `succeeded/failed/effect_unknown`；**unknown 时停下对账，绝不盲重试**。调度改 **at-least-once**：唯一 firing + outbox + 幂等投递，显式 missed/failed/unknown。
+- **理由**：turn 粒度恢复与崩溃会导致重复/未知副作用；统一契约避免每个工具各自发明重试。
+- **来源**：评审 §2.1 / architect-review §5–6；修订 ADR-006、ADR-011。
+
+### ADR-018 · 候选/来源 provenance 链
+- **决策**：稳定链路 连接器 item/revision → 抽取版本 → generation → **candidate** → 已接受 todo；保留来源出处、去重键、thread 更新对账、删除语义。
+- **理由**：已接受待办、反馈、去重、来源更新、删除都依赖它；事后补做会毁用户信任与评估完整性。
+- **来源**：评审 §2.1 / cross-arch §5 单向门 #5。
+
+### ADR-019 · 密钥加密（AEAD / KEK）
+- **决策**：OAuth 令牌**逐记录 AEAD** + 可轮换 **KEK**；OAuth 回调即刻加密；仅连接器有解密权；刷新串行化；日志脱敏并有金丝雀测试。
+- **理由**：明文令牌会渗入备份/日志/事件，事后加密无法擦除副本；宽泛解密权会嵌入各服务。
+- **来源**：评审 §2.1 / cross-arch §5 单向门 #7。
+
+### ADR-020 · 语义审批信封（冻结契约，渲染器后置）
+- **决策**：现在**冻结**版本化语义审批载荷（correlation ID + 绑定 tenant/run/invocation + 规范化参数 hash + 预览 + policy 版本 + 过期 + nonce + 决策者/渠道；first-valid-response-wins）；**在首个 `ask` 动作进入范围前不建任何渲染器**。候选确认是独立业务流。
+- **理由**：一旦 Web/QQ/email 客户端编码了请求字段，改 scope/一次性语义就可能批错动作。
+- **来源**：评审 §2.1 / cross-arch §5 单向门 #6；修订 ADR-008。
+
+### ADR-021 · 审计回执 vs 调试事件边界
+- **决策**：稳定、脱敏的**语义回执**存于 append-only 审计模型，与原始 debug/telemetry 事件（可能含密钥、schema 易变）**分离**；仅授权诊断可链到原始数据；保留/删除独立定义。
+- **理由**：把易变的原始遥测当公共审计 API 会冻结内部实现并增大隐私风险。
+- **来源**：评审 §2.1 / cross-arch §5 单向门 #9。
+
+### ADR-022 · v1 范围定义（纳入 / 排除）
+- **决策（用户已确认 2026-07-19）**：v1 = **自托管、单实例、单用户的 Gmail→Action 助理**，**保留 Web 聊天**为次要界面。
+  - **纳入**：只读 Gmail（受限 scope）→ 持久同步分析 → 私有候选（带来源+不确定性）→ accept/edit/dismiss → 基础 todo → opt-in Web/摘要邮件提醒（安静时段+配额+可见投递态）→ 暂停/断开/导出/删除 → job 状态/失败/用量成本/审计回执。**次要界面**：基础 Web 聊天。
+  - **排除**（各带 tracking issue，属后续里程碑）：代码执行/沙箱、文件/MinIO、GitHub、QQ/IM、agentic email、团队/共享记忆、memory/RAG、对外写动作、通用 cron、多 provider failover、跨渠道审批渲染器、token 级流式打磨。
+- **来源**：用户决策 + 评审 §1/§4 / cross-pm §4。

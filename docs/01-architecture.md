@@ -1,3 +1,5 @@
+> **评审修订（2026-07-19）**：下文四层模型与完整进程拓扑描述的是**长期目标**；v1 只运行 **web + worker + scheduler + Postgres + Redis**，不含 MinIO/对象存储与 sandbox，channel 仅含 Web 与出站摘要邮件。详见 [ADR-022](decisions.md)。
+
 # 01 · 架构
 
 ## 四层模型（UI 永不碰模型）
@@ -16,9 +18,13 @@ DURABLE STATE（多租户）
   Postgres(用户/租户/会话/todos/权限/连接器令牌[加密]) · Redis(队列/总线/锁) · 对象存储(每用户文件) · 向量库(记忆/RAG) · 遥测(trace/成本)
 ```
 
+> **评审修订（2026-07-19）**：按 [ADR-015](decisions.md)，v1 是**单实例、单 owner**；持久状态仍保留 `tenant_id` 列与复合键，作为低成本的前向兼容，但强制 RLS、最小权限数据库角色与 KMS 延后到团队/托管里程碑。
+
 **依赖只能向下。** 这条边界（UI 永不直接调模型；core 不依赖任何 UI）让**一个 core 同时服务 Web + 邮件 + QQ**。违反它 = 每个 surface 重写一遍 agent。
 
 ## 进程拓扑（异步 job 优先，详见 [03](03-runtime-async-jobs.md)）
+
+> **评审修订（2026-07-19）**：按 [ADR-016](decisions.md)，**PostgreSQL event journal + transactional outbox 是恢复、重放与流式的真相源**；Redis Streams 仅用于加速投递，**Redis pub/sub 永不承担正确性关键职责**。下图中的“事件总线”应据此理解。
 
 ```
                     ┌──────────── SHARED STATE ────────────┐

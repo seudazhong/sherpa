@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa · Connectors</title>
+  <style>
+    :root {
+      --bg:#F6F4EE; --surface:#FFFFFF; --surface-muted:#EEEAE0; --ink:#1F2A26;
+      --muted:#66736D; --border:#DDD9CE; --primary:#2F6F62; --primary-hover:#255B51;
+      --accent:#D9824B; --accent-soft:#FBEADD; --success:#2D7D5B; --warning:#B66A24;
+      --danger:#B84A45; --info:#356FA1; --focus:#6E56CF; --shadow:0 8px 24px rgba(31,42,38,.07);
+      --font:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    }
+    * { box-sizing:border-box }
+    body { margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--font) }
+    button,input { font:inherit } button { cursor:pointer } a { color:inherit }
+    a:focus-visible,button:focus-visible,input:focus-visible { outline:3px solid var(--focus);outline-offset:2px }
+    .app { min-height:100vh;display:grid;grid-template-columns:226px minmax(0,1fr) }
+    aside { padding:18px 13px;background:#18322B;color:#EDF3EF }
+    .brand { display:flex;align-items:center;gap:10px;padding:4px 8px 18px;text-decoration:none;font-size:18px;font-weight:800 }
+    .mark { display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#70BFA9;color:#18322B }
+    .workspace { padding:12px;border:1px solid #36584E;border-radius:12px;background:#203E35 }.workspace strong{display:block}.workspace small{color:#A9C1B8}.workspace span{float:right}
+    nav { margin-top:17px }.label { padding:10px 10px 5px;color:#8FAB9F;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase }
+    .nav { display:flex;align-items:center;gap:10px;min-height:42px;padding:0 10px;border-radius:9px;color:#C8D7D1;text-decoration:none }
+    .nav.active { background:#2A4B41;color:white;font-weight:750 }.nav i{width:18px;text-align:center;font-style:normal}
+    main { min-width:0;padding:28px 30px 60px }
+    .top { display:flex;align-items:flex-start;justify-content:space-between;gap:20px }
+    .eyebrow { color:var(--primary);font-size:12px;font-weight:850;text-transform:uppercase;letter-spacing:.1em }
+    h1 { margin:4px 0;font-size:32px;letter-spacing:-.03em }.sub { margin:0;color:var(--muted);max-width:650px }
+    .button { min-height:42px;padding:0 15px;border:1px solid var(--border);border-radius:9px;background:white;color:var(--ink);font-weight:750 }
+    .button.primary { background:var(--primary);border-color:var(--primary);color:white }.button.quiet { color:var(--primary) }
+    .trust { display:flex;align-items:center;gap:12px;margin:24px 0;padding:14px 16px;border:1px solid #D7CBB8;border-radius:12px;background:#FFFDF8 }
+    .trust-icon { display:grid;place-items:center;width:34px;height:34px;flex:0 0 auto;border-radius:10px;background:var(--accent-soft);color:#975326;font-weight:900 }
+    .trust strong { display:block }.trust p { margin:0;color:var(--muted) }.trust a { margin-left:auto;color:var(--primary);font-weight:800;white-space:nowrap }
+    .summary { display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:26px }
+    .metric { padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface) }.metric strong { display:block;font-size:22px }.metric span{color:var(--muted)}
+    .section-head { display:flex;align-items:end;justify-content:space-between;gap:16px;margin:28px 0 13px }.section-head h2 { margin:0;font-size:19px }.section-head p{margin:2px 0 0;color:var(--muted)}
+    .cards { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px }
+    .connector { padding:17px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:0 3px 12px rgba(31,42,38,.04) }
+    .connector-head { display:flex;align-items:center;gap:12px }
+    .logo { display:grid;place-items:center;width:44px;height:44px;border-radius:12px;font-size:18px;font-weight:900 }
+    .gmail{background:#FCE8E6;color:#B14338}.github{background:#E8EAF0;color:#2F3540}.mail{background:#E2F0EB;color:var(--primary)}.qq{background:#E8F1F8;color:var(--info)}
+    .name { flex:1 }.name h3 { margin:0;font-size:16px }.name p{margin:1px 0 0;color:var(--muted);font-size:12px}
+    .status { display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:#E7F2EC;color:var(--success);font-size:11px;font-weight:850 }
+    .status::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}.status.warn{background:#FBEADD;color:var(--warning)}.status.off{background:#ECEAE4;color:var(--muted)}
+    .facts { display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0;padding:13px 0;border-block:1px solid var(--border) }.fact span{display:block;color:var(--muted);font-size:11px}.fact strong{font-size:13px}
+    .scopes { display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px }.scope{padding:4px 7px;border-radius:6px;background:var(--surface-muted);color:#535D58;font-size:11px;font-weight:700}
+    .card-actions { display:flex;gap:8px }.card-actions button{min-height:36px;padding:0 11px;border:1px solid var(--border);border-radius:8px;background:white;color:var(--ink);font-weight:750}.card-actions .manage{color:var(--primary);border-color:#B9D1C8}
+    .setup { display:grid;grid-template-columns:240px minmax(0,1fr);border:1px solid var(--border);border-radius:15px;background:var(--surface);overflow:hidden;box-shadow:var(--shadow) }
+    .setup-nav { padding:17px;background:#F0EEE7;border-right:1px solid var(--border) }.setup-nav h3{margin:0 0 12px;font-size:14px}
+    .step { display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;color:var(--muted) }.step.active{background:white;color:var(--ink);font-weight:800;box-shadow:0 2px 8px rgba(31,42,38,.05)}
+    .step-num { display:grid;place-items:center;width:25px;height:25px;border:1px solid #BFC3BC;border-radius:50%;font-size:11px;font-weight:850 }.step.done .step-num{border-color:var(--success);background:var(--success);color:white}
+    .setup-body { padding:22px 24px }.setup-body h3{margin:0 0 4px;font-size:20px}.setup-body>p{margin:0 0 18px;color:var(--muted)}
+    .onboard-grid { display:grid;grid-template-columns:1fr 1fr;gap:12px }
+    .onboard { position:relative;padding:15px;border:1px solid var(--border);border-radius:11px;background:#FCFCF9 }.onboard h4{margin:0 0 4px;font-size:14px}.onboard p{min-height:42px;margin:0 0 12px;color:var(--muted);font-size:12px}
+    .onboard button{min-height:36px;padding:0 11px;border:1px solid #B9D1C8;border-radius:8px;background:white;color:var(--primary);font-weight:800}
+    .onboard .connected{color:var(--success)}.mini-logo{float:right;margin-left:10px;width:30px;height:30px;display:grid;place-items:center;border-radius:8px;font-weight:900}
+    .code-box { display:flex;align-items:center;gap:8px;margin:10px 0;padding:10px;border:1px dashed #D6A274;border-radius:8px;background:#FFF8F2 }.code{font:800 18px/1 "SFMono-Regular",Consolas,monospace;letter-spacing:.16em;color:#8B4D24}.timer{margin-left:auto;color:var(--warning);font-size:11px;font-weight:800}
+    .address { display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0;padding:9px;border-radius:8px;background:#E9F2EE;font:700 12px "SFMono-Regular",Consolas,monospace;color:var(--primary)}
+    .mobile-menu { display:none }
+    @media (max-width:860px) {
+      .app{display:block}aside{display:none}main{padding:18px 14px 50px}.mobile-menu{display:inline}.top h1{font-size:27px}
+      .trust a{display:none}.cards{grid-template-columns:1fr}.setup{grid-template-columns:1fr}.setup-nav{display:flex;overflow:auto;border-right:0;border-bottom:1px solid var(--border)}.setup-nav h3{display:none}.step{min-width:max-content}
+      .onboard-grid{grid-template-columns:1fr}.summary{grid-template-columns:1fr 1fr}.summary .metric:last-child{grid-column:1/-1}
+    }
+    @media (max-width:480px) { .top>.button{display:none}.trust{align-items:flex-start}.facts{grid-template-columns:1fr}.setup-body{padding:17px}.connector{padding:14px} }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside aria-label="Primary navigation">
+      <a class="brand" href="index.html"><span class="mark">S</span>Sherpa</a>
+      <div class="workspace"><span>⌄</span><strong>My workspace</strong><small>Personal · Only you</small></div>
+      <nav>
+        <div class="label">Workspace</div>
+        <a class="nav" href="dashboard.html"><i>⌂</i>Home</a><a class="nav" href="chat-session.html"><i>◌</i>Chat</a>
+        <a class="nav" href="todo-board.html"><i>✓</i>Todos</a><a class="nav" href="#"><i>□</i>Files</a>
+        <div class="label">Automate</div>
+        <a class="nav" href="#"><i>◷</i>Schedules</a><a class="nav active" href="#"><i>⌁</i>Connectors</a>
+        <div class="label">Account</div><a class="nav" href="#"><i>⚙</i>Settings</a>
+      </nav>
+    </aside>
+
+    <main>
+      <div class="top">
+        <div><div class="eyebrow"><span class="mobile-menu">☰ &nbsp;</span>My workspace · Personal</div><h1>Connectors & channels</h1><p class="sub">Choose what Sherpa can read, where it can notify you, and which identity it uses to communicate.</p></div>
+        <button class="button primary">＋ Add connection</button>
+      </div>
+
+      <div class="trust">
+        <span class="trust-icon">◇</span>
+        <div><strong>Account access is not content trust</strong><p>Email and webhook content always receives a read-only, restricted tool set—even when your account is verified.</p></div>
+        <a href="#">How Sherpa protects you →</a>
+      </div>
+
+      <div class="summary">
+        <div class="metric"><strong>3</strong><span>healthy connections</span></div>
+        <div class="metric"><strong>12 min</strong><span>since last Gmail sync</span></div>
+        <div class="metric"><strong>QQ → Email</strong><span>notification priority</span></div>
+      </div>
+
+      <div class="section-head"><div><h2>Your connections</h2><p>Tokens stay encrypted and never enter the code sandbox.</p></div><button class="button">View activity log</button></div>
+      <div class="cards">
+        <article class="connector">
+          <div class="connector-head"><span class="logo gmail">M</span><div class="name"><h3>Gmail</h3><p>dana@northstar.example · User account</p></div><span class="status">Connected</span></div>
+          <div class="facts"><div class="fact"><span>Last sync</span><strong>12 minutes ago</strong></div><div class="fact"><span>Imported</span><strong>28 new messages</strong></div><div class="fact"><span>Next sync</span><strong>in 3 minutes</strong></div><div class="fact"><span>Mode</span><strong>Read only</strong></div></div>
+          <div class="scopes"><span class="scope">Read metadata</span><span class="scope">Read messages</span><span class="scope">No send access</span></div>
+          <div class="card-actions"><button class="manage">Manage</button><button>Sync now</button><button>Pause</button></div>
+        </article>
+        <article class="connector">
+          <div class="connector-head"><span class="logo github">GH</span><div class="name"><h3>GitHub</h3><p>dana-kim · 4 selected repositories</p></div><span class="status warn">Needs attention</span></div>
+          <div class="facts"><div class="fact"><span>Last sync</span><strong>Yesterday, 6:20 PM</strong></div><div class="fact"><span>Issue</span><strong>Scope changed</strong></div><div class="fact"><span>Repositories</span><strong>4 selected</strong></div><div class="fact"><span>Mode</span><strong>Read only</strong></div></div>
+          <div class="scopes"><span class="scope">Issues & PRs</span><span class="scope">Checks</span><span class="scope">Selected repos</span></div>
+          <div class="card-actions"><button class="manage">Review access</button><button>Reconnect</button></div>
+        </article>
+        <article class="connector">
+          <div class="connector-head"><span class="logo mail">@</span><div class="name"><h3>Agentic email</h3><p>sherpa-dana@agents.example · Sherpa channel</p></div><span class="status">Active</span></div>
+          <div class="facts"><div class="fact"><span>Last message</span><strong>Today, 9:18 AM</strong></div><div class="fact"><span>Allowed senders</span><strong>Contacts only</strong></div><div class="fact"><span>Purpose</span><strong>Commands & alerts</strong></div><div class="fact"><span>Content trust</span><strong>Restricted</strong></div></div>
+          <div class="scopes"><span class="scope">Receive instructions</span><span class="scope">Send notifications</span></div>
+          <div class="card-actions"><button class="manage">Manage address</button><button>Send test</button></div>
+        </article>
+        <article class="connector">
+          <div class="connector-head"><span class="logo qq">Q</span><div class="name"><h3>QQ</h3><p>Direct messages · Sherpa channel</p></div><span class="status off">Not bound</span></div>
+          <div class="facts"><div class="fact"><span>Delivery priority</span><strong>First when online</strong></div><div class="fact"><span>Default workspace</span><strong>My workspace</strong></div><div class="fact"><span>Approvals</span><strong>Supported</strong></div><div class="fact"><span>Verification</span><strong>Required</strong></div></div>
+          <div class="scopes"><span class="scope">Messages</span><span class="scope">Approvals</span><span class="scope">Notifications</span></div>
+          <div class="card-actions"><button class="manage">Start binding</button></div>
+        </article>
+      </div>
+
+      <div class="section-head"><div><h2>Setup center</h2><p>Each connection is optional. Start with the smallest useful scope.</p></div></div>
+      <section class="setup" aria-label="Connector onboarding">
+        <div class="setup-nav">
+          <h3>Suggested setup</h3>
+          <div class="step done"><span class="step-num">✓</span>Gmail readonly</div>
+          <div class="step done"><span class="step-num">✓</span>Agentic email</div>
+          <div class="step active"><span class="step-num">3</span>GitHub & QQ</div>
+          <div class="step"><span class="step-num">4</span>Test & finish</div>
+        </div>
+        <div class="setup-body">
+          <h3>Bring Sherpa into your existing workflow</h3>
+          <p>These accounts map back to the same Sherpa identity, memory, and todos. You can change the default workspace later.</p>
+          <div class="onboard-grid">
+            <div class="onboard">
+              <span class="mini-logo gmail">M</span><h4>Gmail · connected</h4><p>Readonly access to dana@northstar.example. Sherpa can suggest todos but cannot send email.</p>
+              <button class="connected">✓ Minimum scope granted</button>
+            </div>
+            <div class="onboard">
+              <span class="mini-logo github">GH</span><h4>Choose GitHub repositories</h4><p>Grant read access only to repositories where you want issue and pull-request suggestions.</p>
+              <button>Choose repositories →</button>
+            </div>
+            <div class="onboard">
+              <span class="mini-logo mail">@</span><h4>Your agentic email · ready</h4><p>This belongs to Sherpa; it is not access to your personal inbox.</p>
+              <div class="address">sherpa-dana@agents.example <span>Copy</span></div>
+              <button class="connected">Send test message</button>
+            </div>
+            <div class="onboard">
+              <span class="mini-logo qq">Q</span><h4>Bind your QQ identity</h4><p>Send this one-time code to @SherpaBot in a direct message. Never post it in a group.</p>
+              <div class="code-box"><span class="code">7K2-Q9P</span><span class="timer">expires in 08:42</span></div>
+              <button>I sent the code · Check now</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

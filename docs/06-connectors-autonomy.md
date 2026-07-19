@@ -1,8 +1,12 @@
 # 06 · 连接器 / 自治
 
+> ⚠️ **评审修订（2026-07-19）**：本文的 connector / scheduler / push 长期模式继续有效；v1 **仅含 Gmail 只读连接器**，自治边界与调度交付语义已按 [ADR-010、ADR-011、ADR-017](decisions.md) 修订。下文「评审修订」注释优先于原有范围/已锁定描述。
+
 你需求里最"云助理"的部分。
 
 ## 连接器统一抽象（gmail/github/agentic-email 长一样）
+
+> **评审修订（2026-07-19）**：按 [ADR-022](decisions.md)，本文以下 GitHub connector/webhook/issue 均为长期设计示例；**GitHub 连接器推迟到后续里程碑**，不在 v1。
 
 ```python
 class Connector:
@@ -21,6 +25,8 @@ class Connector:
 
 ## 信任分级：两种"邮箱"是两回事
 
+> **评审修订（2026-07-19）**：按 [ADR-013](decisions.md)，**agentic email 移出 v1 与导航**；v1 只使用普通出站 **digest email**。用户的 Gmail 只读连接器仍保留在 v1。
+
 | | 用户真 Gmail（连接器） | **agentic email**（agent 自有邮箱） |
 |---|---|---|
 | 本质 | 读**用户的**账户数据 | agent **自己的**通信身份 |
@@ -32,6 +38,8 @@ class Connector:
 要点：**账户访问可信 ≠ 内容可信**。两者处理入站内容都只给 SAFE 工具集（防注入升级成代码执行）。
 
 ## 调度器（at-most-once 是可靠性命门）
+
+> **评审修订（2026-07-19）**：按 [ADR-011/ADR-017](decisions.md)，以 **at-least-once** 取代 at-most-once：持久化唯一 **firing + outbox**，由至少一次 worker 执行，并对投递做幂等/对账。每个 job 单独定义漏发与重复策略（digest 偏向不重复；重要 reminder 偏向 eventual delivery）；必须显式呈现 **missed/failed/unknown**，绝不静默丢弃。
 
 Leader（Redis `SET NX` 选主）每 ~60s tick，**原子领取 + 先推进游标**：
 
@@ -77,6 +85,8 @@ def push(user, message, idempotency_key):
 把**连接器 + core 循环 + todos + 主动推送 + at-most-once** 全串起来。
 
 ## 自治边界（已锁定，autonomy ladder）
+
+> **评审修订（2026-07-19）**：按 [ADR-010](decisions.md)，改为 **candidate-first**：连接器内容只自动创建 **candidate**；正式 todo 必须由用户 accept/edit。通知须 opt-in 并受策略门控（quiet hours/caps）。
 
 | 动作 | 默认 | 理由 |
 |---|---|---|

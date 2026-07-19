@@ -1,18 +1,24 @@
 # 09 · 分阶段路线图
 
-按**租户→沙箱→连接器→自治→通道→运维**逐级降险。每阶段都能独立跑通、可演示。
+> ⚠️ **本路线图已按[设计评审](reviews/README.md)重排（2026-07-19）**：原「P0核心→P1多租户→P2沙箱…」是**组件序**；评审改为**价值/风险序**，v1 范围见 [ADR-022](decisions.md)。下方为修订后的里程碑。
 
-| 阶段 | 目标 | 产出 | 主要文档 |
-|---|---|---|---|
-| **P0 核心** | 手册那 40 行有界循环 + provider 层 + 工具接口 + SQLite | 单用户、一个 REST 端点跑通对话+工具 | [04](04-core-loop.md) [05](05-tools-permissions-sandbox.md) |
-| **P1 多租户骨架** | docker-compose + 登录 + 每用户存储 | web+worker+PG+Redis+MinIO；工作区隔离；文件上传/同步 | [02](02-identity-session-memory.md) [03](03-runtime-async-jobs.md) [07](07-observability-deployment.md) |
-| **P2 代码沙箱** | ephemeral 隔离容器、断网默认、挂 workspace 卷 | 能安全改/跑代码 | [05](05-tools-permissions-sandbox.md) |
-| **P3 连接器** | GitHub + Gmail（只读优先）→ 生成 todos | "分析邮件→规划待办" 旗舰 pipeline | [06](06-connectors-autonomy.md) |
-| **P4 调度+主动推送** | at-most-once cron + agentic email/IM 出站 | 定时任务 + 主动通知 | [06](06-connectors-autonomy.md) |
-| **P5 IM 入站** | QQ 等，归一化事件 + 身份链接 | 多入口同一身份（一人多入口闭环） | [02](02-identity-session-memory.md) |
-| **P6 可观测+评估** | trace/成本/回归数据集 | 生产就绪 | [07](07-observability-deployment.md) |
+## v1 里程碑（价值/风险序，取代原 P0–P6）
+
+**v1 = 自托管、单实例、单用户的 Gmail → Action 助理**（保留 Web 聊天为次要界面）。核心原则：**为真正上线的每个能力付全额安全/持久化成本；有风险的能力宁可砍掉，不做弱化版。**
+
+| 里程碑 | 目标 | 出口标准（Exit） |
+|---|---|---|
+| **M1 · 契约与价值门** | 冻结 租户/事件/effect/调度/密钥 契约 + 受支持部署 profile；做 50–100 封邮件的脱敏抽取基准；可点击的 Candidate Inbox 原型 | 抽取精度足以证明值得接入真实 Gmail；目标用户理解「权限↔价值」交换 |
+| **M2 · 个人 Inbox-to-Action alpha** | Postgres(+租户键) + durable jobs/events/outbox + 一个 provider + owner 引导 + demo 模式 + Gmail 只读 OAuth + 受限同步 + 候选三联(accept/edit/dismiss) + 来源可溯 + 去重 + 基础成本/反馈 + 暂停/断开/删除 | 真实用户独立得到有用候选；断线重连/重试可用；已接受项全部可溯源；effect 重放测试通过 |
+| **M3 · 可信跟进（private beta）** | 已接受 todo + due/snooze + Web 收件箱 + 每日摘要 + 安静时段/配额 + 持久 schedule firing + 投递对账 + 连接器健康 + 导出 + 备份/恢复指引 + a11y 基线 | 达 PM 质量门：候选精度达标、零跨租户/未授权动作、无静默 job 失败、通知投诉可控、周度行动价值证据 |
+
+**v1 明确排除**（各带 tracking issue，属后续里程碑，见 ADR-022）：代码执行/沙箱 · 文件/MinIO · GitHub · QQ/IM 入站 · agentic email · 团队/共享记忆 · memory/RAG/pgvector · 对外写动作 · 通用 cron · 多 provider failover · 跨渠道审批渲染器 · token 级流式打磨。
+
+**M3 之后**：下一个赌注由**观测到的需求**决定（GitHub 源 / 代码执行 / 团队协作），不再按旧组件序。
 
 ## 构建顺序细则（手册 Ch18 build sequence，映射到本项目）
+
+> 注：以下为**长期完整**构建序；v1（M1–M3）只覆盖其子集——沙箱(7)、两层记忆的 tenant 共享部分(9)、多 provider failover(10)、IM/扩展(12) 均推迟出 v1（见 ADR-022）。
 
 1. 选模型 + provider 接口（**早加第 2 个 provider**）。
 2. 有界双循环。
@@ -40,5 +46,5 @@
 - [ ] provider 带分类的 failover；共享配额有守卫。
 - [ ] 子 agent 共享一个预算，隔离运行。
 - [ ] 每次 run 产出带 cost/tokens/prompt-version 的 trace。
-- [ ] 自治/定时动作 at-most-once。
+- [ ] 自治/定时动作：唯一 firing + outbox + 幂等投递（**at-least-once**），missed/failed/unknown 可见（ADR-017）。
 - [ ] 依赖/发布 pinned、脚本门禁、打包制品冒烟测试。

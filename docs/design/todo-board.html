@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa · Todo board</title>
+  <style>
+    :root {
+      --bg:#F6F4EE; --surface:#FFFFFF; --surface-muted:#EEEAE0; --ink:#1F2A26;
+      --muted:#66736D; --border:#DDD9CE; --primary:#2F6F62; --primary-hover:#255B51;
+      --accent:#D9824B; --accent-soft:#FBEADD; --success:#2D7D5B; --warning:#B66A24;
+      --danger:#B84A45; --info:#356FA1; --focus:#6E56CF; --shadow:0 8px 22px rgba(31,42,38,.07);
+      --font:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    }
+    * { box-sizing:border-box }
+    body { margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--font) }
+    button { font:inherit;cursor:pointer } a { color:inherit }
+    a:focus-visible,button:focus-visible { outline:3px solid var(--focus);outline-offset:2px }
+    .app { min-height:100vh;display:grid;grid-template-columns:226px minmax(0,1fr) }
+    aside { padding:18px 13px;background:#18322B;color:#EDF3EF }
+    .brand { display:flex;align-items:center;gap:10px;padding:4px 8px 18px;text-decoration:none;font-size:18px;font-weight:800 }
+    .brand-mark { display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#70BFA9;color:#18322B }
+    .workspace { padding:12px;border:1px solid #36584E;border-radius:12px;background:#203E35 }.workspace strong{display:block}.workspace small{color:#A9C1B8}.workspace span{float:right}
+    nav { margin-top:17px }.label { padding:10px 10px 5px;color:#8FAB9F;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase }
+    .nav { display:flex;align-items:center;gap:10px;min-height:42px;padding:0 10px;border-radius:9px;color:#C8D7D1;text-decoration:none }
+    .nav.active { background:#2A4B41;color:white;font-weight:750 }.nav i { width:18px;text-align:center;font-style:normal }
+    .account { position:fixed;bottom:17px;left:20px;color:#A9C1B8;font-size:12px }
+    main { min-width:0;padding:28px 26px 42px }
+    .top { display:flex;justify-content:space-between;align-items:flex-start;gap:20px }
+    .eyebrow { color:var(--primary);font-size:12px;font-weight:850;letter-spacing:.1em;text-transform:uppercase }
+    h1 { margin:4px 0 4px;font-size:32px;line-height:1.2;letter-spacing:-.03em }.sub { margin:0;color:var(--muted) }
+    .top-actions { display:flex;gap:8px }.button { min-height:42px;padding:0 15px;border:1px solid var(--border);border-radius:9px;background:white;color:var(--ink);font-weight:750 }
+    .button.primary { border-color:var(--primary);background:var(--primary);color:white }
+    .insight { display:flex;align-items:center;gap:12px;margin:24px 0 17px;padding:13px 15px;border:1px solid #BFD6CD;border-radius:12px;background:#E8F2EE }
+    .insight-icon { display:grid;place-items:center;width:32px;height:32px;flex:0 0 auto;border-radius:9px;background:var(--primary);color:white;font-weight:900 }
+    .insight strong { display:block }.insight p { margin:0;color:var(--muted) }.insight button { margin-left:auto;border:0;background:transparent;color:var(--primary);font-weight:800 }
+    .toolbar { display:flex;align-items:center;gap:9px;margin-bottom:16px }
+    .search { min-height:40px;min-width:220px;padding:0 13px;border:1px solid var(--border);border-radius:9px;background:white;color:var(--muted) }
+    .filter { min-height:40px;padding:0 13px;border:1px solid var(--border);border-radius:9px;background:white;color:var(--ink);font-weight:700 }
+    .view-toggle { margin-left:auto;padding:4px;border:1px solid var(--border);border-radius:9px;background:white }.view-toggle button { min-height:32px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-weight:750 }.view-toggle .on { background:var(--surface-muted);color:var(--ink) }
+    .board { display:grid;grid-template-columns:repeat(4,minmax(260px,1fr));gap:14px;align-items:start;overflow-x:auto;padding-bottom:14px }
+    .column { min-height:600px;padding:10px;border:1px solid var(--border);border-radius:14px;background:rgba(238,234,224,.58) }
+    .column-head { display:flex;align-items:center;gap:8px;padding:4px 4px 12px }.column-head h2 { margin:0;font-size:14px }.count { display:grid;place-items:center;min-width:23px;height:23px;border-radius:999px;background:#DFDDD5;color:var(--muted);font-size:12px;font-weight:800 }.column-head button { margin-left:auto;border:0;background:transparent;color:var(--muted);font-size:18px }
+    .task { margin-bottom:10px;padding:14px;border:1px solid var(--border);border-radius:11px;background:var(--surface);box-shadow:0 3px 10px rgba(31,42,38,.04) }
+    .task.suggested { border-color:#E2AC7D;box-shadow:0 0 0 2px rgba(217,130,75,.07) }
+    .task-top { display:flex;align-items:center;gap:7px;margin-bottom:9px }
+    .source { display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:999px;font-size:11px;font-weight:800 }
+    .gmail { background:#FCE8E6;color:#A33B32 }.github { background:#E8EAF0;color:#343A45 }.sherpa { background:#E4F0EC;color:var(--primary) }.manual { background:#ECE9DF;color:#5E655F }
+    .source::before { content:"";width:6px;height:6px;border-radius:50%;background:currentColor }
+    .auto { margin-left:auto;color:#9A5A2C;font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.05em }
+    .task h3 { margin:0 0 7px;font-size:14px;line-height:1.4 }.task p { margin:0 0 11px;color:var(--muted);font-size:12px }
+    .meta { display:flex;flex-wrap:wrap;gap:6px;align-items:center;color:var(--muted);font-size:11px }
+    .priority { padding:3px 6px;border-radius:5px;background:var(--accent-soft);color:#8A4A1E;font-weight:800 }.priority.high { background:#F8E1DF;color:var(--danger) }
+    .person { display:grid;place-items:center;width:24px;height:24px;margin-left:auto;border-radius:50%;background:#DCE8E2;color:var(--primary);font-size:10px;font-weight:850 }
+    .suggestion { margin:12px -14px -14px;padding:10px 14px;border-top:1px solid #ECD3BC;background:#FFF8F2;border-radius:0 0 10px 10px }
+    .suggestion small { display:block;margin-bottom:8px;color:#795A43 }.suggestion div { display:flex;gap:7px }
+    .suggestion button { min-height:32px;padding:0 10px;border:1px solid #D7B69A;border-radius:7px;background:white;color:var(--ink);font-weight:750;font-size:12px }.suggestion .accept { border-color:var(--primary);background:var(--primary);color:white }
+    .blocked { display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:6px;background:#FBEADD;color:#8A4A1E;font-size:11px;font-weight:800 }
+    .progress { height:5px;margin:11px 0 8px;border-radius:99px;background:#E7E4DB;overflow:hidden }.progress span{display:block;height:100%;background:var(--primary)}
+    .add { width:100%;min-height:40px;border:1px dashed #B8B5AA;border-radius:9px;background:transparent;color:var(--muted);font-weight:750 }
+    .mobile-head { display:none }
+    @media (max-width:800px) {
+      .app { display:block } aside { display:none } main { padding:18px 14px 80px }
+      .mobile-head { display:inline-flex }.top { align-items:center }.top h1 { font-size:26px }.top-actions .button:not(.primary) { display:none }
+      .insight { align-items:flex-start }.insight button { display:none }.toolbar { overflow-x:auto }.search { min-width:180px }.view-toggle { display:none }
+      .board { grid-template-columns:repeat(4,278px);margin-right:-14px }.column { min-height:520px }
+    }
+    @media (max-width:480px) { .sub { max-width:260px }.top-actions .primary { padding:0 11px }.insight { margin-top:18px } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside aria-label="Primary navigation">
+      <a class="brand" href="index.html"><span class="brand-mark">S</span>Sherpa</a>
+      <div class="workspace"><span>⌄</span><strong>Atlas product</strong><small>Team · You’re an admin</small></div>
+      <nav>
+        <div class="label">Workspace</div>
+        <a class="nav" href="dashboard.html"><i>⌂</i>Home</a>
+        <a class="nav" href="chat-session.html"><i>◌</i>Chat</a>
+        <a class="nav active" href="#"><i>✓</i>Todos</a>
+        <a class="nav" href="#"><i>□</i>Files</a>
+        <div class="label">Automate</div>
+        <a class="nav" href="#"><i>◷</i>Schedules</a>
+        <a class="nav" href="connectors.html"><i>⌁</i>Connectors</a>
+        <div class="label">Team</div>
+        <a class="nav" href="#"><i>♙</i>Members & memory</a>
+      </nav>
+      <div class="account">Dana Kim · Team workspace</div>
+    </aside>
+
+    <main>
+      <div class="top">
+        <div><div class="eyebrow"><span class="mobile-head">☰ &nbsp;</span>Atlas product · Shared</div><h1>Todos</h1><p class="sub">Turn signals from your work into a plan your team can trust.</p></div>
+        <div class="top-actions"><button class="button">List view</button><button class="button primary">＋ Add todo</button></div>
+      </div>
+
+      <div class="insight">
+        <span class="insight-icon">S</span>
+        <div><strong>3 new suggestions are ready to triage</strong><p>Sherpa found actions in Gmail and GitHub. Nothing is assigned until your team accepts it.</p></div>
+        <button>Review sources →</button>
+      </div>
+
+      <div class="toolbar" aria-label="Board controls">
+        <button class="search">⌕ &nbsp; Search todos</button><button class="filter">All assignees ⌄</button><button class="filter">All sources ⌄</button><button class="filter">Due this week</button>
+        <div class="view-toggle"><button class="on">Board</button><button>List</button></div>
+      </div>
+
+      <div class="board" aria-label="Todo kanban board">
+        <section class="column" aria-labelledby="inbox">
+          <div class="column-head"><h2 id="inbox">Inbox</h2><span class="count">4</span><button aria-label="Inbox options">···</button></div>
+          <article class="task suggested">
+            <div class="task-top"><span class="source gmail">Gmail</span><span class="auto">Suggested</span></div>
+            <h3>Confirm accessibility review for mobile checkout</h3>
+            <p>“Could your team confirm the review by Wednesday so we keep the release date?”</p>
+            <div class="meta"><span class="priority high">High</span><span>Due Wed, Jul 22</span></div>
+            <div class="suggestion"><small>From Maya Chen · Release readiness thread</small><div><button class="accept">Accept</button><button>Edit</button><button>Dismiss</button></div></div>
+          </article>
+          <article class="task suggested">
+            <div class="task-top"><span class="source github">GitHub</span><span class="auto">Suggested</span></div>
+            <h3>Review security feedback on PR #842</h3>
+            <p>Two unresolved threads mention token storage and log redaction.</p>
+            <div class="meta"><span class="priority high">High</span><span>northstar/mobile</span></div>
+            <div class="suggestion"><small>Detected in a requested-changes review · 94% confidence</small><div><button class="accept">Accept</button><button>Edit</button><button>Dismiss</button></div></div>
+          </article>
+          <article class="task">
+            <div class="task-top"><span class="source manual">Manual</span></div>
+            <h3>Collect August planning topics</h3>
+            <div class="meta"><span>Created by Dana</span><span class="person">DK</span></div>
+          </article>
+          <button class="add">＋ Add to Inbox</button>
+        </section>
+
+        <section class="column" aria-labelledby="next">
+          <div class="column-head"><h2 id="next">Next</h2><span class="count">3</span><button aria-label="Next options">···</button></div>
+          <article class="task">
+            <div class="task-top"><span class="source sherpa">Sherpa</span></div>
+            <h3>Prepare Thursday’s release readiness brief</h3>
+            <p>Summarize milestone, CI, open blockers, and owners.</p>
+            <div class="meta"><span class="priority">Medium</span><span>Due tomorrow</span><span class="person">DK</span></div>
+          </article>
+          <article class="task">
+            <div class="task-top"><span class="source github">GitHub</span></div>
+            <h3>Merge dependency update PR #839</h3>
+            <p>All reviews approved; waiting for final iOS test.</p>
+            <div class="meta"><span class="blocked">Waiting on CI</span><span class="person">JL</span></div>
+          </article>
+          <article class="task">
+            <div class="task-top"><span class="source gmail">Gmail</span></div>
+            <h3>Send Q3 vendor forecast to Finance</h3>
+            <div class="meta"><span>Due Fri, Jul 24</span><span class="person">RP</span></div>
+          </article>
+          <button class="add">＋ Add to Next</button>
+        </section>
+
+        <section class="column" aria-labelledby="progress">
+          <div class="column-head"><h2 id="progress">In progress</h2><span class="count">2</span><button aria-label="In progress options">···</button></div>
+          <article class="task">
+            <div class="task-top"><span class="source manual">Manual</span></div>
+            <h3>Resolve iOS signing workflow failure</h3>
+            <p>Rotate the expired distribution profile and rerun release CI.</p>
+            <div class="progress"><span style="width:58%"></span></div>
+            <div class="meta"><span class="priority high">Release blocker</span><span class="person">AM</span></div>
+          </article>
+          <article class="task">
+            <div class="task-top"><span class="source sherpa">Sherpa</span></div>
+            <h3>Draft help center notes for 4.8</h3>
+            <p>First draft saved in Team files.</p>
+            <div class="progress"><span style="width:78%"></span></div>
+            <div class="meta"><span>Updated 16 min ago</span><span class="person">DK</span></div>
+          </article>
+          <button class="add">＋ Add in-progress task</button>
+        </section>
+
+        <section class="column" aria-labelledby="waiting">
+          <div class="column-head"><h2 id="waiting">Waiting</h2><span class="count">2</span><button aria-label="Waiting options">···</button></div>
+          <article class="task">
+            <div class="task-top"><span class="source gmail">Gmail</span></div>
+            <h3>Legal approval for updated privacy copy</h3>
+            <p>Follow-up is scheduled for tomorrow at 9:00 AM.</p>
+            <div class="meta"><span class="blocked">Waiting on Legal</span><span class="person">RP</span></div>
+          </article>
+          <article class="task">
+            <div class="task-top"><span class="source github">GitHub</span></div>
+            <h3>Confirm analytics event names</h3>
+            <p>Question left on issue #1124 for the Data team.</p>
+            <div class="meta"><span class="blocked">External dependency</span><span>2 days</span></div>
+          </article>
+          <button class="add">＋ Add waiting task</button>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

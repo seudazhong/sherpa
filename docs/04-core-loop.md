@@ -1,5 +1,7 @@
 # 04 · core 循环内部
 
+> **评审修订（2026-07-19）**：双循环、stop-reason 闸与 turn 粒度持久化的核心设计不变；[ADR-017](decisions.md) 补强了副作用与崩溃恢复契约。
+
 手册第 4 章的"心脏"。跑在 Worker 里，消费一个 job，向 Redis 总线发事件。
 
 ## 双循环骨架（外层管 agency，内层管 resilience）
@@ -88,3 +90,5 @@ run.started → [text-delta · reasoning-delta · tool-call · tool-result · to
 ## 崩溃恢复：方案 A（已锁定）
 
 **turn 边界持久化**：每个 turn 的 messages/results 落库；Worker 崩溃 → 从**最后一个完成的 turn** 重跑。用简单的递归/生成器 ReAct 循环，够健壮又不过度工程。将来要 intra-turn 可恢复（方案 B，显式状态机）再升级。
+
+> **评审修订（2026-07-19）**：按 [ADR-017](decisions.md)，turn 粒度恢复可能**重新执行工具**，因此每个副作用都必须具备**幂等键 + effect 分类**；遇到 `effect_unknown` 时停下对账，**绝不盲目重试**。

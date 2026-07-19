@@ -1,5 +1,7 @@
 # 05 · 工具 / 权限 / 沙箱
 
+> ⚠️ **评审修订（2026-07-19）**：本文的接口与长期设计继续有效；v1 范围与安全边界已按 [ADR-007、ADR-009、ADR-020](decisions.md) 收窄。下文「评审修订」注释优先于原有的起步范围/已锁定描述。
+
 你"改/跑代码"的核心，也是**全项目最难、最危险的一环**（多租户代码隔离）。
 
 ## 工具接口（内置/MCP/子 agent 长一样）
@@ -29,6 +31,8 @@ REGISTERED → VISIBLE(本轮可见，check_fn+信任分级) → ALLOWED(策略)
 
 **cloud 里 `ask` 是异步的**（复用事件总线）：
 
+> **评审修订（2026-07-19）**：按 [ADR-020](decisions.md)，现在只冻结版本化的**语义审批信封**；在首个 `ask` 动作进入范围前，不实现任何 renderer/surface。v1 的 candidate 确认是独立业务工作流，**不是 approval**。
+
 ```
 工具要跑 → evaluate → ask
    → emit "permission.asked"(带 correlation_id) → 任意 surface 渲染(Web卡片/QQ消息)
@@ -39,6 +43,8 @@ REGISTERED → VISIBLE(本轮可见，check_fn+信任分级) → ALLOWED(策略)
 → **一个远程 QQ 就能批准一个 Worker 里的写操作**，跨端一致。
 
 ## 起步工具箱（按信任分级发放）
+
+> **评审修订（2026-07-19）**：按 [ADR-009](decisions.md)，连接器内容（email）改由专用 **`CONNECTOR_ANALYSIS` 无工具结构化抽取**能力处理：不提供通用 SAFE 工具、不读 workspace/memory、无副作用，且只产出 **candidate**。SAFE/FULL 工具集只用于已认证用户的交互式会话。v1 工具保持最小：`read/glob/grep`（只读）、candidate/todo、memory（user-private）、Gmail 只读 connector、`ask_user`；不含 `write`/`bash`/`task`，`run_code` 亦后置。
 
 | 工具 | SAFE 集(email/webhook 等不可信入口) | FULL 集(web/QQ 已认证用户) |
 |---|---|---|
@@ -54,6 +60,8 @@ REGISTERED → VISIBLE(本轮可见，check_fn+信任分级) → ALLOWED(策略)
 **工具集在 turn 开始时一次定死、中途不变**（Hermes）→ 保住 prompt 缓存；不可信内容永远拿不到 `bash`。
 
 ## 沙箱（多租户代码隔离）
+
+> **评审修订（2026-07-19）**：按 [ADR-007](decisions.md)，**sandbox / `run_code` 移出 v1**。重新进入范围前，必须具备后端中立执行契约、gVisor/Firecracker（或专用节点）、出口策略、聚合配额，并完成威胁评审。
 
 `run_code`/`bash` 工具 → 调 **Sandbox 服务**（独立进程）→ 起隔离容器执行。
 

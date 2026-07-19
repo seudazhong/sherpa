@@ -1,5 +1,7 @@
 # 02 · 身份 / 会话 / 记忆模型
 
+> **评审修订（2026-07-19）**：本文保留长期身份 / 会话 / 记忆模型；v1 按 [ADR-015](decisions.md) 为**单 owner（单用户）**，因此 `tenant_id` 恒为单值；按 [ADR-022](decisions.md)，v1 渠道仅含 **Web + 出站摘要邮件**，QQ 与 agentic email 均后置。
+
 这是整个系统的地基，解决"一人多入口"难题：同一个人从 Web、QQ、agentic email、Gmail 触发进来，必须归到**同一身份**、共享同一份记忆和待办。解法 = **UMO 会话键 + 身份链接**（AstrBot UMO + OpenClaw identity links）。
 
 ## 四个概念（别混为一谈）
@@ -15,6 +17,8 @@
 
 格式：`channel:type:external_id`
 
+> **评审修订（2026-07-19）**：按 [ADR-003](decisions.md)，规范键扩展为内部 UUID + 唯一 `(tenant_id, channel, channel_installation_id, scope_type, external_scope_id)`；群组中的 actor 身份与 session 身份分离。
+
 ```
 web:chat:<uuid>   ·   qq:private:12345   ·   qq:group:789
 email:thread:<msgid>   ·   webhook:github:<repo>
@@ -28,6 +32,8 @@ email:thread:<msgid>   ·   webhook:github:<repo>
 - 一个人有**跨渠道的多个 session**。
 
 ## 两层记忆（个人助理 + 团队协作都要）
+
+> **评审修订（2026-07-19）**：按 [ADR-004](decisions.md)，v1 仅保留 **user 私有记忆**；tenant 共享 block 与 memory/RAG（pgvector）随团队功能一并后置。
 
 - **user 级私有记忆**：Letta core memory block，个人画像/偏好。
 - **tenant 级共享记忆**：团队共享 block；编辑会 rebuild 所有成员 prompt → **保持小**。

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa · Home</title>
+  <style>
+    :root {
+      --bg:#F6F4EE; --surface:#FFFFFF; --surface-muted:#EEEAE0; --ink:#1F2A26;
+      --muted:#66736D; --border:#DDD9CE; --primary:#2F6F62; --primary-hover:#255B51;
+      --accent:#D9824B; --accent-soft:#FBEADD; --success:#2D7D5B; --warning:#B66A24;
+      --danger:#B84A45; --info:#356FA1; --focus:#6E56CF; --shadow:0 8px 24px rgba(31,42,38,.07);
+      --font:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    }
+    * { box-sizing:border-box }
+    body { margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--font) }
+    button,input { font:inherit } button { cursor:pointer } a { color:inherit }
+    a:focus-visible,button:focus-visible,input:focus-visible { outline:3px solid var(--focus);outline-offset:2px }
+    .app { min-height:100vh;display:grid;grid-template-columns:226px minmax(0,1fr) }
+    aside { position:sticky;top:0;height:100vh;padding:18px 13px;background:#18322B;color:#EDF3EF }
+    .brand { display:flex;align-items:center;gap:10px;padding:4px 8px 18px;text-decoration:none;font-size:18px;font-weight:800 }
+    .mark { display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#70BFA9;color:#18322B }
+    .workspace { position:relative;padding:12px;border:1px solid #4B6C62;border-radius:12px;background:#203E35;cursor:pointer }.workspace strong{display:block}.workspace small{color:#A9C1B8}.workspace .chev{position:absolute;right:12px;top:18px}
+    .workspace-menu { margin-top:7px;padding:7px;border:1px solid #36584E;border-radius:10px;background:#1C372F }
+    .ws { display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px;color:#B8CCC4;font-size:12px }.ws.active{background:#2A4B41;color:white}.ws-badge{margin-left:auto;color:#90AA9F;font-size:10px;text-transform:uppercase}
+    nav { margin-top:12px }.label { padding:10px 10px 5px;color:#8FAB9F;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase }
+    .nav { display:flex;align-items:center;gap:10px;min-height:42px;padding:0 10px;border-radius:9px;color:#C8D7D1;text-decoration:none }
+    .nav.active { background:#2A4B41;color:white;font-weight:750 }.nav i{width:18px;text-align:center;font-style:normal}
+    .nav .badge { margin-left:auto;display:grid;place-items:center;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:#D9824B;color:#2D2119;font-size:10px;font-weight:900 }
+    .profile { position:absolute;left:18px;right:18px;bottom:17px;display:flex;align-items:center;gap:9px;padding-top:12px;border-top:1px solid #315148 }.avatar{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#D9824B;color:#2B211B;font-weight:900}.profile small{color:#8FAB9F}
+    main { min-width:0;padding:26px 30px 60px }
+    .top { display:flex;justify-content:space-between;align-items:flex-start;gap:20px }
+    .eyebrow { color:var(--primary);font-size:12px;font-weight:850;text-transform:uppercase;letter-spacing:.1em }
+    h1 { margin:4px 0;font-size:32px;letter-spacing:-.03em }.sub{margin:0;color:var(--muted)}
+    .top-actions { display:flex;gap:8px }.button{min-height:42px;padding:0 15px;border:1px solid var(--border);border-radius:9px;background:white;color:var(--ink);font-weight:750}.button.primary{border-color:var(--primary);background:var(--primary);color:white}
+    .layout { display:grid;grid-template-columns:minmax(0,1.45fr) minmax(280px,.7fr);gap:18px;margin-top:24px }
+    .stack { display:grid;gap:18px;align-content:start }
+    .hero { position:relative;overflow:hidden;padding:24px;border-radius:17px;background:linear-gradient(135deg,#244D42,#18372F);color:#EDF3EF;box-shadow:var(--shadow) }
+    .hero::after{content:"";position:absolute;width:260px;height:260px;right:-100px;top:-140px;border:45px solid rgba(112,191,169,.12);border-radius:50%}
+    .hero .eyebrow{color:#8DCEBB}.hero h2{max-width:520px;margin:7px 0 7px;font-size:24px;line-height:1.25}.hero p{max-width:570px;margin:0;color:#BBD0C8}
+    .run { position:relative;z-index:1;display:flex;align-items:center;gap:12px;margin-top:20px;padding:14px;border:1px solid #45695F;border-radius:12px;background:rgba(13,32,27,.42) }
+    .spinner{width:18px;height:18px;flex:0 0 auto;border:2px solid #507A6E;border-top-color:#8DCEBB;border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+    .run strong{display:block}.run small{color:#AFC8BE}.run-meta{margin-left:auto;text-align:right}.run-meta strong{color:#8DCEBB;font-size:12px}.run button{min-height:36px;padding:0 11px;border:1px solid #557A6F;border-radius:8px;background:#2A5045;color:white;font-weight:800}
+    .section { padding:19px;border:1px solid var(--border);border-radius:15px;background:var(--surface);box-shadow:0 3px 14px rgba(31,42,38,.04) }
+    .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}.section-head h2{margin:0;font-size:17px}.section-head a{color:var(--primary);font-size:12px;font-weight:800;text-decoration:none}
+    .activity { display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;padding:12px 0;border-top:1px solid var(--border) }.activity:first-of-type{border-top:0}
+    .activity-icon{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:#E6F1ED;color:var(--primary);font-weight:900}.activity-icon.orange{background:var(--accent-soft);color:#955225}.activity-icon.blue{background:#E6EFF7;color:var(--info)}
+    .activity strong{display:block;font-size:13px}.activity p{margin:1px 0;color:var(--muted);font-size:12px}.time{color:var(--muted);font-size:11px;white-space:nowrap}
+    .schedule { display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:11px;align-items:center;padding:12px 0;border-top:1px solid var(--border) }.schedule:first-of-type{border-top:0}
+    .date{display:grid;place-items:center;height:42px;border-radius:9px;background:var(--surface-muted);color:var(--primary);font-weight:900}.schedule strong{display:block;font-size:13px}.schedule small{color:var(--muted)}
+    .next{padding:4px 8px;border-radius:999px;background:#E6F1ED;color:var(--primary);font-size:11px;font-weight:800}.next.warn{background:var(--accent-soft);color:#8A4A1E}
+    .notification { padding:13px 0;border-top:1px solid var(--border) }.notification:first-of-type{border-top:0}.notif-top{display:flex;align-items:center;gap:8px}.notification h3{margin:0;font-size:13px}.notification p{margin:5px 0 10px;color:var(--muted);font-size:12px}
+    .source{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:999px;background:#E8EFF5;color:var(--info);font-size:10px;font-weight:850}.source.gmail{background:#FCE8E6;color:#A33B32}.source::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+    .notification button{min-height:32px;padding:0 10px;border:1px solid var(--border);border-radius:7px;background:white;color:var(--ink);font-size:12px;font-weight:750}.notification button.primary{border-color:#BCD2C9;color:var(--primary)}
+    .stats { display:grid;grid-template-columns:repeat(3,1fr);gap:10px }.stat{padding:14px;border-radius:11px;background:#F3F1EA}.stat strong{display:block;font-size:21px}.stat span{color:var(--muted);font-size:11px}
+    .channels { display:flex;align-items:center;gap:8px;margin-top:13px;padding-top:13px;border-top:1px solid var(--border);color:var(--muted);font-size:12px}.channel{padding:4px 8px;border-radius:999px;background:#E7F2EC;color:var(--primary);font-weight:800}.channel.fallback{background:#ECEAE4;color:var(--muted)}
+    .mobile { display:none }
+    @media (max-width:920px) {
+      .app{display:block}aside{display:none}main{padding:18px 14px 70px}.mobile{display:inline}.top h1{font-size:27px}.layout{grid-template-columns:1fr}.right{grid-template-columns:1fr 1fr}.right .section:last-child{grid-column:1/-1}
+    }
+    @media (max-width:620px) {
+      .top-actions .button:not(.primary){display:none}.layout{margin-top:18px}.right{grid-template-columns:1fr}.right .section:last-child{grid-column:auto}
+      .run{align-items:flex-start;flex-wrap:wrap}.run-meta{margin-left:30px}.hero{padding:19px}.stats{grid-template-columns:1fr 1fr}.stats .stat:last-child{grid-column:1/-1}.activity{grid-template-columns:34px 1fr}.activity .time{grid-column:2}
+    }
+    @media(prefers-reduced-motion:reduce){.spinner{animation:none;border-color:#8DCEBB}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside aria-label="Primary navigation">
+      <a class="brand" href="index.html"><span class="mark">S</span>Sherpa</a>
+      <div class="workspace"><span class="chev">⌃</span><strong>My workspace</strong><small>Personal · Only you</small></div>
+      <div class="workspace-menu" aria-label="Workspace switcher">
+        <div class="ws active"><span>●</span>My workspace<span class="ws-badge">Personal</span></div>
+        <div class="ws"><span>○</span>Atlas product<span class="ws-badge">Team</span></div>
+      </div>
+      <nav>
+        <div class="label">Workspace</div>
+        <a class="nav active" href="#"><i>⌂</i>Home</a><a class="nav" href="chat-session.html"><i>◌</i>Chat<span class="badge">1</span></a>
+        <a class="nav" href="todo-board.html"><i>✓</i>Todos</a><a class="nav" href="#"><i>□</i>Files</a>
+        <div class="label">Automate</div><a class="nav" href="#"><i>◷</i>Schedules</a><a class="nav" href="connectors.html"><i>⌁</i>Connectors</a>
+        <div class="label">Account</div><a class="nav" href="#"><i>⚙</i>Settings</a>
+      </nav>
+      <div class="profile"><span class="avatar">DK</span><div><strong>Dana Kim</strong><br><small>Notifications on</small></div></div>
+    </aside>
+
+    <main>
+      <div class="top">
+        <div><div class="eyebrow"><span class="mobile">☰ &nbsp;</span>Sunday, July 19 · My workspace</div><h1>Good afternoon, Dana.</h1><p class="sub">Here’s what Sherpa is carrying and what needs your attention.</p></div>
+        <div class="top-actions"><button class="button">⌕ Search</button><button class="button primary">＋ New conversation</button></div>
+      </div>
+
+      <div class="layout">
+        <div class="stack">
+          <section class="hero">
+            <div class="eyebrow">In progress · Web chat</div>
+            <h2>Sherpa is preparing your launch readiness brief</h2>
+            <p>It has reviewed the release milestone and is checking six open pull requests. You can leave this page safely.</p>
+            <div class="run">
+              <span class="spinner" aria-hidden="true"></span>
+              <div><strong>Inspecting open pull requests</strong><small>Step 3 of up to 50 · last update just now</small></div>
+              <div class="run-meta"><strong>LIVE · 2m 14s</strong><small>Will notify via QQ</small></div>
+              <button>Open run →</button>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-head"><h2>Recent activity</h2><a href="#">View all activity →</a></div>
+            <div class="activity"><span class="activity-icon">✓</span><div><strong>Daily inbox triage settled</strong><p>Created 3 suggestions from 28 new Gmail messages. No external actions taken.</p></div><span class="time">9:06 AM</span></div>
+            <div class="activity"><span class="activity-icon orange">◇</span><div><strong>Permission allowed once via QQ</strong><p>Run tests in the isolated sandbox · My workspace · PERM-4M8X</p></div><span class="time">Yesterday</span></div>
+            <div class="activity"><span class="activity-icon blue">↗</span><div><strong>GitHub release digest delivered</strong><p>Sent as a notification to QQ; email fallback was not used.</p></div><span class="time">Fri, 5:31 PM</span></div>
+            <div class="activity"><span class="activity-icon">□</span><div><strong>Research notes saved to Files</strong><p>Generated by “Competitor scan” · 184 KB · private</p></div><span class="time">Thu</span></div>
+          </section>
+
+          <section class="section">
+            <div class="section-head"><h2>Upcoming scheduled work</h2><a href="#">Manage schedules →</a></div>
+            <div class="schedule"><span class="date">20</span><div><strong>Morning inbox triage</strong><small>Every weekday at 9:00 AM · Asia/Shanghai</small></div><span class="next">in 15h</span></div>
+            <div class="schedule"><span class="date">21</span><div><strong>GitHub release risk scan</strong><small>Every Tuesday at 8:30 AM · 4 repositories</small></div><span class="next">in 2 days</span></div>
+            <div class="schedule"><span class="date">24</span><div><strong>Friday weekly review</strong><small>Cron 0 16 * * 5 · notify via QQ, then email</small></div><span class="next warn">Fri 4:00 PM</span></div>
+          </section>
+        </div>
+
+        <div class="stack right">
+          <section class="section">
+            <div class="section-head"><h2>Needs your attention</h2><a href="#">Inbox · 3</a></div>
+            <article class="notification">
+              <div class="notif-top"><span class="source gmail">Gmail</span><h3>Confirm mobile accessibility review</h3></div>
+              <p>Maya asked for confirmation by Wednesday. Sherpa suggested a high-priority todo.</p>
+              <button class="primary">Review suggestion</button> <button>Dismiss</button>
+            </article>
+            <article class="notification">
+              <div class="notif-top"><span class="source">GitHub</span><h3>GitHub access needs review</h3></div>
+              <p>A repository permission changed, so sync has paused rather than widening access.</p>
+              <button class="primary">Review access</button>
+            </article>
+            <article class="notification">
+              <div class="notif-top"><span class="source" style="background:#FBEADD;color:#8A4A1E">Schedule</span><h3>One run has no result</h3></div>
+              <p>Sunday backup check was claimed but did not settle. It was not repeated to avoid duplicate effects.</p>
+              <button>View run</button>
+            </article>
+          </section>
+
+          <section class="section">
+            <div class="section-head"><h2>This week</h2><a href="#">Open todos →</a></div>
+            <div class="stats"><div class="stat"><strong>8</strong><span>completed</span></div><div class="stat"><strong>3</strong><span>suggestions</span></div><div class="stat"><strong>2.4h</strong><span>estimated saved</span></div></div>
+          </section>
+
+          <section class="section">
+            <div class="section-head"><h2>Notification route</h2><a href="#">Preferences</a></div>
+            <p style="margin:0;color:var(--muted)">High-priority updates follow your active channel preference and quiet hours.</p>
+            <div class="channels"><span class="channel">1 · QQ online</span><span>→</span><span class="channel fallback">2 · Agentic email</span></div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

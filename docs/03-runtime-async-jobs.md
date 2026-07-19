@@ -1,5 +1,7 @@
 # 03 · 运行时 / 异步 job
 
+> **评审修订（2026-07-19）**：异步 job 优先的长期设计不变；事件总线语义按 [ADR-016](decisions.md) 进一步明确。
+
 这是"云端"区别于"local"的本质：长任务、定时、主动推送、多用户并发。
 
 ## 根本形状：异步 job 优先
@@ -25,6 +27,8 @@ Local agent 是"请求→阻塞→回答"。Sherpa 的场景**逼你走异步**�
 | **Sandbox** | 代码执行的容器编排（每次运行一个隔离容器） | 隔离 |
 
 **Redis 三用途**：队列（BullMQ/arq）+ 事件总线（pub/sub）+ 锁（session 串行、scheduler 选主）。
+
+> **评审修订（2026-07-19）**：按 [ADR-016](decisions.md)，**PostgreSQL event journal + transactional outbox 是恢复 / 重放 / 流式的真相源**；Redis Streams 仅加速投递，**pub/sub 永不承担正确性关键职责**。SSE 客户端重连时通过 cursor 对 journal 补齐事件。
 
 ## 一条消息的完整生命周期
 

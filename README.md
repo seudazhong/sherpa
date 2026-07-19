@@ -6,7 +6,13 @@ Sherpa 是一个可 **Docker 一键部署**、支持**多用户登录**的云端
 
 ## 当前阶段
 
-🟡 **设计阶段**（Design）。本仓库目前只包含**架构设计文档**与**带职责说明的目录骨架**，尚未开始编码。
+🟡 **设计阶段（评审已完成，v1 定位已确认）**。本仓库目前只含**设计文档**与**目录骨架**，尚未开始编码。
+
+上面的介绍是**长期愿景**。经三方评审（PM/UI/架构师）并由负责人拍板，**v1 已收窄为**：
+
+> **自托管、单实例、单用户的 Gmail → Action 助理**——只读 Gmail → 私有候选待办（带来源）→ accept/edit/dismiss → opt-in 提醒；保留 Web 聊天为次要界面。
+
+沙箱、GitHub、QQ、agentic email、团队协作等**推迟到后续里程碑**。详见 ⭐[设计评审汇总](docs/reviews/README.md)、[里程碑](docs/09-roadmap.md) 与 [ADR-022](docs/decisions.md)。
 
 ## 文档导航
 
@@ -23,6 +29,8 @@ Sherpa 是一个可 **Docker 一键部署**、支持**多用户登录**的云端
 | [08 数据模型](docs/08-data-model.md) | 多租户 schema |
 | [09 路线图](docs/09-roadmap.md) | P0–P6 分阶段构建 |
 | [决策记录 ADR](docs/decisions.md) | 所有已锁定的架构决策 + 理由 |
+| ⭐ [设计评审汇总](docs/reviews/README.md) | **PM / UI / 架构师三方评审结论 + 待办改动清单（编码前必读）** |
+| [UI 设计图样](docs/design/index.html) | 可离线预览的 HTML 原型（chat / todo / connectors / dashboard） |
 
 ## 一句话架构
 
