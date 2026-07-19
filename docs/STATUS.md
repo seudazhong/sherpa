@@ -2,28 +2,29 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-20 · Phase: **M1 in progress (durable spine)**.
+> Last updated: 2026-07-20 · Phase: **M1 COMPLETE (durable spine) → M2 next**.
 
 ## Where we are
-The **design + contracts + runnable skeleton** are done. The v1 durable spine (M1) is **nearly complete**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, the REST auth + session/message surface, the credential vault (AEAD/KEK), and **run traces + structured logging** (#1–#12) are implemented and green. Last M1 task: the frontend chat client (#13).
+The **design + contracts + runnable skeleton** are done, and the **v1 durable spine (M1) is complete and verified end-to-end**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, the REST auth + session/message surface, the credential vault (AEAD/KEK), run traces + structured logging, and the web chat client (#1–#13) are all implemented and green. A live smoke (login → session → prompt → real arq worker loop → outbox relay → SSE `run.settled` → persisted transcript) passes. Next: **M2 — Personal Inbox-to-Action (Gmail → candidate → todo → reminder)**.
 
 ## Verified state
-- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **34 passed** (needs Postgres+Redis up; vault/formatter tests need neither) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed.
-- **Frontend** (`frontend/`): Vite+React+TS scaffold present. ⚠️ Needs `npm ci` before `npm run build` (not yet installed/verified in this env).
-- **Infra**: `infra/docker-compose.yml` (postgres+redis+web+worker+frontend) defined; not yet brought up.
-- **CI**: `.github/workflows/ci.yml` (backend uv lint/type/test + frontend build).
+- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **34 passed** (needs Postgres+Redis up; vault/formatter tests need neither) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic `0005`.
+- **Frontend** (`frontend/`): Vite+React+TS SPA (login + chat). `npm install` done, `npm run build` + `npm run lint` green. `package-lock.json` committed.
+- **Runtime**: web (`uv run uvicorn app.main:app`) + worker (`uv run arq app.worker.WorkerSettings`, runs the run loop + outbox relay) verified live against docker Postgres+Redis.
+- **Infra**: `infra/docker-compose.yml` (postgres+redis+web+worker+frontend) defined. **CI**: `.github/workflows/ci.yml` (backend uv lint/type/test + frontend build).
 
 ## Done ✅
 - Architecture design docs (`docs/00–09`), 22 ADRs (`docs/decisions.md`), three-role review + action list (`docs/reviews/`).
 - Confirmed v1 scope (ADR-022) + value/risk milestones (`docs/09-roadmap.md`).
 - UI: bright "Daybreak" set (recommended) + v1 "Alpine" set + scope map (`docs/design-bright/README.md`).
-- **Readiness kit**: tech-stack lock (`docs/10-tech-stack.md`), **frozen contracts** (`docs/contracts/` — data-model, events-and-effects, api, config-and-secrets), `AGENTS.md`, runnable+green skeleton, infra, CI, this plan/status.
+- **Readiness kit**: tech-stack lock (`docs/10-tech-stack.md`), **frozen contracts** (`docs/contracts/`), `AGENTS.md`, runnable+green skeleton, infra, CI, this plan/status.
+- **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**M1 #13 — Frontend chat** (Vite+React+TS): a login view + chat session view that creates/uses a session, POSTs prompts (CSRF), subscribes to `GET /sessions/{id}/events` via SSE, and renders the event vocabulary (text-delta / tool-call / turn.end / run.settled) per `docs/design-bright/chat-session.html`. AC: `npm run build` green; live run renders; reconnect shows catch-up.
+**M2 #14 — Gmail connector (OAuth connect + encrypted credential storage)** — the first M2 task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md) (Personal Inbox-to-Action). Note the **open impl params that bind M2** (below) should be confirmed before shipping to real users. `generations` + `audit_receipts` tables (deferred from #12) also land in M2 alongside `extractions`/`approval_envelopes`.
 
 ## In progress
-**M1 — durable spine.** #1–#12 done (persistence, migrations, journal+outbox, Redis/SSE, effect idempotency, provider+mock, tools, core loop, durable prompt admission, REST auth+sessions+messages, credential vault AEAD/KEK, run traces + structured logging). #13 next (final M1) — the web chat client wiring the whole vertical: login → session → prompt → SSE render.
+**None — M1 is complete.** Ready to start M2 (Gmail → candidate → todo → reminder). M2 introduces the first real external connector, so confirm the open impl params first.
 Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schema at alembic `0005`).
 
 ## Blockers
@@ -46,8 +47,9 @@ Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schem
 | M1 #10 REST sessions/messages + auth | ✅ done |
 | M1 #11 config + secrets (AEAD/KEK) | ✅ done |
 | M1 #12 observability | ✅ done |
-| M1 #13 frontend chat | ⬜ next |
-| M2 #14–22 Gmail→candidate→todo→reminder | ⬜ |
+| M1 #13 frontend chat | ✅ done |
+| **M1 exit** (web prompt → loop → SSE → transcript; live-verified) | ✅ **met** |
+| M2 #14–22 Gmail→candidate→todo→reminder | ⬜ next |
 
 ## How to update
 On finishing a task: set its row ✅, move "Next ready", note anything a future agent must know (schema changes, new commands, gotchas), bump "Last updated", and commit (the STATUS bump can ride with the task commit).
