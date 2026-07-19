@@ -1,0 +1,8 @@
+# Normalize line endings to LF in the repository (developed on Windows,
+# deployed on Linux/Docker). Avoids CRLF churn in lockfiles and sources.
+* text=auto eol=lf
+
+# Treat images/binaries as binary
+*.png binary
+*.jpg binary
+*.ico binary
