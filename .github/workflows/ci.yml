@@ -11,6 +11,26 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sherpa
+          POSTGRES_PASSWORD: sherpa
+          POSTGRES_DB: sherpa
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sherpa"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://sherpa:sherpa@localhost:5432/sherpa
+      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -21,6 +41,8 @@ jobs:
         run: uv run ruff check . && uv run ruff format --check .
       - name: Typecheck
         run: uv run mypy app
+      - name: Migrate
+        run: uv run alembic upgrade head
       - name: Test
         run: uv run pytest
 
