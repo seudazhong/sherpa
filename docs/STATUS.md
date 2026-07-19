@@ -20,10 +20,10 @@ The **design + contracts + runnable skeleton** are done. The walking skeleton bo
 - **Readiness kit**: tech-stack lock (`docs/10-tech-stack.md`), **frozen contracts** (`docs/contracts/` — data-model, events-and-effects, api, config-and-secrets), `AGENTS.md`, runnable+green skeleton, infra, CI, this plan/status.
 
 ## ▶ Next ready task
-**M1 #4 — Redis Streams + SSE** (relay journal→per-session Redis Stream; `GET /sessions/{id}/events?cursor=` with `Last-Event-ID` catch-up from the journal). See `contracts/events-and-effects.md` §3.
+**M1 #5 — Effect / idempotency** (`effect_invocations` table + persist-before-effect helper; outcomes succeeded/failed/effect_unknown). See `contracts/events-and-effects.md` §4.
 
 ## In progress
-**M1 — durable spine.** #1 persistence, #2 migration, #3 event journal + outbox — done. #4 next.
+**M1 — durable spine.** #1–#4 done (persistence, migration, event journal+outbox, Redis relay+SSE). #5 next.
 Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schema at alembic `0002`).
 
 ## Blockers
@@ -37,7 +37,8 @@ Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schem
 | M1 #1 persistence base | ✅ done |
 | M1 #2 alembic + initial migration | ✅ done |
 | M1 #3 event journal + outbox | ✅ done |
-| M1 #4 redis streams + SSE catch-up | ⬜ next |
+| M1 #4 redis streams + SSE catch-up | ✅ done |
+| M1 #5 effect/idempotency | ⬜ next |
 | M1 #4 redis streams + SSE catch-up | ⬜ |
 | M1 #5 effect/idempotency | ⬜ |
 | M1 #6 provider + mock | ⬜ |
