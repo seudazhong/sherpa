@@ -20,10 +20,10 @@ The **design + contracts + runnable skeleton** are done. The walking skeleton bo
 - **Readiness kit**: tech-stack lock (`docs/10-tech-stack.md`), **frozen contracts** (`docs/contracts/` — data-model, events-and-effects, api, config-and-secrets), `AGENTS.md`, runnable+green skeleton, infra, CI, this plan/status.
 
 ## ▶ Next ready task
-**M1 #6 — Provider layer + mock** (`Provider` interface + mock/echo provider emitting normalized stream events). See `docs/08-data-model.md`, `docs/10-tech-stack.md`.
+**M1 #7 — Tool interface + starter tools** (`Tool` shape, 4 gates, output bounding; read-only starters). See `contracts/api.md` §7, ADR-009.
 
 ## In progress
-**M1 — durable spine.** #1–#5 done (persistence, migration, journal+outbox, relay+SSE, effect/idempotency). #6 next.
+**M1 — durable spine.** #1–#6 done (…, provider + mock). #7 next.
 Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schema at alembic `0003`).
 
 ## Blockers
@@ -39,7 +39,8 @@ Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schem
 | M1 #3 event journal + outbox | ✅ done |
 | M1 #4 redis streams + SSE catch-up | ✅ done |
 | M1 #5 effect/idempotency | ✅ done |
-| M1 #6 provider + mock | ⬜ next |
+| M1 #6 provider + mock | ✅ done |
+| M1 #7 tool interface + starter tools | ⬜ next |
 | M1 #4 redis streams + SSE catch-up | ⬜ |
 | M1 #5 effect/idempotency | ⬜ |
 | M1 #6 provider + mock | ⬜ |
