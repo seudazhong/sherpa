@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-20 · Phase: **Design + readiness complete → ready to start M1**.
+> Last updated: 2026-07-20 · Phase: **M1 in progress (durable spine)**.
 
 ## Where we are
 The **design + contracts + runnable skeleton** are done. The walking skeleton boots and is green. Implementation of the v1 durable spine (M1) has **not started**.
@@ -20,10 +20,10 @@ The **design + contracts + runnable skeleton** are done. The walking skeleton bo
 - **Readiness kit**: tech-stack lock (`docs/10-tech-stack.md`), **frozen contracts** (`docs/contracts/` — data-model, events-and-effects, api, config-and-secrets), `AGENTS.md`, runnable+green skeleton, infra, CI, this plan/status.
 
 ## ▶ Next ready task
-**M1 #1 — Persistence base** (async SQLAlchemy engine/session; `/readyz` checks DB+Redis). Then #2 (Alembic + initial migration), #3 (event journal + outbox)… See [`IMPLEMENTATION.md`](IMPLEMENTATION.md).
+**M1 #2 — Alembic + initial migration** (identity/tenant/session/message/parts; `tenant_id`+composite keys). Then #3 (event journal + outbox)… See [`IMPLEMENTATION.md`](IMPLEMENTATION.md).
 
 ## In progress
-_None_ — readiness kit just completed.
+**M1 — durable spine.** #1 (persistence base) done; #2 next.
 
 ## Blockers
 - **None for M1.** M1 runs on the **mock provider** and needs no external accounts.
@@ -33,8 +33,8 @@ _None_ — readiness kit just completed.
 | Task | Status |
 |---|---|
 | S0/S1 walking skeleton + tooling | ✅ done |
-| M1 #1 persistence base | ⬜ next |
-| M1 #2 alembic + initial migration | ⬜ |
+| M1 #1 persistence base | ✅ done |
+| M1 #2 alembic + initial migration | ⬜ next |
 | M1 #3 event journal + outbox | ⬜ |
 | M1 #4 redis streams + SSE catch-up | ⬜ |
 | M1 #5 effect/idempotency | ⬜ |

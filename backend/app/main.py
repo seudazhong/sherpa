@@ -7,10 +7,12 @@ docs/contracts/api.md and docs/IMPLEMENTATION.md.
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 
 from app import __version__
 from app.config import settings
+from app.db import ping_db
+from app.redis_client import ping_redis
 
 app = FastAPI(title="Sherpa", version=__version__)
 
@@ -22,6 +24,10 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/readyz")
-async def readyz() -> dict[str, bool]:
-    """Readiness probe. Extend to check DB/Redis once wired (IMPLEMENTATION.md)."""
-    return {"ready": True}
+async def readyz(response: Response) -> dict[str, object]:
+    """Readiness probe: ready only when DB and Redis are both reachable."""
+    checks = {"db": await ping_db(), "redis": await ping_redis()}
+    ready = all(checks.values())
+    if not ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {"ready": ready, "checks": checks}
