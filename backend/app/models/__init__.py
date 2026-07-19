@@ -12,5 +12,17 @@ from app.models.core import (
     Tenant,
     User,
 )
+from app.models.events import EventJournal, Outbox
 
-__all__ = ["Base", "Tenant", "User", "Identity", "Session", "Run", "Message", "Part"]
+__all__ = [
+    "Base",
+    "Tenant",
+    "User",
+    "Identity",
+    "Session",
+    "Run",
+    "Message",
+    "Part",
+    "EventJournal",
+    "Outbox",
+]

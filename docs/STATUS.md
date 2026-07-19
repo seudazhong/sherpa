@@ -20,11 +20,11 @@ The **design + contracts + runnable skeleton** are done. The walking skeleton bo
 - **Readiness kit**: tech-stack lock (`docs/10-tech-stack.md`), **frozen contracts** (`docs/contracts/` — data-model, events-and-effects, api, config-and-secrets), `AGENTS.md`, runnable+green skeleton, infra, CI, this plan/status.
 
 ## ▶ Next ready task
-**M1 #3 — Event journal + outbox** (append-only events + transactional outbox; per-run `seq`). See [`IMPLEMENTATION.md`](IMPLEMENTATION.md) and `contracts/events-and-effects.md`.
+**M1 #4 — Redis Streams + SSE** (relay journal→per-session Redis Stream; `GET /sessions/{id}/events?cursor=` with `Last-Event-ID` catch-up from the journal). See `contracts/events-and-effects.md` §3.
 
 ## In progress
-**M1 — durable spine.** #1 (persistence base) + #2 (alembic + initial migration) done; #3 next.
-Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schema at alembic `0001`).
+**M1 — durable spine.** #1 persistence, #2 migration, #3 event journal + outbox — done. #4 next.
+Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schema at alembic `0002`).
 
 ## Blockers
 - **None for M1.** M1 runs on the **mock provider** and needs no external accounts.
@@ -36,7 +36,8 @@ Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schem
 | S0/S1 walking skeleton + tooling | ✅ done |
 | M1 #1 persistence base | ✅ done |
 | M1 #2 alembic + initial migration | ✅ done |
-| M1 #3 event journal + outbox | ⬜ next |
+| M1 #3 event journal + outbox | ✅ done |
+| M1 #4 redis streams + SSE catch-up | ⬜ next |
 | M1 #4 redis streams + SSE catch-up | ⬜ |
 | M1 #5 effect/idempotency | ⬜ |
 | M1 #6 provider + mock | ⬜ |
