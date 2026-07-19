@@ -1106,10 +1106,36 @@ After redaction, the serialized result of one invocation is bounded to both
 2. replace `llm_content` and `return_display` with a bounded head/tail summary
    (at most 1,000 head and 1,000 tail lines, further byte-trimmed to 50,000
    bytes);
-3. include the relative spill path, original byte/line counts, and truncation
-   marker;
+3. include the frozen spill reference below, original byte/line counts, expiry,
+   and truncation marker;
 4. never spill unredacted secrets, OAuth tokens, hidden prompts, or data outside
    the tool's authorized scope.
+
+```python
+class ToolOutputSpillReference(StrictModel):
+    kind: Literal["tool_output_spill"]
+    truncated: Literal[True]
+    spill_ref: Annotated[
+        str, Field(pattern=r"^tool-output:[0-9a-f-]{36}$")
+    ]
+    invocation_id: UUID
+    relative_path: Annotated[
+        str, Field(pattern=r"^[0-9a-f-]{36}\.txt$")
+    ]
+    original_lines: Annotated[int, Field(ge=0)]
+    original_bytes: Annotated[int, Field(ge=1)]
+    retained_lines: Annotated[int, Field(ge=0, le=2000)]
+    retained_bytes: Annotated[int, Field(ge=0, le=50_000)]
+    expires_at: datetime
+```
+
+`spill_ref` is the stable public/internal reference
+`tool-output:{invocation_id}`; it is not a URL or host path. `relative_path` is
+exactly `{invocation_id}.txt` beneath `TOOL_OUTPUT_ROOT`. The structured object
+is placed in `return_display` as `format="json"`; `llm_content` contains the same
+reference/counts plus the bounded head/tail text. Access to the backing file is
+tenant/run/invocation-authorized and is never static serving. Validation also
+requires `original_lines > 2000` or `original_bytes > 50000`.
 
 If the configured spill cap or aggregate cap prevents persistence, return a
 bounded `tool_output_spill_limit` error observation rather than silently dropping
