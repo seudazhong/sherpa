@@ -409,6 +409,7 @@ CREATE TABLE messages (
     session_id uuid NOT NULL,
     run_id uuid,
     author_user_id uuid,
+    client_message_id uuid,
     seq bigint NOT NULL,
     role text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -435,6 +436,12 @@ CREATE TABLE messages (
 
 CREATE INDEX ix_messages_tenant_session_created
     ON messages (tenant_id, session_id, created_at);
+
+-- Durable-admission idempotency: client_message_id is unique within a session
+-- (NULL for agent-authored assistant/system messages), backing api.md §4.
+CREATE UNIQUE INDEX uq_messages_client_message_id
+    ON messages (tenant_id, session_id, client_message_id)
+    WHERE client_message_id IS NOT NULL;
 
 CREATE TABLE parts (
     tenant_id uuid NOT NULL,
@@ -1763,6 +1770,11 @@ COMMIT;
    `sessions.admitted_seq`, create the run, append the admission event, and add
    its outbox row in one transaction. `promoted_seq` advances only when the
    coordinator makes admitted transcript visible to the active run.
+   Client-submitted prompts carry `messages.client_message_id`, unique within
+   the session, so a retried submission is idempotent (see api.md §4). v1 emits
+   no distinct admission event type (the event catalog is closed); the run's
+   `run.started` is the first session event and the admission response cursor is
+   the committed session-journal tail.
 5. **No stored chain-of-thought.** `parts` deliberately contains only `text` and
    durable `status` snapshots. Curated rationale belongs in
    `candidates.rationale_redacted`.

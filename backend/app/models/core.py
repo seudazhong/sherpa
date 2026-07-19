@@ -173,6 +173,7 @@ class Message(Base):
     session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     author_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    client_message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     seq: Mapped[int] = mapped_column(BigInteger)
     role: Mapped[str] = mapped_column(Text)
     created_at = _ts()

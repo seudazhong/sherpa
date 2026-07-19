@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Response, status
 
 from app import __version__
+from app.api.prompt import router as prompt_router
 from app.api.sse import router as sse_router
 from app.config import settings
 from app.db import ping_db
@@ -17,6 +18,7 @@ from app.redis_client import ping_redis
 
 app = FastAPI(title="Sherpa", version=__version__)
 app.include_router(sse_router)
+app.include_router(prompt_router)
 
 
 @app.get("/health")
