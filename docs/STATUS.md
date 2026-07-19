@@ -5,10 +5,10 @@
 > Last updated: 2026-07-20 · Phase: **M1 in progress (durable spine)**.
 
 ## Where we are
-The **design + contracts + runnable skeleton** are done. The v1 durable spine (M1) is **in progress**: the durable persistence layer, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, and the **bounded core loop** (#1–#8) are implemented and green. Next: durable prompt admission (#9).
+The **design + contracts + runnable skeleton** are done. The v1 durable spine (M1) is **in progress**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the **bounded core loop**, and **durable prompt admission** (#1–#9) are implemented and green. Next: REST sessions/messages + auth (#10).
 
 ## Verified state
-- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **22 passed** (needs Postgres+Redis up) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed.
+- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **24 passed** (needs Postgres+Redis up) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed.
 - **Frontend** (`frontend/`): Vite+React+TS scaffold present. ⚠️ Needs `npm ci` before `npm run build` (not yet installed/verified in this env).
 - **Infra**: `infra/docker-compose.yml` (postgres+redis+web+worker+frontend) defined; not yet brought up.
 - **CI**: `.github/workflows/ci.yml` (backend uv lint/type/test + frontend build).
@@ -20,11 +20,11 @@ The **design + contracts + runnable skeleton** are done. The v1 durable spine (M
 - **Readiness kit**: tech-stack lock (`docs/10-tech-stack.md`), **frozen contracts** (`docs/contracts/` — data-model, events-and-effects, api, config-and-secrets), `AGENTS.md`, runnable+green skeleton, infra, CI, this plan/status.
 
 ## ▶ Next ready task
-**M1 #9 — Durable prompt admission** (HTTP prompt → persist user message + queued run in one txn → enqueue arq run job → worker runs the loop). Ties the REST intake to the worker/loop. See `docs/03-runtime.md`, `docs/contracts/api.md`, ADR-016/017.
+**M1 #10 — REST sessions/messages + auth** (single-user session auth + CSRF; `POST /sessions`, `GET /sessions`, `GET /sessions/{id}/messages`; wire auth to the SSE + prompt endpoints). See `docs/contracts/api.md §2,§4`.
 
 ## In progress
-**M1 — durable spine.** #1–#8 done (persistence, migrations, journal+outbox, Redis/SSE, effect idempotency, provider+mock, tools, **core loop**). #9 next — durable prompt intake + job enqueue so a submitted prompt actually drives a worker run.
-Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schema at alembic `0003`).
+**M1 — durable spine.** #1–#9 done (persistence, migrations, journal+outbox, Redis/SSE, effect idempotency, provider+mock, tools, core loop, durable prompt admission). #10 next — the REST session/message surface + single-user auth so the chat UI can create sessions, submit prompts, and read the transcript.
+Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schema at alembic `0004`).
 
 ## Blockers
 - **None for M1.** M1 runs on the **mock provider** and needs no external accounts.
@@ -42,8 +42,8 @@ Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schem
 | M1 #6 provider + mock | ✅ done |
 | M1 #7 tool interface + starter tools | ✅ done |
 | M1 #8 core loop (worker) | ✅ done |
-| M1 #9 durable prompt admission | ⬜ next |
-| M1 #10 REST sessions/messages + auth | ⬜ |
+| M1 #9 durable prompt admission | ✅ done |
+| M1 #10 REST sessions/messages + auth | ⬜ next |
 | M1 #11 config + secrets (AEAD/KEK) | ⬜ |
 | M1 #12 observability | ⬜ |
 | M1 #13 frontend chat | ⬜ |
