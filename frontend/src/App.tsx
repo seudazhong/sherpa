@@ -1,28 +1,29 @@
-import { useEffect, useState } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 
-// Walking-skeleton landing: proves the UI is a client of the backend.
-// Real surfaces (chat/inbox/connectors/…) follow the design in docs/design-bright.
+import { useAuth } from "./auth";
+import ChatView from "./views/ChatView";
+import LoginView from "./views/LoginView";
+
+function Protected({ children }: { children: JSX.Element }) {
+  const { ready, authed } = useAuth();
+  if (!ready) return <div className="loading">Loading…</div>;
+  return authed ? children : <Navigate to="/login" replace />;
+}
+
 export default function App() {
-  const [status, setStatus] = useState("…");
-
-  useEffect(() => {
-    fetch("/health")
-      .then((r) => r.json())
-      .then((d) => setStatus(d.status))
-      .catch(() => setStatus("offline"));
-  }, []);
-
+  const { ready, authed } = useAuth();
   return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
-      <h1>Sherpa</h1>
-      <p>
-        Backend health: <b>{status}</b>
-      </p>
-      <p style={{ color: "#5A7581" }}>
-        The UI is a client of the core event stream. See design mockups in
-        <code> docs/design-bright/</code> and the build plan in
-        <code> docs/IMPLEMENTATION.md</code>.
-      </p>
-    </main>
+    <Routes>
+      <Route path="/login" element={ready && authed ? <Navigate to="/" replace /> : <LoginView />} />
+      <Route
+        path="/"
+        element={
+          <Protected>
+            <ChatView />
+          </Protected>
+        }
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
