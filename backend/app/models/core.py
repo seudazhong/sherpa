@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -117,7 +118,7 @@ class Session(Base):
     fence_token: Mapped[int] = mapped_column(BigInteger, server_default="0")
     input_tokens_rollup: Mapped[int] = mapped_column(BigInteger, server_default="0")
     output_tokens_rollup: Mapped[int] = mapped_column(BigInteger, server_default="0")
-    cost_usd_rollup: Mapped[float] = mapped_column(Numeric(20, 8), server_default="0")
+    cost_usd_rollup: Mapped[Decimal] = mapped_column(Numeric(20, 8), server_default="0")
     last_activity_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at = _ts()
     updated_at = _ts()

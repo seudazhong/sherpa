@@ -14,6 +14,7 @@ from app.models.core import (
 )
 from app.models.effects import EffectInvocation
 from app.models.events import EventJournal, Outbox
+from app.models.observability import Trace
 
 __all__ = [
     "Base",
@@ -27,4 +28,5 @@ __all__ = [
     "EventJournal",
     "Outbox",
     "EffectInvocation",
+    "Trace",
 ]

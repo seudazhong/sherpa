@@ -7,6 +7,9 @@ docs/contracts/api.md and docs/IMPLEMENTATION.md.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Response, status
 
 from app import __version__
@@ -16,9 +19,17 @@ from app.api.sessions import router as sessions_router
 from app.api.sse import router as sse_router
 from app.config import settings
 from app.db import ping_db
+from app.observability import configure_logging
 from app.redis_client import ping_redis
 
-app = FastAPI(title="Sherpa", version=__version__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    configure_logging()
+    yield
+
+
+app = FastAPI(title="Sherpa", version=__version__, lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(sse_router)
