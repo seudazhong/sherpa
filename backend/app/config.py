@@ -23,5 +23,17 @@ class Settings(BaseSettings):
     # Model provider — mock by default; real provider is an open §5 decision.
     provider: str = "mock"
 
+    # App/session auth (contract: docs/contracts/config-and-secrets.md §2).
+    # Dev defaults keep `uv run`/tests working; production MUST override via env
+    # and set session_cookie_secure=true. These values are never logged.
+    app_secret: str = "dev-insecure-app-secret-change-me-32bytes+"
+    session_cookie_name: str = "sherpa_session"
+    session_ttl_seconds: int = 604_800
+    session_cookie_secure: bool = False
+
+    # Single owner credential (v1 is single-user). Overridden by env in prod.
+    owner_email: str = "owner@localhost"
+    owner_password: str = "sherpa-dev-password"
+
 
 settings = Settings()

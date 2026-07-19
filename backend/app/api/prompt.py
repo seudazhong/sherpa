@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import queue
 from app.api.schemas import PromptAdmission, PromptRequest
+from app.auth import RequestContext, require_csrf
 from app.core.admission import PromptConflict, admit_prompt
 from app.db import get_session
 from app.models import Session as SessionModel
@@ -29,25 +30,23 @@ async def post_prompt(
     session_id: uuid.UUID,
     body: PromptRequest,
     response: Response,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
     db: Annotated[AsyncSession, Depends(get_session)],
 ) -> PromptAdmission:
-    row = (
-        await db.execute(
-            select(SessionModel.tenant_id, SessionModel.user_id).where(
-                SessionModel.id == session_id
-            )
+    owner = await db.scalar(
+        select(SessionModel.user_id).where(
+            SessionModel.tenant_id == ctx.tenant_id, SessionModel.id == session_id
         )
-    ).first()
-    if row is None:
+    )
+    if owner is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
-    tenant_id, user_id = row
 
     try:
         adm = await admit_prompt(
             db,
-            tenant_id=tenant_id,
+            tenant_id=ctx.tenant_id,
             session_id=session_id,
-            user_id=user_id,
+            user_id=ctx.user_id,
             client_message_id=body.client_message_id,
             text=body.text,
         )

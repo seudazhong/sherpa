@@ -1,23 +1,21 @@
-"""Durable prompt admission (#9): DB-level admission/idempotency + HTTP endpoint.
+"""Durable prompt admission (#9): DB-level admission + idempotency.
 
 Integration test — skips when no database is reachable. These tests COMMIT (to
 exercise the deferred admitted_seq pointer FKs) and clean up by deleting the
-tenant (cascades across the spine).
+tenant (cascades across the spine). The HTTP prompt flow (auth + CSRF) is
+covered in test_auth_sessions.py.
 """
 
 from __future__ import annotations
 
 import uuid
 
-import httpx
 import pytest
-from httpx import ASGITransport
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.admission import PromptConflict, admit_prompt
 from app.db import SessionLocal, ping_db
-from app.main import app
 from app.models import Message, Part, Run, Tenant, User
 from app.models import Session as SessionModel
 
@@ -107,37 +105,5 @@ async def test_admit_persists_queued_run_and_is_idempotent() -> None:
                     s, tenant_id=tid, session_id=sid, user_id=uid, client_message_id=cmid, text="X"
                 )
             await s.rollback()
-    finally:
-        await _drop_tenant(tid)
-
-
-@pytest.mark.asyncio
-async def test_prompt_endpoint_returns_202(monkeypatch: pytest.MonkeyPatch) -> None:
-    if not await ping_db():
-        pytest.skip("database not reachable")
-
-    enqueued: list[uuid.UUID] = []
-
-    async def _fake_enqueue(run_id: uuid.UUID) -> None:
-        enqueued.append(run_id)
-
-    monkeypatch.setattr("app.api.prompt.queue.enqueue_run", _fake_enqueue)
-
-    async with SessionLocal() as s:
-        tid, _uid, sid = await _seed(s)
-        await s.commit()
-    try:
-        transport = ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-            resp = await client.post(
-                f"/sessions/{sid}/prompt",
-                json={"client_message_id": str(uuid.uuid4()), "text": "hello"},
-            )
-        assert resp.status_code == 202
-        body = resp.json()
-        assert body["state"] == "queued"
-        assert body["session_id"] == str(sid)
-        assert body["events_url"].startswith(f"/sessions/{sid}/events?cursor=")
-        assert len(enqueued) == 1 and str(enqueued[0]) == body["run_id"]
     finally:
         await _drop_tenant(tid)
