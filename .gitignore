@@ -28,6 +28,12 @@ data/
 minio-data/
 postgres-data/
 
+# ── Playwright / review artifacts ──
+.playwright-mcp/
+review-*.png
+diag-*.png
+rev*-*.png
+
 # ── OS / editor ──
 .DS_Store
 Thumbs.db

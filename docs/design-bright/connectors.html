@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa · Connectors</title>
+  <link rel="stylesheet" href="base.css">
+  <style>
+    @media (max-width: 900px) {
+      [aria-label="Connector onboarding"] { grid-template-columns: 1fr !important; }
+      [aria-label="Suggested setup"] { border-right: 0 !important; border-bottom: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="index.html">
+        <span class="logo">S</span>
+        <span class="name">Sherpa</span>
+      </a>
+
+      <div class="ws">
+        <div>
+          <div class="ws-name">My workspace</div>
+          <div class="ws-sub">Personal · Only you</div>
+        </div>
+        <span aria-hidden="true">⌄</span>
+      </div>
+
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="dashboard.html"><span aria-hidden="true">⌂</span> Home</a>
+      <a class="nav-item" href="chat-session.html"><span aria-hidden="true">◌</span> Chat</a>
+      <a class="nav-item" href="todo-board.html"><span aria-hidden="true">✓</span> Todos</a>
+      <a class="nav-item" href="files.html"><span aria-hidden="true">□</span> Files</a>
+
+      <div class="nav-label">Automate</div>
+      <a class="nav-item" href="schedules.html"><span aria-hidden="true">◷</span> Schedules</a>
+      <a class="nav-item active" href="connectors.html"><span aria-hidden="true">⌁</span> Connectors</a>
+
+      <div class="nav-label">Account</div>
+      <a class="nav-item" href="settings.html"><span aria-hidden="true">⚙</span> Settings</a>
+
+      <div class="nav-spacer"></div>
+      <div class="nav-user">
+        <span class="avatar">DK</span>
+        <div>
+          <div class="small"><strong>Dana Kim</strong></div>
+          <div class="faint small">Personal</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="wrap">
+        <header class="topbar">
+          <div>
+            <div class="crumbs"><span class="hamburger">☰ &nbsp;</span>My workspace · Personal</div>
+            <h1 class="page-title">Connectors &amp; channels</h1>
+            <p class="page-sub">Choose what Sherpa can read, where it can notify you, and which identity it uses to communicate.</p>
+          </div>
+          <button class="btn btn-primary">＋ Add connection</button>
+        </header>
+
+        <section class="run-banner mb-16" aria-label="Content trust notice">
+          <span class="avatar" style="background:linear-gradient(135deg,var(--accent),var(--accent-strong))">◇</span>
+          <div>
+            <strong>Account access is not content trust</strong>
+            <div class="muted small">Email and webhook content always receives a read-only, restricted tool set—even when your account is verified.</div>
+          </div>
+          <a class="right small" href="#"><strong>How Sherpa protects you →</strong></a>
+        </section>
+
+        <section class="stats mb-16" aria-label="Connection summary">
+          <div class="stat">
+            <div class="n">3</div>
+            <div class="l">healthy connections</div>
+          </div>
+          <div class="stat">
+            <div class="n">12 min</div>
+            <div class="l">since last Gmail sync</div>
+          </div>
+          <div class="stat">
+            <div class="n">QQ → Email</div>
+            <div class="l">notification priority</div>
+          </div>
+        </section>
+
+        <section class="between mt-24 mb-16">
+          <div>
+            <h2>Your connections</h2>
+            <p class="muted mt-0 mb-0">Tokens stay encrypted and never enter the code sandbox.</p>
+          </div>
+          <button class="btn">View activity log</button>
+        </section>
+
+        <section class="grid-2" aria-label="Your connections">
+          <article class="conn">
+            <div class="hd">
+              <span class="icon" style="background:#EA4335">M</span>
+              <div>
+                <h3>Gmail</h3>
+                <div class="muted small">dana@northstar.example · User account</div>
+              </div>
+              <span class="pill pill-success right">Connected</span>
+            </div>
+            <div class="grid">
+              <div><div class="k">Last sync</div><div class="v">12 minutes ago</div></div>
+              <div><div class="k">Imported</div><div class="v">28 new messages</div></div>
+              <div><div class="k">Next sync</div><div class="v">in 3 minutes</div></div>
+              <div><div class="k">Mode</div><div class="v">Read only</div></div>
+            </div>
+            <div class="wrap-gap mb-16">
+              <span class="tag">Read metadata</span>
+              <span class="tag">Read messages</span>
+              <span class="tag">No send access</span>
+            </div>
+            <div class="conn-actions">
+              <button class="btn btn-sm">Manage</button>
+              <button class="btn btn-sm">Sync now</button>
+              <button class="btn btn-ghost btn-sm">Pause</button>
+            </div>
+          </article>
+
+          <article class="conn">
+            <div class="hd">
+              <span class="icon" style="background:#30363D">GH</span>
+              <div>
+                <h3>GitHub</h3>
+                <div class="muted small">dana-kim · 4 selected repositories</div>
+              </div>
+              <span class="pill pill-warn right">Needs attention</span>
+            </div>
+            <div class="grid">
+              <div><div class="k">Last sync</div><div class="v">Yesterday, 6:20 PM</div></div>
+              <div><div class="k">Issue</div><div class="v">Scope changed</div></div>
+              <div><div class="k">Repositories</div><div class="v">4 selected</div></div>
+              <div><div class="k">Mode</div><div class="v">Read only</div></div>
+            </div>
+            <div class="wrap-gap mb-16">
+              <span class="tag">Issues &amp; PRs</span>
+              <span class="tag">Checks</span>
+              <span class="tag">Selected repos</span>
+            </div>
+            <div class="conn-actions">
+              <button class="btn btn-sm">Review access</button>
+              <button class="btn btn-primary btn-sm">Reconnect</button>
+            </div>
+          </article>
+
+          <article class="conn">
+            <div class="hd">
+              <span class="icon" style="background:#10B3A5">@</span>
+              <div>
+                <h3>Agentic email</h3>
+                <div class="muted small">sherpa-dana@agents.example · Sherpa channel</div>
+              </div>
+              <span class="pill pill-success right">Active</span>
+            </div>
+            <div class="grid">
+              <div><div class="k">Last message</div><div class="v">Today, 9:18 AM</div></div>
+              <div><div class="k">Allowed senders</div><div class="v">Contacts only</div></div>
+              <div><div class="k">Purpose</div><div class="v">Commands &amp; alerts</div></div>
+              <div><div class="k">Content trust</div><div class="v">Restricted</div></div>
+            </div>
+            <div class="wrap-gap mb-16">
+              <span class="chip">Receive instructions</span>
+              <span class="chip">Send notifications</span>
+            </div>
+            <div class="conn-actions">
+              <button class="btn btn-sm">Manage address</button>
+              <button class="btn btn-primary btn-sm">Send test</button>
+            </div>
+          </article>
+
+          <article class="conn">
+            <div class="hd">
+              <span class="icon" style="background:#38BDF8">Q</span>
+              <div>
+                <h3>QQ</h3>
+                <div class="muted small">Direct messages · Sherpa channel</div>
+              </div>
+              <span class="pill pill-muted right">Not bound</span>
+            </div>
+            <div class="grid">
+              <div><div class="k">Delivery priority</div><div class="v">First when online</div></div>
+              <div><div class="k">Default workspace</div><div class="v">My workspace</div></div>
+              <div><div class="k">Approvals</div><div class="v">Supported</div></div>
+              <div><div class="k">Verification</div><div class="v">Required</div></div>
+            </div>
+            <div class="wrap-gap mb-16">
+              <span class="chip">Messages</span>
+              <span class="chip">Approvals</span>
+              <span class="chip">Notifications</span>
+            </div>
+            <div class="conn-actions">
+              <button class="btn btn-primary btn-sm">Start binding</button>
+            </div>
+          </article>
+        </section>
+
+        <section class="mt-24 mb-16">
+          <h2>Setup center</h2>
+          <p class="muted mt-0 mb-0">Each connection is optional. Start with the smallest useful scope.</p>
+        </section>
+
+        <section class="card" aria-label="Connector onboarding" style="display:grid;grid-template-columns:240px minmax(0,1fr);overflow:hidden;box-shadow:var(--shadow)">
+          <div class="stack" aria-label="Suggested setup" style="padding:18px;background:var(--bg-2);border-right:1px solid var(--border)">
+            <h3 class="small">Setup progress</h3>
+            <div class="muted small" style="margin-top:-6px">2 of 4 connected</div>
+            <div class="row"><span class="pill pill-success">✓</span><strong class="small">Gmail readonly</strong></div>
+            <div class="row"><span class="pill pill-success">✓</span><strong class="small">Agentic email</strong></div>
+            <div class="card pad row" style="padding:10px;box-shadow:var(--shadow-sm)"><span class="badge">3</span><strong class="small">Choose GitHub repos</strong></div>
+            <div class="row"><span class="badge">4</span><span class="muted small">Bind QQ &amp; finish</span></div>
+          </div>
+
+          <div class="card pad" style="border:0;border-radius:0;padding:22px 24px">
+            <h3>Finish setup</h3>
+            <p class="muted mt-0 mb-16">Two steps left. Each maps back to the same Sherpa identity, memory, and todos.</p>
+
+            <div class="grid-2">
+              <article class="conn">
+                <div class="hd">
+                  <span class="icon" style="background:#30363D">GH</span>
+                  <h4>Choose GitHub repositories</h4>
+                </div>
+                <p class="muted small">Grant read access only to repositories where you want issue and pull-request suggestions.</p>
+                <div class="conn-actions"><button class="btn btn-primary btn-sm">Choose repositories →</button></div>
+              </article>
+
+              <article class="conn">
+                <div class="hd">
+                  <span class="icon" style="background:#38BDF8">Q</span>
+                  <h4>Bind your QQ identity</h4>
+                </div>
+                <p class="muted small">Send this one-time code to @SherpaBot in a direct message. Never post it in a group.</p>
+                <div class="between mb-16" style="padding:10px 12px;border:1px dashed var(--accent);border-radius:var(--r-sm);background:var(--accent-tint)">
+                  <strong class="code" style="padding:0;background:transparent;color:var(--accent-strong);font-size:18px;letter-spacing:.16em">7K2-Q9P</strong>
+                  <span class="tag">expires in 08:42</span>
+                </div>
+                <div class="conn-actions"><button class="btn btn-primary btn-sm">I sent the code · Check now</button></div>
+              </article>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

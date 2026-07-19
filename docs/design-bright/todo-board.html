@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa · Todo board</title>
+  <link rel="stylesheet" href="base.css">
+  <style>
+    .progress { height: 6px; margin: 11px 0 9px; overflow: hidden; border-radius: 999px; background: var(--border); }
+    .progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--primary), var(--sky)); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="index.html">
+        <span class="logo">S</span>
+        <span class="name">Sherpa</span>
+      </a>
+
+      <div class="ws">
+        <div>
+          <div class="ws-name">Atlas product</div>
+          <div class="ws-sub">Team · You’re an admin</div>
+        </div>
+        <span class="muted">⌄</span>
+      </div>
+
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="dashboard.html"><span>⌂</span>Home</a>
+      <a class="nav-item" href="chat-session.html"><span>◌</span>Chat</a>
+      <a class="nav-item active" href="#"><span>✓</span>Todos</a>
+      <a class="nav-item" href="files.html"><span>□</span>Files</a>
+
+      <div class="nav-label">Automate</div>
+      <a class="nav-item" href="schedules.html"><span>◷</span>Schedules</a>
+      <a class="nav-item" href="connectors.html"><span>⌁</span>Connectors</a>
+
+      <div class="nav-label">Team</div>
+      <a class="nav-item" href="#"><span>♙</span>Members &amp; memory</a>
+
+      <div class="nav-spacer"></div>
+      <div class="nav-user">
+        <span class="avatar">DK</span>
+        <div>
+          <div class="small">Dana Kim</div>
+          <div class="faint small">Team workspace</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="wrap">
+        <header class="topbar">
+          <div>
+            <div class="crumbs"><span class="hamburger">☰ &nbsp;</span>Atlas product · Shared</div>
+            <h1 class="page-title">Todos</h1>
+            <p class="page-sub">Turn signals from your work into a plan your team can trust.</p>
+          </div>
+          <div class="row">
+            <button class="btn">List view</button>
+            <button class="btn btn-primary">＋ Add todo</button>
+          </div>
+        </header>
+
+        <section class="run-banner mb-16">
+          <span class="avatar">S</span>
+          <div>
+            <strong>3 new suggestions are ready to triage</strong>
+            <div class="muted small">Sherpa found actions in Gmail and GitHub. Nothing is assigned until your team accepts it.</div>
+          </div>
+          <button class="btn btn-ghost right">Review sources →</button>
+        </section>
+
+        <div class="between mb-16" aria-label="Board controls">
+          <div class="wrap-gap">
+            <button class="btn">⌕ &nbsp; Search todos</button>
+            <button class="btn">All assignees ⌄</button>
+            <button class="btn">All sources ⌄</button>
+            <button class="btn">Due this week</button>
+          </div>
+          <div class="row">
+            <button class="btn btn-sm">Board</button>
+            <button class="btn btn-sm btn-ghost">List</button>
+          </div>
+        </div>
+
+        <div class="board" aria-label="Todo kanban board">
+          <section class="col" aria-labelledby="inbox">
+            <div class="col-hd">
+              <h2 id="inbox">Inbox</h2>
+              <span class="count">4</span>
+              <button class="btn btn-sm btn-ghost right" aria-label="Inbox options">···</button>
+            </div>
+
+            <article class="tcard" style="border-left:3px solid var(--accent)">
+              <div class="tcard-top">
+                <span class="src src-gmail">Gmail</span>
+                <span class="tag tag-suggested">Suggested</span>
+              </div>
+              <h4>Confirm accessibility review for mobile checkout</h4>
+              <p class="desc">“Could your team confirm the review by Wednesday so we keep the release date?”</p>
+              <div class="meta">
+                <span class="tag prio-high">High</span>
+                <span class="small muted">Due Wed, Jul 22</span>
+              </div>
+              <div class="cand">
+                <div class="prov">From Maya Chen · Release readiness thread · 96% confidence</div>
+                <div class="cand-actions">
+                  <button class="btn btn-primary btn-sm">Accept</button>
+                  <button class="btn btn-sm">Edit</button>
+                  <button class="btn btn-ghost btn-sm">Dismiss</button>
+                </div>
+              </div>
+            </article>
+
+            <article class="tcard" style="border-left:3px solid var(--accent)">
+              <div class="tcard-top">
+                <span class="src src-github">GitHub</span>
+                <span class="tag tag-suggested">Suggested</span>
+              </div>
+              <h4>Review security feedback on PR #842</h4>
+              <p class="desc">Two unresolved threads mention token storage and log redaction.</p>
+              <div class="meta">
+                <span class="tag prio-high">High</span>
+                <span class="small muted">northstar/mobile</span>
+              </div>
+              <div class="cand">
+                <div class="prov">Detected in a requested-changes review · 94% confidence</div>
+                <div class="cand-actions">
+                  <button class="btn btn-primary btn-sm">Accept</button>
+                  <button class="btn btn-sm">Edit</button>
+                  <button class="btn btn-ghost btn-sm">Dismiss</button>
+                </div>
+              </div>
+            </article>
+
+            <article class="tcard">
+              <span class="src src-manual">Manual</span>
+              <h4>Collect August planning topics</h4>
+              <div class="tcard-foot">
+                <span class="small muted">Created by Dana</span>
+                <span class="avatar">DK</span>
+              </div>
+            </article>
+
+            <div class="add-row">＋ Add to Inbox</div>
+          </section>
+
+          <section class="col" aria-labelledby="next">
+            <div class="col-hd">
+              <h2 id="next">Next</h2>
+              <span class="count">3</span>
+              <button class="btn btn-sm btn-ghost right" aria-label="Next options">···</button>
+            </div>
+
+            <article class="tcard">
+              <span class="src src-sherpa">Sherpa</span>
+              <h4>Prepare Thursday’s release readiness brief</h4>
+              <p class="desc">Summarize milestone, CI, open blockers, and owners.</p>
+              <div class="tcard-foot">
+                <div class="wrap-gap">
+                  <span class="tag prio-med">Medium</span>
+                  <span class="small muted">Due tomorrow</span>
+                </div>
+                <span class="avatar">DK</span>
+              </div>
+            </article>
+
+            <article class="tcard">
+              <span class="src src-github">GitHub</span>
+              <h4>Merge dependency update PR #839</h4>
+              <p class="desc">All reviews approved; waiting for final iOS test.</p>
+              <div class="tcard-foot">
+                <span class="pill pill-warn">Waiting on CI</span>
+                <span class="avatar">JL</span>
+              </div>
+            </article>
+
+            <article class="tcard">
+              <span class="src src-gmail">Gmail</span>
+              <h4>Send Q3 vendor forecast to Finance</h4>
+              <div class="tcard-foot">
+                <span class="small muted">Due Fri, Jul 24</span>
+                <span class="avatar">RP</span>
+              </div>
+            </article>
+
+            <div class="add-row">＋ Add to Next</div>
+          </section>
+
+          <section class="col" aria-labelledby="progress">
+            <div class="col-hd">
+              <h2 id="progress">In progress</h2>
+              <span class="count">2</span>
+              <button class="btn btn-sm btn-ghost right" aria-label="In progress options">···</button>
+            </div>
+
+            <article class="tcard">
+              <span class="src src-manual">Manual</span>
+              <h4>Resolve iOS signing workflow failure</h4>
+              <p class="desc">Rotate the expired distribution profile and rerun release CI.</p>
+              <div class="progress"><span style="width:58%"></span></div>
+              <div class="tcard-foot">
+                <span class="tag prio-high">Release blocker</span>
+                <span class="avatar">AM</span>
+              </div>
+            </article>
+
+            <article class="tcard">
+              <span class="src src-sherpa">Sherpa</span>
+              <h4>Draft help center notes for 4.8</h4>
+              <p class="desc">First draft saved in Team files.</p>
+              <div class="progress"><span style="width:78%"></span></div>
+              <div class="tcard-foot">
+                <span class="small muted">Updated 16 min ago</span>
+                <span class="avatar">DK</span>
+              </div>
+            </article>
+
+            <div class="add-row">＋ Add in-progress task</div>
+          </section>
+
+          <section class="col" aria-labelledby="waiting">
+            <div class="col-hd">
+              <h2 id="waiting">Waiting</h2>
+              <span class="count">2</span>
+              <button class="btn btn-sm btn-ghost right" aria-label="Waiting options">···</button>
+            </div>
+
+            <article class="tcard">
+              <span class="src src-gmail">Gmail</span>
+              <h4>Legal approval for updated privacy copy</h4>
+              <p class="desc">Follow-up is scheduled for tomorrow at 9:00 AM.</p>
+              <div class="tcard-foot">
+                <span class="pill pill-warn">Waiting on Legal</span>
+                <span class="avatar">RP</span>
+              </div>
+            </article>
+
+            <article class="tcard">
+              <span class="src src-github">GitHub</span>
+              <h4>Confirm analytics event names</h4>
+              <p class="desc">Question left on issue #1124 for the Data team.</p>
+              <div class="wrap-gap">
+                <span class="pill pill-warn">External dependency</span>
+                <span class="small muted">2 days</span>
+              </div>
+            </article>
+
+            <div class="add-row">＋ Add waiting task</div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

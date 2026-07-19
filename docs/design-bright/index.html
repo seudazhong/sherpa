@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sherpa · Daybreak (bright) design gallery</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .page { max-width: 1180px; margin: 0 auto; padding: 24px 32px 72px; }
+  .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .mini-hero { height: 40px; background: var(--hero); }
+  .mini-lines { padding: 12px; display:flex; flex-direction:column; gap:8px; flex:1; }
+  .mini-lines i { display:block; height: 10px; border-radius: 6px; background: var(--bg-2); }
+  .mini-lines i.a { width: 60%; background: var(--primary-tint); }
+  .mini-lines i.b { width: 85%; }
+  .mini-lines i.c { width: 40%; background: var(--accent-tint); }
+  @media (max-width: 900px){ .gallery{ grid-template-columns:1fr; } .page{ padding:18px; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="brand" style="padding-left:0">
+      <div class="logo">S</div><div class="name">Sherpa</div>
+    </div>
+    <div class="eyebrow">Product design · Daybreak (v2 · bright)</div>
+    <h1>A brighter way to<br>carry complex work.</h1>
+    <p>An alternative, high-key visual direction for Sherpa: a light sidebar, pastel daybreak gradients, and vibrant teal + sunny amber. Same product, sunnier mood. These offline mockups are meant to be compared against the deeper <b>v1 “Alpine warmth”</b> set.</p>
+    <div class="wrap-gap mt-24">
+      <a class="btn btn-primary" href="dashboard.html">Open dashboard</a>
+      <a class="btn" href="../design/index.html">↔ Compare with v1</a>
+    </div>
+  </div>
+
+  <!-- Gallery -->
+  <div class="between mt-24 mb-16">
+    <div>
+      <div class="section-eyebrow">Screen gallery</div>
+      <h2 style="font-size:24px">Core product views</h2>
+    </div>
+    <div class="muted small" style="max-width:360px;text-align:right">Each screen links the shared <code>base.css</code>. Open any file directly — offline, no external assets.</div>
+  </div>
+
+  <div class="gallery">
+    <a class="thumb" href="dashboard.html" style="text-decoration:none;color:inherit">
+      <div class="frame"><div class="mini-side"></div><div class="mini-lines"><i class="a"></i><i class="b"></i><i></i><i class="c"></i></div></div>
+      <div class="cap"><b>Home / overview</b><div class="muted small mt-8">Current runs, proactive updates, schedules, and recent outcomes — workspace context always visible.</div><div class="mt-8" style="color:var(--primary-strong);font-weight:700">Open dashboard →</div></div>
+    </a>
+    <a class="thumb" href="chat-session.html" style="text-decoration:none;color:inherit">
+      <div class="frame"><div class="mini-side"></div><div class="mini-lines"><i class="b"></i><i class="a"></i><i class="b"></i><i></i></div></div>
+      <div class="cap"><b>Streaming chat</b><div class="muted small mt-8">Run-oriented conversation, live tool cards, spilled output, steering, and an inline approval request.</div><div class="mt-8" style="color:var(--primary-strong);font-weight:700">Open chat →</div></div>
+    </a>
+    <a class="thumb" href="todo-board.html" style="text-decoration:none;color:inherit">
+      <div class="frame"><div class="mini-side"></div><div class="mini-lines"><i class="c"></i><i class="b"></i><i class="a"></i><i></i></div></div>
+      <div class="cap"><b>Todo board</b><div class="muted small mt-8">Connector-generated suggestions, source provenance, priority, and due dates — candidate-first.</div><div class="mt-8" style="color:var(--primary-strong);font-weight:700">Open board →</div></div>
+    </a>
+    <a class="thumb" href="connectors.html" style="text-decoration:none;color:inherit">
+      <div class="frame"><div class="mini-side"></div><div class="mini-lines"><i class="a"></i><i class="b"></i><i></i><i class="c"></i></div></div>
+      <div class="cap"><b>Connectors &amp; channels</b><div class="muted small mt-8">Account access, sync health, minimum scopes, agentic email, and QQ verification.</div><div class="mt-8" style="color:var(--primary-strong);font-weight:700">Open connectors →</div></div>
+    </a>
+    <a class="thumb" href="files.html" style="text-decoration:none;color:inherit">
+      <div class="frame"><div class="mini-side"></div><div class="mini-lines"><i class="b"></i><i></i><i class="b"></i><i class="c"></i></div></div>
+      <div class="cap"><b>Files</b><div class="muted small mt-8">Personal storage — upload &amp; sync, encrypted at rest, never in the sandbox unless you run code.</div><div class="mt-8" style="color:var(--primary-strong);font-weight:700">Open files →</div></div>
+    </a>
+    <a class="thumb" href="schedules.html" style="text-decoration:none;color:inherit">
+      <div class="frame"><div class="mini-side"></div><div class="mini-lines"><i class="a"></i><i class="b"></i><i class="b"></i><i class="c"></i></div></div>
+      <div class="cap"><b>Schedules</b><div class="muted small mt-8">Recurring runs with next-run, outcomes, and honest missed/failed states — nothing fails silently.</div><div class="mt-8" style="color:var(--primary-strong);font-weight:700">Open schedules →</div></div>
+    </a>
+    <a class="thumb" href="settings.html" style="text-decoration:none;color:inherit">
+      <div class="frame"><div class="mini-side"></div><div class="mini-lines"><i class="b"></i><i class="a"></i><i></i><i class="b"></i></div></div>
+      <div class="cap"><b>Settings</b><div class="muted small mt-8">Notification routing &amp; quiet hours, autonomy level, persona, model, and data controls.</div><div class="mt-8" style="color:var(--primary-strong);font-weight:700">Open settings →</div></div>
+    </a>
+  </div>
+
+  <!-- Foundation -->
+  <div class="mt-24 mb-16">
+    <div class="section-eyebrow">Foundation</div>
+    <h2 style="font-size:24px">Daybreak palette</h2>
+    <div class="muted small">Sunlit whites, bright teal, and sunny amber communicate optimism and momentum while staying calm and trustworthy.</div>
+  </div>
+  <div class="swatches">
+    <div class="sw"><div class="chip-color" style="background:var(--bg)"></div><div class="meta"><b>Daylight</b><code>#F2FAFB</code></div></div>
+    <div class="sw"><div class="chip-color" style="background:var(--primary)"></div><div class="meta"><b>Teal</b><code>#10B3A5</code></div></div>
+    <div class="sw"><div class="chip-color" style="background:var(--accent)"></div><div class="meta"><b>Sunrise</b><code>#FF9F45</code></div></div>
+    <div class="sw"><div class="chip-color" style="background:var(--sky)"></div><div class="meta"><b>Sky</b><code>#38BDF8</code></div></div>
+    <div class="sw"><div class="chip-color" style="background:var(--success)"></div><div class="meta"><b>Success</b><code>#1FB866</code></div></div>
+    <div class="sw"><div class="chip-color" style="background:var(--danger)"></div><div class="meta"><b>Danger</b><code>#F14D68</code></div></div>
+  </div>
+
+  <div class="grid-2 mt-24">
+    <!-- Type scale -->
+    <div class="card pad">
+      <div class="section-eyebrow mb-8">Type scale</div>
+      <div class="type-row"><span class="px">40px</span><span style="font-size:34px;font-weight:800">Display</span></div>
+      <div class="type-row"><span class="px">30px</span><span style="font-size:26px;font-weight:700">Page title</span></div>
+      <div class="type-row"><span class="px">24px</span><span style="font-size:20px;font-weight:700">Section title</span></div>
+      <div class="type-row"><span class="px">15px</span><span>Readable body copy</span></div>
+      <div class="type-row" style="border-bottom:none"><span class="px">12px</span><span class="muted small">METADATA · 10:42 AM</span></div>
+    </div>
+    <!-- Components -->
+    <div class="card pad">
+      <div class="section-eyebrow mb-8">Components</div>
+      <div class="wrap-gap mb-16">
+        <button class="btn btn-primary">Continue</button>
+        <button class="btn">Review</button>
+        <button class="btn btn-accent">Approve</button>
+        <button class="btn btn-danger">Stop</button>
+      </div>
+      <div class="wrap-gap mb-16">
+        <span class="pill pill-live">Live</span>
+        <span class="pill pill-success">Settled</span>
+        <span class="pill pill-warn">Needs you</span>
+        <span class="src src-gmail">Gmail</span>
+        <span class="src src-github">GitHub</span>
+        <span class="src src-sherpa">Sherpa</span>
+      </div>
+      <div class="tool-card">
+        <b>Repository scan complete</b>
+        <div class="muted small mt-8">42 files checked · No secrets detected</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Approval sample -->
+  <div class="mt-24">
+    <div class="approval" style="max-width:560px">
+      <div class="hd"><div><span class="badge" style="background:var(--accent-tint);color:var(--accent-strong)">◇ Approval needed</span><div style="font-weight:800;margin-top:6px">Send weekly brief to 4 teammates</div></div><span class="pill pill-warn">Expires 9 min</span></div>
+      <div class="actions"><button class="btn btn-primary">Allow once</button><button class="btn">This session</button><button class="btn btn-danger" style="margin-left:auto">Reject</button></div>
+    </div>
+  </div>
+
+  <div class="divider mt-24">Static design exploration · Sherpa Daybreak (v2) · July 2026</div>
+</div>
+</body>
+</html>

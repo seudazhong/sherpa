@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa · Schedules</title>
+  <link rel="stylesheet" href="base.css">
+  <style>
+    .schedule-head, .schedule-row { display:grid; grid-template-columns:minmax(250px,1.35fr) minmax(220px,1fr) 120px minmax(190px,.9fr) 72px 38px; }
+    .schedule-row { gap:14px; align-items:center; }
+    .schedule-row .lead { min-width:0; }
+    .schedule-cell { min-width:0; }
+    .schedule-action { justify-self:end; padding-inline:10px; }
+    .history-row { display:grid; grid-template-columns:minmax(240px,1fr) 180px auto; align-items:center; }
+    @media (max-width: 1050px) {
+      .schedule-head { display:none; }
+      .schedule-row { grid-template-columns:minmax(230px,1fr) auto auto; }
+      .schedule-row .schedule-cadence { grid-column:1; padding-left:48px; }
+      .schedule-row .schedule-next { grid-column:2; grid-row:1; }
+      .schedule-row .schedule-outcome { grid-column:2; }
+      .schedule-row .schedule-enabled { grid-column:3; grid-row:1; }
+      .schedule-row .schedule-action { grid-column:3; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="index.html">
+        <span class="logo">S</span>
+        <span class="name">Sherpa</span>
+      </a>
+
+      <div class="ws">
+        <div>
+          <div class="ws-name">My workspace</div>
+          <div class="ws-sub">Personal · Only you</div>
+        </div>
+        <span aria-hidden="true">⌄</span>
+      </div>
+
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="dashboard.html"><span aria-hidden="true">⌂</span> Home</a>
+      <a class="nav-item" href="chat-session.html"><span aria-hidden="true">◌</span> Chat</a>
+      <a class="nav-item" href="todo-board.html"><span aria-hidden="true">✓</span> Todos</a>
+      <a class="nav-item" href="files.html"><span aria-hidden="true">□</span> Files</a>
+
+      <div class="nav-label">Automate</div>
+      <a class="nav-item active" href="schedules.html"><span aria-hidden="true">◷</span> Schedules</a>
+      <a class="nav-item" href="connectors.html"><span aria-hidden="true">⌁</span> Connectors</a>
+
+      <div class="nav-label">Account</div>
+      <a class="nav-item" href="settings.html"><span aria-hidden="true">⚙</span> Settings</a>
+
+      <div class="nav-spacer"></div>
+      <div class="nav-user">
+        <span class="avatar">DK</span>
+        <div>
+          <div class="small"><strong>Dana Kim</strong></div>
+          <div class="faint small">Personal</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="wrap">
+        <header class="topbar">
+          <div>
+            <div class="crumbs"><span class="hamburger">☰ &nbsp;</span>Automate</div>
+            <h1 class="page-title">Schedules</h1>
+            <p class="page-sub">Recurring work Sherpa runs for you. Every run is recorded — nothing fails silently.</p>
+          </div>
+          <button class="btn btn-primary">＋ New schedule</button>
+        </header>
+
+        <section class="stats mb-16" aria-label="Schedule summary">
+          <div class="stat">
+            <div class="n">5</div>
+            <div class="l">active schedules</div>
+          </div>
+          <div class="stat">
+            <div class="n">in 15h</div>
+            <div class="l">Next run</div>
+          </div>
+          <div class="stat">
+            <div class="n">18 runs</div>
+            <div class="l">Last 7 days · 0 missed</div>
+          </div>
+        </section>
+
+        <section class="card mt-24" aria-label="Schedules">
+          <div class="thead schedule-head">
+            <span>Schedule</span>
+            <span>Cadence</span>
+            <span>Next run</span>
+            <span>Last outcome</span>
+            <span>Enabled</span>
+            <span></span>
+          </div>
+          <div class="list">
+            <article class="list-row schedule-row">
+              <div class="lead">
+                <span class="ico" aria-hidden="true">◷</span>
+                <div>
+                  <div class="title">Morning inbox triage</div>
+                  <div class="muted small">Weekdays at 9:00 AM</div>
+                </div>
+              </div>
+              <div class="schedule-cell schedule-cadence">
+                <strong class="small">Every weekday · 9:00 AM</strong>
+                <div class="muted small">Asia/Shanghai</div>
+              </div>
+              <div class="schedule-cell schedule-next"><span class="chip">in 15h</span></div>
+              <div class="schedule-cell schedule-outcome"><span class="pill pill-success">Settled 9:06 AM</span></div>
+              <div class="schedule-cell schedule-enabled"><span class="switch on" role="switch" aria-checked="true" aria-label="Morning inbox triage enabled"></span></div>
+              <button class="btn btn-ghost btn-sm schedule-action" aria-label="More actions for Morning inbox triage">···</button>
+            </article>
+
+            <article class="list-row schedule-row">
+              <div class="lead">
+                <span class="ico" aria-hidden="true">◷</span>
+                <div>
+                  <div class="title">GitHub release risk scan</div>
+                  <div class="muted small">Tuesdays at 8:30 AM</div>
+                </div>
+              </div>
+              <div class="schedule-cell schedule-cadence">
+                <strong class="small">Every Tuesday · 8:30 AM</strong>
+                <div class="muted small">4 repositories</div>
+              </div>
+              <div class="schedule-cell schedule-next"><span class="chip">in 2 days</span></div>
+              <div class="schedule-cell schedule-outcome"><span class="pill pill-success">Delivered</span></div>
+              <div class="schedule-cell schedule-enabled"><span class="switch on" role="switch" aria-checked="true" aria-label="GitHub release risk scan enabled"></span></div>
+              <button class="btn btn-ghost btn-sm schedule-action" aria-label="More actions for GitHub release risk scan">···</button>
+            </article>
+
+            <article class="list-row schedule-row">
+              <div class="lead">
+                <span class="ico" aria-hidden="true">◷</span>
+                <div>
+                  <div class="title">Friday weekly review</div>
+                  <div class="muted small">Fridays at 4:00 PM</div>
+                </div>
+              </div>
+              <div class="schedule-cell schedule-cadence">
+                <strong class="small"><code>0 16 * * 5</code></strong>
+                <div class="muted small">Notify QQ, then email</div>
+              </div>
+              <div class="schedule-cell schedule-next"><span class="chip">Fri 4:00 PM</span></div>
+              <div class="schedule-cell schedule-outcome"><span class="pill pill-muted">Not yet run</span></div>
+              <div class="schedule-cell schedule-enabled"><span class="switch on" role="switch" aria-checked="true" aria-label="Friday weekly review enabled"></span></div>
+              <button class="btn btn-ghost btn-sm schedule-action" aria-label="More actions for Friday weekly review">···</button>
+            </article>
+
+            <article class="list-row schedule-row">
+              <div class="lead">
+                <span class="ico" aria-hidden="true">◷</span>
+                <div>
+                  <div class="title">Sunday backup check</div>
+                  <div class="muted small">Sundays at 2:00 AM</div>
+                </div>
+              </div>
+              <div class="schedule-cell schedule-cadence">
+                <strong class="small">Every Sunday · 2:00 AM</strong>
+                <div class="muted small">Storage and recovery check</div>
+              </div>
+              <div class="schedule-cell schedule-next"><span class="chip">in 4 days</span></div>
+              <div class="schedule-cell schedule-outcome">
+                <span class="pill pill-warn">One run had no result</span>
+                <a class="small" href="#">view</a>
+              </div>
+              <div class="schedule-cell schedule-enabled"><span class="switch on" role="switch" aria-checked="true" aria-label="Sunday backup check enabled"></span></div>
+              <button class="btn btn-ghost btn-sm schedule-action" aria-label="More actions for Sunday backup check">···</button>
+            </article>
+
+            <article class="list-row schedule-row">
+              <div class="lead">
+                <span class="ico" aria-hidden="true">◷</span>
+                <div>
+                  <div class="title">Monthly usage digest</div>
+                  <div class="muted small">1st of each month</div>
+                </div>
+              </div>
+              <div class="schedule-cell schedule-cadence">
+                <strong class="small"><code>0 9 1 * *</code></strong>
+                <div class="muted small">1st of month · 9:00 AM</div>
+              </div>
+              <div class="schedule-cell schedule-next"><span class="chip">Aug 1</span></div>
+              <div class="schedule-cell schedule-outcome"><span class="pill pill-success">Delivered</span></div>
+              <div class="schedule-cell schedule-enabled"><span class="switch" role="switch" aria-checked="false" aria-label="Monthly usage digest disabled"></span></div>
+              <button class="btn btn-ghost btn-sm schedule-action" aria-label="More actions for Monthly usage digest">···</button>
+            </article>
+          </div>
+        </section>
+
+        <section class="card pad mt-24" aria-labelledby="run-history-title">
+          <div class="card-hd">
+            <div>
+              <h3 id="run-history-title">Run history</h3>
+              <div class="muted small">Recent scheduled firings</div>
+            </div>
+            <a class="small" href="#"><strong>View all runs →</strong></a>
+          </div>
+          <div class="list">
+            <div class="list-row history-row">
+              <div>
+                <div class="title">Morning inbox triage</div>
+                <div class="muted small">18 messages reviewed · 3 todos suggested</div>
+              </div>
+              <div class="muted small">Today · 9:00 AM</div>
+              <span class="pill pill-success">Settled</span>
+            </div>
+            <div class="list-row history-row">
+              <div>
+                <div class="title">GitHub release risk scan</div>
+                <div class="muted small">4 repositories checked</div>
+              </div>
+              <div class="muted small">Tuesday · 8:30 AM</div>
+              <span class="pill pill-success">Delivered</span>
+            </div>
+            <div class="list-row history-row">
+              <div>
+                <div class="title">Sunday backup check</div>
+                <div class="muted small">No response before the timeout</div>
+              </div>
+              <div class="muted small">Sunday · 2:00 AM</div>
+              <span class="pill pill-warn">Missed · reran manually</span>
+            </div>
+            <div class="list-row history-row">
+              <div>
+                <div class="title">Friday weekly review</div>
+                <div class="muted small">Summary sent to QQ and email</div>
+              </div>
+              <div class="muted small">Friday · 4:00 PM</div>
+              <span class="pill pill-success">Delivered</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

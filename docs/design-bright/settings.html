@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa · Settings</title>
+  <link rel="stylesheet" href="base.css">
+  <style>
+    .settings-content { min-width: 0; }
+    .settings-content .card + .card { margin-top: 16px; }
+    .settings-content .card-hd { padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+    .setting-control { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+    .compact-select { width: auto; min-width: 112px; }
+    .check-chip { cursor: pointer; }
+    .check-chip.on { background: var(--primary-tint); border-color: #BEEBE4; color: var(--primary-strong); }
+    .page-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+    @media (max-width: 700px) {
+      .set-row { align-items: flex-start; flex-direction: column; }
+      .setting-control { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="index.html">
+        <span class="logo">S</span>
+        <span class="name">Sherpa</span>
+      </a>
+
+      <div class="ws">
+        <div>
+          <div class="ws-name">My workspace</div>
+          <div class="ws-sub">Personal · Only you</div>
+        </div>
+        <span aria-hidden="true">⌄</span>
+      </div>
+
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="dashboard.html"><span aria-hidden="true">⌂</span> Home</a>
+      <a class="nav-item" href="chat-session.html"><span aria-hidden="true">◌</span> Chat</a>
+      <a class="nav-item" href="todo-board.html"><span aria-hidden="true">✓</span> Todos</a>
+      <a class="nav-item" href="files.html"><span aria-hidden="true">□</span> Files</a>
+
+      <div class="nav-label">Automate</div>
+      <a class="nav-item" href="schedules.html"><span aria-hidden="true">◷</span> Schedules</a>
+      <a class="nav-item" href="connectors.html"><span aria-hidden="true">⌁</span> Connectors</a>
+
+      <div class="nav-label">Account</div>
+      <a class="nav-item active" href="settings.html"><span aria-hidden="true">⚙</span> Settings</a>
+
+      <div class="nav-spacer"></div>
+      <div class="nav-user">
+        <span class="avatar">DK</span>
+        <div>
+          <div class="small"><strong>Dana Kim</strong></div>
+          <div class="faint small">Personal</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="wrap">
+        <header class="topbar">
+          <div>
+            <div class="crumbs"><span class="hamburger">☰ &nbsp;</span>Account</div>
+            <h1 class="page-title">Settings</h1>
+            <p class="page-sub">Control how Sherpa communicates, acts, and remembers.</p>
+          </div>
+        </header>
+
+        <div class="settings-grid">
+          <nav class="subnav" aria-label="Settings sections">
+            <a class="on" href="#">Notifications</a>
+            <a href="#">Autonomy</a>
+            <a href="#">Persona</a>
+            <a href="#">Model</a>
+            <a href="#">Connections</a>
+            <a href="#">Data &amp; privacy</a>
+            <a href="#">Account</a>
+          </nav>
+
+          <div class="settings-content">
+            <section class="card pad" aria-labelledby="notifications-title">
+              <div class="card-hd">
+                <div>
+                  <h3 id="notifications-title">Notifications</h3>
+                  <div class="muted small">Choose when and where Sherpa should reach you.</div>
+                </div>
+              </div>
+
+              <div class="set-row">
+                <div class="set-txt">
+                  <b>Proactive notifications</b>
+                  <span>Let Sherpa message you when something needs attention</span>
+                </div>
+                <div class="switch on" role="switch" aria-checked="true" aria-label="Proactive notifications"></div>
+              </div>
+
+              <div class="set-row">
+                <div class="set-txt">
+                  <b>Channel priority</b>
+                  <span>Where high-priority updates go first</span>
+                </div>
+                <div class="setting-control" aria-label="Channel priority">
+                  <span class="chip">1 · QQ online</span>
+                  <span class="faint" aria-hidden="true">→</span>
+                  <span class="chip">2 · Agentic email</span>
+                  <button class="btn btn-sm" type="button">Edit</button>
+                </div>
+              </div>
+
+              <div class="set-row">
+                <div class="set-txt">
+                  <b>Daily digest</b>
+                  <span>One summary each morning</span>
+                </div>
+                <select class="select compact-select" aria-label="Daily digest time">
+                  <option selected>8:00 AM</option>
+                </select>
+              </div>
+
+              <div class="set-row">
+                <div class="set-txt">
+                  <b>Quiet hours</b>
+                  <span>No notifications during this window</span>
+                </div>
+                <div class="setting-control">
+                  <select class="select compact-select" aria-label="Quiet hours start">
+                    <option selected>10:00 PM</option>
+                  </select>
+                  <span class="muted small">to</span>
+                  <select class="select compact-select" aria-label="Quiet hours end">
+                    <option selected>8:00 AM</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="set-row">
+                <div class="set-txt">
+                  <b>Daily cap</b>
+                  <span>Max proactive messages per day</span>
+                </div>
+                <select class="select compact-select" aria-label="Daily notification cap">
+                  <option selected>6</option>
+                </select>
+              </div>
+
+              <div class="set-row">
+                <div class="set-txt">
+                  <b>Notify on</b>
+                  <span>Events that can trigger a proactive message</span>
+                </div>
+                <div class="setting-control" aria-label="Notification events">
+                  <button class="chip check-chip on" type="button" aria-pressed="true">✓ New candidates</button>
+                  <button class="chip check-chip on" type="button" aria-pressed="true">✓ Reminders due</button>
+                  <button class="chip check-chip on" type="button" aria-pressed="true">✓ Run failures</button>
+                  <button class="chip check-chip" type="button" aria-pressed="false">Weekly review</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="card pad" aria-labelledby="autonomy-title">
+              <div class="card-hd">
+                <div>
+                  <h3 id="autonomy-title">Autonomy</h3>
+                  <div class="muted small">Set how far Sherpa can go before asking you.</div>
+                </div>
+              </div>
+
+              <div class="field">
+                <label>Default working mode</label>
+                <div class="seg" role="group" aria-label="Default autonomy mode">
+                  <button type="button">Observe</button>
+                  <button type="button">Suggest</button>
+                  <button class="on" type="button" aria-pressed="true">Candidate-first</button>
+                  <button type="button">Auto-file</button>
+                </div>
+              </div>
+
+              <div class="set-row">
+                <div class="set-txt">
+                  <b>Ask before acting on my behalf</b>
+                  <span>External actions (send email, post) always require approval.</span>
+                </div>
+                <div class="switch on" role="switch" aria-checked="true" aria-label="Ask before acting on my behalf"></div>
+              </div>
+            </section>
+
+            <div class="page-actions">
+              <button class="btn btn-primary" type="button">Save changes</button>
+              <button class="btn" type="button">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

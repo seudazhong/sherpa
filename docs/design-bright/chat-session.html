@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa · Streaming chat</title>
+  <link rel="stylesheet" href="base.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="index.html">
+        <span class="logo">S</span>
+        <span class="name">Sherpa</span>
+      </a>
+
+      <div class="ws">
+        <div>
+          <div class="ws-name">My workspace</div>
+          <div class="ws-sub">Personal · Only you</div>
+        </div>
+        <span class="muted">⌄</span>
+      </div>
+
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="dashboard.html"><span>⌂</span>Home</a>
+      <a class="nav-item active" href="#"><span>◌</span>Chat</a>
+      <a class="nav-item" href="todo-board.html"><span>✓</span>Todos</a>
+      <a class="nav-item" href="files.html"><span>□</span>Files</a>
+
+      <div class="nav-label">Automate</div>
+      <a class="nav-item" href="schedules.html"><span>◷</span>Schedules</a>
+      <a class="nav-item" href="connectors.html"><span>⌁</span>Connectors</a>
+
+      <div class="nav-label">Recent conversations</div>
+      <a class="nav-item active" href="#">
+        <span>●</span>
+        <span><strong>Launch readiness</strong><br><span class="small muted">Web · running now</span></span>
+      </a>
+      <a class="nav-item" href="#">
+        <span>◌</span>
+        <span><strong>Quarterly planning</strong><br><span class="small muted">QQ direct · yesterday</span></span>
+      </a>
+      <a class="nav-item" href="#">
+        <span>◌</span>
+        <span><strong>Inbox triage</strong><br><span class="small muted">Scheduled · Friday</span></span>
+      </a>
+
+      <div class="nav-spacer"></div>
+      <div class="nav-user">
+        <span class="avatar">DK</span>
+        <div><strong>Dana Kim</strong><br><span class="small muted">Settings</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="wrap">
+        <header class="topbar">
+          <div class="row">
+            <button class="btn btn-ghost hamburger" aria-label="Open navigation">☰</button>
+            <div>
+              <h2>Prepare the launch readiness brief</h2>
+              <p class="page-sub small">My workspace · <span class="chip">Web chat</span> · Automatic model</p>
+            </div>
+          </div>
+          <div class="wrap-gap">
+            <button class="btn">Activity</button>
+            <button class="btn btn-danger">Stop after step</button>
+          </div>
+        </header>
+
+        <div class="thread">
+        <section class="run-banner" role="status" aria-live="polite">
+          <span class="spin" aria-hidden="true"></span>
+          <div>
+            <strong>Using tools · checking the open pull requests</strong>
+            <div class="sub small muted">Step 3 of up to 50 · You can leave; Sherpa will notify you</div>
+          </div>
+          <div class="right">
+            <span class="pill pill-live">LIVE · 2m 14s</span>
+            <div class="small muted mt-8">last update just now</div>
+          </div>
+        </section>
+
+        <div class="divider">TODAY · RUN STARTED AT 10:40 AM</div>
+
+        <article class="msg me">
+          <div class="who" aria-hidden="true">DK</div>
+          <div class="bubble-user">
+            <div class="lbl small muted mb-8"><strong>You · Web</strong></div>
+            Prepare a short launch readiness brief from the GitHub project and email it to Maya. Flag anything that could block Thursday’s release.
+          </div>
+        </article>
+
+        <article class="msg">
+          <div class="who" aria-hidden="true">S</div>
+          <div class="bubble-agent">
+            <div class="small muted mb-8"><strong>Sherpa · 10:40 AM</strong></div>
+            <p class="mb-0">I’ll review the release milestone, recent CI results, and open high-priority pull requests. I’ll draft the brief here before asking to send it.</p>
+          </div>
+        </article>
+
+        <div class="run-log" aria-label="Run activity">
+          <div class="rl-head">Run activity</div>
+          <div class="small"><strong>Reasoning</strong><span class="muted"> · Comparing milestone status with CI and unresolved review threads. Raw internal reasoning is hidden.</span></div>
+
+          <article class="tool-card" aria-label="Completed tool call">
+            <div class="between">
+              <div class="row">
+                <span class="pill pill-success">✓ Success</span>
+                <div>
+                  <strong>Read release milestone</strong>
+                  <div class="small muted">GitHub · northstar/mobile · completed in 1.8s</div>
+                </div>
+              </div>
+            </div>
+            <pre class="code mt-8">Milestone: Mobile 4.8 — due Thu, Jul 23
+27/31 issues closed · 2 release blockers open
+CI: main passing · iOS release workflow failed once</pre>
+            <div class="between mt-8 small">
+              <span class="muted">Output shortened · 2,486 lines · head and tail shown</span>
+              <a href="#"><strong>Open spilled file →</strong></a>
+            </div>
+          </article>
+
+          <article class="tool-card" aria-label="Running tool call">
+            <div class="between">
+              <div class="row">
+                <span class="pill pill-live">Running</span>
+                <div>
+                  <strong>Inspect 6 open pull requests</strong>
+                  <div class="wrap-gap mt-8">
+                    <span class="small muted">GitHub search</span>
+                    <span class="tag">read-only</span>
+                    <span class="small muted">started 18s ago</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <details class="mt-8">
+              <summary class="small"><strong>View request details</strong></summary>
+              <pre class="code mt-8">repository: northstar/mobile
+filters: is:pr is:open label:release-4.8
+fields: checks, reviews, merge_state, updated_at</pre>
+            </details>
+          </article>
+        </div>
+
+        <div class="divider">Turn 1 complete · Sherpa is continuing</div>
+
+        <article class="msg">
+          <div class="who" aria-hidden="true">S</div>
+          <div class="bubble-agent">
+            <div class="small muted mb-8"><strong>Sherpa · draft updated just now</strong></div>
+            <p><strong>Thursday release readiness</strong></p>
+            <p>The 4.8 milestone is 87% complete. Main is green, but two items could block release: the iOS signing workflow failed on its latest release run, and PR #842 still needs Security approval. PR #839 is mergeable once its final test completes.</p>
+            <p class="mb-0">I’ve prepared a concise email for Maya. Sending it is an external action, so I need your approval.</p>
+          </div>
+        </article>
+
+        <section class="approval mt-16" aria-labelledby="approval-title">
+          <div class="hd">
+            <div class="row">
+              <span class="diamond" aria-hidden="true">◇</span>
+              <div>
+                <h3 id="approval-title">Approval needed · Send external email</h3>
+                <div class="small muted">Sherpa is paused before acting on your behalf</div>
+              </div>
+            </div>
+            <span class="pill pill-warn">Expires in 9 min</span>
+          </div>
+          <div class="body">
+            <div class="row"><span class="k">Workspace</span><strong>My workspace · Personal</strong></div>
+            <div class="row"><span class="k">Recipient</span><strong>Maya Chen &lt;maya@northstar.example&gt;</strong></div>
+            <div class="row"><span class="k">Requested by</span><strong>You, in “Prepare the launch readiness brief”</strong></div>
+            <div class="row"><span class="k">Why</span><strong>Deliver the release brief you requested</strong></div>
+            <div class="preview">
+              <strong>Subject: Thursday release readiness — 2 blockers</strong>
+              <p class="mb-0 mt-8">Hi Maya — The 4.8 milestone is 87% complete. Two items need attention before Thursday: the iOS signing workflow and Security approval on PR #842…</p>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary">Allow once</button>
+            <button class="btn">Allow this session</button>
+            <button class="btn">Always allow…</button>
+            <button class="btn btn-danger">Reject</button>
+            <div class="small muted">Request PERM-7K2Q · You can also approve from QQ · First valid response wins</div>
+          </div>
+        </section>
+
+        <section class="card pad mt-24" aria-label="Steer the current run">
+          <div class="between">
+            <div>
+              <strong>Steer this run…</strong>
+              <div class="small muted mt-8">Sherpa will read your guidance after the current tool finishes · My workspace · guidance will be queued safely</div>
+            </div>
+            <button class="btn btn-primary">Send guidance ↑</button>
+          </div>
+        </section>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
