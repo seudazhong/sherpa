@@ -12,6 +12,7 @@ from app.models.core import (
     Tenant,
     User,
 )
+from app.models.effects import EffectInvocation
 from app.models.events import EventJournal, Outbox
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "Part",
     "EventJournal",
     "Outbox",
+    "EffectInvocation",
 ]
