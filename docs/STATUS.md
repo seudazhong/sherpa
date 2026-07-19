@@ -5,10 +5,10 @@
 > Last updated: 2026-07-20 · Phase: **M1 in progress (durable spine)**.
 
 ## Where we are
-The **design + contracts + runnable skeleton** are done. The v1 durable spine (M1) is **in progress**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, and the **REST auth + session/message surface** (#1–#10) are implemented and green. Next: config + secrets AEAD/KEK (#11).
+The **design + contracts + runnable skeleton** are done. The v1 durable spine (M1) is **in progress**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, the REST auth + session/message surface, and the **credential vault (AEAD/KEK)** (#1–#11) are implemented and green. Next: observability (#12).
 
 ## Verified state
-- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **25 passed** (needs Postgres+Redis up) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed.
+- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **32 passed** (needs Postgres+Redis up; vault tests need neither) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed.
 - **Frontend** (`frontend/`): Vite+React+TS scaffold present. ⚠️ Needs `npm ci` before `npm run build` (not yet installed/verified in this env).
 - **Infra**: `infra/docker-compose.yml` (postgres+redis+web+worker+frontend) defined; not yet brought up.
 - **CI**: `.github/workflows/ci.yml` (backend uv lint/type/test + frontend build).
@@ -20,10 +20,10 @@ The **design + contracts + runnable skeleton** are done. The v1 durable spine (M
 - **Readiness kit**: tech-stack lock (`docs/10-tech-stack.md`), **frozen contracts** (`docs/contracts/` — data-model, events-and-effects, api, config-and-secrets), `AGENTS.md`, runnable+green skeleton, infra, CI, this plan/status.
 
 ## ▶ Next ready task
-**M1 #11 — Config + secrets (AEAD/KEK)** (env-backed KEK; AES-256-GCM DEK-per-secret envelope with AAD binding tenant/kind/kek_id/key_version; seal/open helpers; the secret-settings surface from config-and-secrets.md). Foundation for Gmail OAuth token storage in M2. See `docs/contracts/config-and-secrets.md §3`, ADR-019.
+**M1 #12 — Observability** (structured JSON logging with tenant/run/session correlation ids + secret redaction, request/run tracing hooks, `/metrics` or health surface as scoped). Wire the redaction helper (`app/security/redaction.py`) into the log formatter. See `docs/07-observability.md`, `docs/contracts/config-and-secrets.md §3.5`.
 
 ## In progress
-**M1 — durable spine.** #1–#10 done (persistence, migrations, journal+outbox, Redis/SSE, effect idempotency, provider+mock, tools, core loop, durable prompt admission, REST auth+sessions+messages). #11 next — the encryption envelope (KEK/DEK/AEAD) so connector credentials can be sealed at rest.
+**M1 — durable spine.** #1–#11 done (persistence, migrations, journal+outbox, Redis/SSE, effect idempotency, provider+mock, tools, core loop, durable prompt admission, REST auth+sessions+messages, credential vault AEAD/KEK). #12 next — structured logging + correlation + redaction so runs are debuggable without leaking secrets.
 Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schema at alembic `0004`).
 
 ## Blockers
@@ -44,8 +44,8 @@ Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schem
 | M1 #8 core loop (worker) | ✅ done |
 | M1 #9 durable prompt admission | ✅ done |
 | M1 #10 REST sessions/messages + auth | ✅ done |
-| M1 #11 config + secrets (AEAD/KEK) | ⬜ next |
-| M1 #12 observability | ⬜ |
+| M1 #11 config + secrets (AEAD/KEK) | ✅ done |
+| M1 #12 observability | ⬜ next |
 | M1 #13 frontend chat | ⬜ |
 | M2 #14–22 Gmail→candidate→todo→reminder | ⬜ |
 
