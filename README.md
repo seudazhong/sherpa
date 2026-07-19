@@ -30,7 +30,8 @@ Sherpa 是一个可 **Docker 一键部署**、支持**多用户登录**的云端
 | [09 路线图](docs/09-roadmap.md) | P0–P6 分阶段构建 |
 | [决策记录 ADR](docs/decisions.md) | 所有已锁定的架构决策 + 理由 |
 | ⭐ [设计评审汇总](docs/reviews/README.md) | **PM / UI / 架构师三方评审结论 + 待办改动清单（编码前必读）** |
-| [UI 设计图样](docs/design/index.html) | 可离线预览的 HTML 原型（chat / todo / connectors / dashboard） |
+| ⭐ [UI 设计图样 · Daybreak 亮色（推荐）](docs/design-bright/index.html) | 8 屏离线原型 + [范围说明 v1/后续](docs/design-bright/README.md) |
+| [UI 设计图样 · Alpine 深色（v1 备选/暗色主题）](docs/design/index.html) | 初版 5 屏离线原型 · [对比](docs/reviews/ui-comparison.md) |
 
 ## 一句话架构
 
