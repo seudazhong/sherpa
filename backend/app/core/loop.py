@@ -162,10 +162,10 @@ async def _run_tool(  # type: ignore[no-untyped-def]
         turn_seq=turn,
     )
 
-    # Permission gate (ADR-020): a non-read-only action is not dispatched without an
-    # approval. Persist a pending envelope bound to this invocation, surface the ask,
-    # and feed the model a bounded observation that the action was NOT performed.
-    if perm_policy.requires_approval(tool) and decider_user_id is not None:
+    # Permission gate (api.md §7.1 ALLOWED): evaluate policy, then dispatch.
+    #   allow → execute;  ask → approval envelope (not performed);  deny → refuse.
+    decision = perm_policy.evaluate(tool)
+    if decision == "ask" and decider_user_id is not None:
         created = await request_approval(
             session,
             tenant_id=run.tenant_id,
@@ -216,6 +216,27 @@ async def _run_tool(  # type: ignore[no-untyped-def]
             "the user's decision."
         )
         provider_messages.append({"role": "tool", "tool_call_id": call.id, "content": observation})
+        return
+
+    if decision != "allow":
+        # deny, or ask without a decider → refuse; never execute.
+        reason = "not_permitted" if decision == "deny" else "approval_required"
+        await settle_failed(session, run.tenant_id, handle.invocation_id, error=reason)
+        await append_event(
+            session,
+            tenant_id=run.tenant_id,
+            run_id=run.id,
+            session_id=run.session_id,
+            event_type="tool-error",
+            payload={"id": call.id, "name": call.name, "ok": False, "output": f"error: {reason}"},
+        )
+        provider_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": f"error: {reason}: {tool.name} was not executed",
+            }
+        )
         return
 
     await mark_running(session, run.tenant_id, handle.invocation_id)
