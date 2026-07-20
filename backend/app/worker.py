@@ -6,6 +6,7 @@ Run: `uv run arq app.worker.WorkerSettings`
 from __future__ import annotations
 
 import asyncio
+import datetime
 import uuid
 from typing import Any
 
@@ -15,10 +16,10 @@ from sqlalchemy import select
 from app.config import settings
 from app.core import execute_run
 from app.db import SessionLocal
-from app.events import relay_once
+from app.events import append_event, relay_once
 from app.models import Run
 from app.observability import bind_context, configure_logging, project_run_trace
-from app.providers import MockProvider
+from app.providers import build_provider
 from app.redis_client import client as redis_client
 from app.tools import build_default_registry
 
@@ -26,6 +27,35 @@ from app.tools import build_default_registry
 async def ping(ctx: dict[str, Any]) -> str:
     """Liveness job proving worker wiring."""
     return "pong"
+
+
+async def _settle_failed(
+    tenant_id: uuid.UUID, run_id: uuid.UUID, session_id: uuid.UUID | None
+) -> None:
+    """Settle a run as failed in a fresh transaction after a provider/loop error."""
+    async with SessionLocal() as session:
+        run = await session.get(Run, (tenant_id, run_id))
+        if run is None or run.status in (
+            "succeeded",
+            "failed",
+            "cancelled",
+            "needs_reconciliation",
+        ):
+            return
+        now = datetime.datetime.now(datetime.UTC)
+        run.status = "failed"
+        run.started_at = run.started_at or now
+        run.settled_at = now
+        await session.flush()
+        await append_event(
+            session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            session_id=session_id,
+            event_type="run.settled",
+            payload={"reason": "failed", "status": "failed"},
+        )
+        await session.commit()
 
 
 async def run_job(ctx: dict[str, Any], run_id: str) -> str:
@@ -36,20 +66,26 @@ async def run_job(ctx: dict[str, Any], run_id: str) -> str:
         ).scalar_one_or_none()
         if run is None:
             return "unknown_run"
+        tenant_id, rid, session_id = run.tenant_id, run.id, run.session_id
         bind_context(
-            tenant_id=str(run.tenant_id),
-            run_id=str(run.id),
-            session_id=str(run.session_id) if run.session_id is not None else None,
+            tenant_id=str(tenant_id),
+            run_id=str(rid),
+            session_id=str(session_id) if session_id is not None else None,
         )
-        reason = await execute_run(
-            session,
-            run=run,
-            provider=MockProvider(),
-            registry=build_default_registry(),
-        )
-        await project_run_trace(session, tenant_id=run.tenant_id, run_id=run.id)
-        await session.commit()
-        return reason
+        try:
+            reason = await execute_run(
+                session,
+                run=run,
+                provider=build_provider(),
+                registry=build_default_registry(),
+            )
+            await project_run_trace(session, tenant_id=tenant_id, run_id=rid)
+            await session.commit()
+            return reason
+        except Exception:
+            await session.rollback()
+            await _settle_failed(tenant_id, rid, session_id)
+            return "failed"
 
 
 async def _relay_loop() -> None:

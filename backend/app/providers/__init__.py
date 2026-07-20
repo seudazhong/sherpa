@@ -13,7 +13,9 @@ from app.providers.base import (
     ToolCall,
     ToolSchema,
 )
+from app.providers.factory import build_provider
 from app.providers.mock import MockProvider
+from app.providers.openai_compatible import OpenAICompatibleProvider
 
 __all__ = [
     "Provider",
@@ -26,4 +28,6 @@ __all__ = [
     "Message",
     "ToolSchema",
     "MockProvider",
+    "OpenAICompatibleProvider",
+    "build_provider",
 ]

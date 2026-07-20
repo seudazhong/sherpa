@@ -20,8 +20,14 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://sherpa:sherpa@localhost:5432/sherpa"
     redis_url: str = "redis://localhost:6379/0"
 
-    # Model provider — mock by default; real provider is an open §5 decision.
-    provider: str = "mock"
+    # Model provider (contract: config-and-secrets.md §Provider). "mock" keeps
+    # dev/tests offline; "openai_compatible" targets an OpenAI-style Chat
+    # Completions endpoint (e.g. the local litellm proxy forwarding Copilot).
+    provider_kind: str = "mock"
+    provider_base_url: str = "http://localhost:4000"
+    provider_api_key: str = ""
+    provider_model: str = "claude-sonnet-4.6"
+    provider_timeout_seconds: int = 60
 
     # App/session auth (contract: docs/contracts/config-and-secrets.md §2).
     # Dev defaults keep `uv run`/tests working; production MUST override via env

@@ -94,8 +94,8 @@ async def project_run_trace(
             trace_kind=run.run_kind,
             status=_TRACE_STATUS.get(run.status, "succeeded"),
             tags={
-                "provider": settings.provider,
-                "model": f"{settings.provider}-v1",
+                "provider": settings.provider_kind,
+                "model": settings.provider_model if settings.provider_kind != "mock" else "mock-v1",
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "cost_usd": "0",
