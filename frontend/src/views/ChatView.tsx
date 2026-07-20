@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { api, eventsUrl } from "../api";
 import { useAuth } from "../auth";
+import Sidebar from "../components/Sidebar";
 
 interface Bubble {
   key: string;
@@ -24,7 +25,7 @@ interface Envelope {
 }
 
 export default function ChatView() {
-  const { email, csrf, logout } = useAuth();
+  const { email, csrf } = useAuth();
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [draft, setDraft] = useState("");
@@ -151,28 +152,7 @@ export default function ChatView() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <div className="brand-row">
-          <span className="logo">S</span>
-          <span className="brand-name">Sherpa</span>
-        </div>
-        <div className="nav-label">Workspace</div>
-        <span className="nav-item active">◌ Chat</span>
-        <span className="nav-item muted">✓ Todos</span>
-        <span className="nav-item muted">◷ Schedules</span>
-        <span className="nav-item muted">⌁ Connectors</span>
-        <div className="nav-spacer" />
-        <div className="nav-user">
-          <span className="avatar">{(email ?? "?").slice(0, 1).toUpperCase()}</span>
-          <div>
-            <strong>{email ?? "Owner"}</strong>
-            <br />
-            <button className="linklike" onClick={() => void logout()}>
-              Sign out
-            </button>
-          </div>
-        </div>
-      </aside>
+      <Sidebar />
 
       <main className="main">
         <header className="topbar">

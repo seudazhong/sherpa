@@ -165,3 +165,34 @@ class Candidate(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class Todo(Base):
+    __tablename__ = "todos"
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"], ["users.tenant_id", "users.id"], ondelete="RESTRICT"
+        ),
+        UniqueConstraint("tenant_id", "source_candidate_id", name="uq_todos_source_candidate"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    source_candidate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    source: Mapped[str] = mapped_column(Text, server_default="gmail_candidate")
+    title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="open")
+    due_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    snoozed_until: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    priority: Mapped[str] = mapped_column(Text, server_default="medium")
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, server_default="1")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

@@ -23,6 +23,7 @@
   --r: 16px;
   --r-lg: 22px;
   --r-pill: 999px;
+  --shadow-sm: 0 1px 2px rgba(14, 42, 50, 0.05);
   --shadow: 0 2px 6px rgba(14, 42, 50, 0.05), 0 12px 30px rgba(14, 42, 50, 0.06);
   --hero: linear-gradient(122deg, #e4fbf4 0%, #ddf2ff 46%, #ffeedc 100%);
   --font: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial,
@@ -440,4 +441,79 @@ h3 {
   display: grid;
   place-items: center;
   color: var(--muted);
+}
+
+/* ---------- inbox ---------- */
+.inbox {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px 64px;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.section-head {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  font-weight: 700;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.count {
+  background: var(--bg-2);
+  color: var(--muted);
+  border-radius: var(--r-pill);
+  padding: 1px 9px;
+  font-size: 12px;
+}
+.cand-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 10px;
+}
+.cand-title {
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+.cand-desc {
+  margin-bottom: 6px;
+}
+.cand-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.cand-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.todo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 14px;
+  margin-bottom: 8px;
+}
+.todo-title {
+  font-weight: 600;
+  flex: 1;
 }

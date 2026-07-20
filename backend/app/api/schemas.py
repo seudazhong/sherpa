@@ -148,3 +148,102 @@ class ConnectorAdmission(StrictModel):
     run_id: uuid.UUID
     state: Literal["queued"] = "queued"
     admitted_at: datetime.datetime
+
+
+# --- Candidates and todos (api.md §3.3) ---
+CandidateStatus = Literal["pending", "accepted", "edited", "dismissed"]
+Priority = Literal["low", "medium", "high"]
+
+
+class CandidateSource(StrictModel):
+    kind: Literal["gmail"]
+    connector_id: uuid.UUID
+    item_id: uuid.UUID
+    revision: str
+    thread_id: str
+    subject: str | None
+    sender: str | None
+    received_at: datetime.datetime
+    excerpt: str | None
+    deep_link: str | None
+
+
+class InferredField(StrictModel):
+    field: Literal["title", "description", "due_at", "priority"]
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)]
+    evidence: str | None
+
+
+class Candidate(StrictModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    status: CandidateStatus
+    title: Annotated[str, Field(min_length=1, max_length=300)]
+    description: Annotated[str, Field(max_length=8_000)] | None
+    due_at: datetime.datetime | None
+    priority: Priority
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)]
+    inferred_fields: list[InferredField]
+    source: CandidateSource
+    accepted_todo_id: uuid.UUID | None
+    version: int
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+
+class CandidatePage(StrictModel):
+    items: list[Candidate]
+    next_cursor: str | None
+
+
+class CandidateAccept(StrictModel):
+    if_version: int
+
+
+class CandidateEdit(StrictModel):
+    if_version: int
+    title: Annotated[str, Field(min_length=1, max_length=300)] | None = None
+    description: Annotated[str, Field(max_length=8_000)] | None = None
+    due_at: datetime.datetime | None = None
+    priority: Priority | None = None
+
+
+class CandidateDismiss(StrictModel):
+    if_version: int
+    reason: Annotated[str, Field(max_length=500)] | None = None
+
+
+class Todo(StrictModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    source_candidate_id: uuid.UUID
+    title: Annotated[str, Field(min_length=1, max_length=300)]
+    description: Annotated[str, Field(max_length=8_000)] | None
+    status: Literal["open", "completed", "cancelled"]
+    due_at: datetime.datetime | None
+    snoozed_until: datetime.datetime | None
+    completed_at: datetime.datetime | None
+    priority: Priority
+    version: int
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+
+class TodoPage(StrictModel):
+    items: list[Todo]
+    next_cursor: str | None
+
+
+class TodoPatch(StrictModel):
+    if_version: int
+    title: Annotated[str, Field(min_length=1, max_length=300)] | None = None
+    description: Annotated[str, Field(max_length=8_000)] | None = None
+    status: Literal["open", "completed", "cancelled"] | None = None
+    due_at: datetime.datetime | None = None
+    snoozed_until: datetime.datetime | None = None
+    priority: Priority | None = None
+
+
+class CandidateAcceptance(StrictModel):
+    candidate: Candidate
+    todo: Todo

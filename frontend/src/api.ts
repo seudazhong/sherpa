@@ -58,6 +58,61 @@ export interface MessagePage {
   event_cursor: string;
 }
 
+export interface CandidateSource {
+  kind: string;
+  connector_id: string;
+  item_id: string;
+  revision: string;
+  thread_id: string;
+  subject: string | null;
+  sender: string | null;
+  received_at: string;
+  excerpt: string | null;
+  deep_link: string | null;
+}
+
+export interface Candidate {
+  id: string;
+  tenant_id: string;
+  status: string;
+  title: string;
+  description: string | null;
+  due_at: string | null;
+  priority: string;
+  confidence: number;
+  source: CandidateSource;
+  accepted_todo_id: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CandidatePage {
+  items: Candidate[];
+  next_cursor: string | null;
+}
+
+export interface Todo {
+  id: string;
+  tenant_id: string;
+  source_candidate_id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  due_at: string | null;
+  snoozed_until: string | null;
+  completed_at: string | null;
+  priority: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TodoPage {
+  items: Todo[];
+  next_cursor: string | null;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -100,6 +155,21 @@ export const api = {
       `/sessions/${sid}/prompt`,
       jsonInit("POST", csrf, { client_message_id: crypto.randomUUID(), text }),
     ),
+  listCandidates: (status = "pending") =>
+    req<CandidatePage>(`/candidates?status=${encodeURIComponent(status)}`),
+  acceptCandidate: (csrf: string, id: string, ifVersion: number) =>
+    req<{ candidate: Candidate; todo: Todo }>(
+      `/candidates/${id}/accept`,
+      jsonInit("POST", csrf, { if_version: ifVersion }),
+    ),
+  dismissCandidate: (csrf: string, id: string, ifVersion: number) =>
+    req<Candidate>(
+      `/candidates/${id}/dismiss`,
+      jsonInit("POST", csrf, { if_version: ifVersion }),
+    ),
+  listTodos: () => req<TodoPage>("/todos"),
+  patchTodo: (csrf: string, id: string, patch: Record<string, unknown>) =>
+    req<Todo>(`/todos/${id}`, jsonInit("PATCH", csrf, patch)),
 };
 
 export function eventsUrl(sid: string, cursor: string | number): string {

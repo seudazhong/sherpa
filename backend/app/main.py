@@ -14,6 +14,7 @@ from fastapi import FastAPI, Response, status
 
 from app import __version__
 from app.api.auth import router as auth_router
+from app.api.candidates import router as candidates_router
 from app.api.connectors import router as connectors_router
 from app.api.prompt import router as prompt_router
 from app.api.sessions import router as sessions_router
@@ -34,6 +35,7 @@ app = FastAPI(title="Sherpa", version=__version__, lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(connectors_router)
+app.include_router(candidates_router)
 app.include_router(sse_router)
 app.include_router(prompt_router)
 
