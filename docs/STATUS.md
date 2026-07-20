@@ -25,7 +25,8 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**M2 is complete.** The entire concrete backlog in `IMPLEMENTATION.md` (M1 #1–13, M2 #14–22) is shipped and verified. The only remaining named phase is **M3 — Eval harness** (goldens for extraction precision, regression dataset; `IMPLEMENTATION.md:63`), which is explicitly deferred and **not yet broken into tasks**. A future session should either spec M3 or take direction from the user before starting new work.
+**Agent tool surface (Phase M-tools) — design drafted, pending review.** Per ADR-023 the agent must be able to drive every UI capability via tools (shared service layer + REST/Tool dual adapters). Design + capability matrix + templates: [`11-agent-tool-surface.md`](11-agent-tool-surface.md); tasks T1–T8 in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). Start with **T1 (ToolContext + CallerContext + service scaffolding)**, then T2 (ALLOWED policy engine), then per-capability vertical slices.
+The prior "M3 eval harness" remains deferred/unspecced; M-tools is now the active next phase (user priority: agent autonomy over the UI surface).
 
 ## In progress
 _Nothing in progress — M2 shipped._ **M2 — Personal Inbox-to-Action** is complete: real provider, #14 Gmail OAuth, #15 sync, #16 extraction, #17 candidate Inbox, #18 scheduler, #19 notifications, #20 permission engine + approval envelope (gate `send_email`), #21 activity receipts + data controls (`/data`), #22 transcript compaction. Full Gmail→candidate→todo→[schedule→notify] pipeline, approval-gated external actions, an activity ledger with export/delete, and window compaction all land.

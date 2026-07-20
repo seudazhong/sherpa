@@ -2,7 +2,7 @@
 
 本项目讨论中**已锁定**的架构决策，及其理由与替代方案。新决策追加到末尾。
 
-> ✅ **v1 定位已确认（2026-07-19，项目负责人拍板）**：v1 = **自托管、单实例、单用户**的 **Gmail → Action** 助理；**保留 Web 聊天**为次要界面（Candidate Inbox 为主）。据此，下列受影响 ADR 已按[设计评审汇总](reviews/README.md) §4 落地修订（见各 ADR 下「评审修订」块，以及文末新增 ADR-015~022）。
+> ✅ **v1 定位已确认（2026-07-19，项目负责人拍板）**：v1 = **自托管、单实例、单用户**的 **Gmail → Action** 助理；**保留 Web 聊天**为次要界面（Candidate Inbox 为主）。据此，下列受影响 ADR 已按[设计评审汇总](reviews/README.md) §4 落地修订（见各 ADR 下「评审修订」块，以及文末新增 ADR-015~023）。
 >
 > 仍待确认的**实现参数**（不阻塞架构，编码时定）：Gmail OAuth 运营模式、Gmail 数据保留范围、初始 model/provider、通知默认值。见 reviews/README.md §5。
 
@@ -13,6 +13,7 @@
 | 2026-07-19 | v1 产品定位 | ✅ 接受「自托管、单用户 Gmail→Action」 | 新增 ADR-022 |
 | 2026-07-19 | 多租户 vs 单实例单人 | ✅ **单实例、单用户**；不追求托管多租户 | 新增 ADR-015（RLS 降级为"后加"） |
 | 2026-07-19 | Web 聊天界面 | ✅ **v1 保留**（次要界面；Candidate Inbox 为主） | 新增 ADR-022 |
+| 2026-07-20 | agent 是否应能自主驱动全部 UI 功能 | ✅ **应**——凡 UI 可见功能都要有对应 agent 工具（共享能力层） | 新增 ADR-023；新增 [docs/11](11-agent-tool-surface.md) + IMPLEMENTATION M-tools |
 
 ---
 
@@ -144,3 +145,17 @@
   - **纳入**：只读 Gmail（受限 scope）→ 持久同步分析 → 私有候选（带来源+不确定性）→ accept/edit/dismiss → 基础 todo → opt-in Web/摘要邮件提醒（安静时段+配额+可见投递态）→ 暂停/断开/导出/删除 → job 状态/失败/用量成本/审计回执。**次要界面**：基础 Web 聊天。
   - **排除**（各带 tracking issue，属后续里程碑）：代码执行/沙箱、文件/MinIO、GitHub、QQ/IM、agentic email、团队/共享记忆、memory/RAG、对外写动作、通用 cron、多 provider failover、跨渠道审批渲染器、token 级流式打磨。
 - **来源**：用户决策 + 评审 §1/§4 / cross-pm §4。
+
+### ADR-023 · Agent 能力层 + 双适配器（REST 人用 / Tool agent 用）
+- **决策（用户要求 2026-07-20）**：凡用户在 UI 上能看到/能做的功能，agent 都必须能通过**工具**自主驱动。为此确立**单一能力层 + 双适配器**：
+  - 业务逻辑集中在 `app/services/`（**能力层**，传输无关：入参 `CallerContext` + 领域参数，做领域校验/变更/抛 typed `ServiceError`，**不 commit**）；
+  - **REST = 人的适配器，Tool = agent 的适配器**，两者都只"解析入参 → 调同一 service → 组织出参/错误"，**不重复业务逻辑**；共用同一 `CallerContext` 与同一**四道闸权限引擎**；
+  - **按能力纵切开发**（service→REST→Tool→权限→测试→浏览器验收），不横切。
+- **例外/边界（一次性门，不弱化）**：
+  - 不可信内容分析仍是**无工具隔离 pipeline**（ADR-009 不动）；仅 FULL（已认证用户）会话拿数据工具；
+  - **对外写动作**（`send_email` 等）仍走语义审批（ADR-020）：策略引擎判 `ask` → 审批信封；
+  - **审批的"解决"是人的职责**——agent 不获得批准自己动作的工具；
+  - **破坏性数据操作**（导出/删除导入数据）判 `ask` 或仅限人工。
+- **理由**：REST 与 Tool 各写一遍业务逻辑必然漂移、双倍 bug、权限不一致；共享 service 让"UI 能做 = agent 能做"成为结构性保证。
+- **落地缺口（→ [docs/11](11-agent-tool-surface.md) + IMPLEMENTATION M-tools）**：`Tool.execute` 需注入 `ToolContext`（当前 `base.py` 缺）；ALLOWED 策略引擎需实现（当前仅 VISIBLE 闸 + 极简 ask）；输出 spill 需落地（api.md §7.2）；候选/待办/连接器/日程/通知/活动均需补 service 抽取 + 工具（`create_todo`/`create_schedule`/日程 REST 连 REST 都缺）。
+- **来源**：用户输入「我认为 agent 肯定要有能力自主控制用户在 UI 上能看到的一切功能」；对齐 api.md §7、docs/05。
