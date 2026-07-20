@@ -14,6 +14,7 @@ provider as synthesized `user` messages for continuation.
 from __future__ import annotations
 
 import datetime
+import json
 import uuid
 from collections import defaultdict
 
@@ -158,7 +159,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
         event_type="tool-result" if ok else "tool-error",
         payload={"id": call.id, "name": call.name, "ok": ok, "output": output[:4000]},
     )
-    provider_messages.append({"role": "user", "content": f"[tool:{call.name}] {output}"})
+    provider_messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
 
 
 async def execute_run(  # type: ignore[no-untyped-def]
@@ -229,7 +230,6 @@ async def execute_run(  # type: ignore[no-untyped-def]
                 role="assistant",
                 text=assistant_text,
             )
-            provider_messages.append({"role": "assistant", "content": assistant_text})
             await append_event(
                 session,
                 tenant_id=tenant_id,
@@ -238,6 +238,21 @@ async def execute_run(  # type: ignore[no-untyped-def]
                 event_type="text-delta",
                 payload={"text": assistant_text},
             )
+
+        # Provider-facing assistant turn: carry tool_calls so the model recognizes
+        # its own call and accepts the following role:tool results (OpenAI tool
+        # protocol). Feeding results as user messages makes models re-issue calls.
+        assistant_pm: dict[str, object] = {"role": "assistant", "content": assistant_text or None}
+        if tool_calls:
+            assistant_pm["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": json.dumps(tc.args)},
+                }
+                for tc in tool_calls
+            ]
+        provider_messages.append(assistant_pm)
 
         await append_event(
             session,
