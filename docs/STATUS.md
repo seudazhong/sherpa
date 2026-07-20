@@ -2,7 +2,11 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-20 · Phase: **M1 COMPLETE (durable spine) → M2 next**.
+> Last updated: 2026-07-20 · Phase: **M2 in progress (Personal Inbox-to-Action)**. M1 complete.
+
+## Real model wired ✅
+The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
+`docker compose -f infra/docker-compose.yml --env-file .env up --build -d`.
 
 ## Where we are
 The **design + contracts + runnable skeleton** are done, and the **v1 durable spine (M1) is complete and verified end-to-end**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, the REST auth + session/message surface, the credential vault (AEAD/KEK), run traces + structured logging, and the web chat client (#1–#13) are all implemented and green. A live smoke (login → session → prompt → real arq worker loop → outbox relay → SSE `run.settled` → persisted transcript) passes. Next: **M2 — Personal Inbox-to-Action (Gmail → candidate → todo → reminder)**.
@@ -21,7 +25,7 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**M2 #14 — Gmail connector (OAuth connect + encrypted credential storage)** — the first M2 task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md) (Personal Inbox-to-Action). Note the **open impl params that bind M2** (below) should be confirmed before shipping to real users. `generations` + `audit_receipts` tables (deferred from #12) also land in M2 alongside `extractions`/`approval_envelopes`.
+**M2 #14 — Connector base + Gmail read-only OAuth**: `connectors`/`connector_items` tables, OAuth connect/disconnect endpoints, token sealed via the M1 AEAD vault; tested with a mocked Google. First real external connector. (Real model provider is already wired — see above.)
 
 ## In progress
 **None — M1 is complete.** Ready to start M2 (Gmail → candidate → todo → reminder). M2 introduces the first real external connector, so confirm the open impl params first.
