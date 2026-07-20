@@ -11,6 +11,7 @@ import hmac
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import AuthSession, LoginRequest
@@ -27,6 +28,7 @@ from app.auth import (
 from app.auth.store import SessionData
 from app.config import settings
 from app.db import get_session
+from app.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -71,7 +73,19 @@ async def login(
 
 
 @router.get("/session")
-async def session_info(data: Annotated[SessionData, Depends(current_session)]) -> AuthSession:
+async def session_info(
+    data: Annotated[SessionData, Depends(current_session)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> AuthSession:
+    # A session whose principal no longer exists (e.g. tenant wiped) is invalid:
+    # drop it so the client re-authenticates (login re-seeds the owner).
+    principal = await db.scalar(
+        select(User.id).where(User.tenant_id == data.tenant_id, User.id == data.user_id)
+    )
+    if principal is None:
+        await delete_session(cookie_value(data))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="stale_session")
+
     rotated = await refresh_csrf(data)
     return AuthSession(
         user_id=rotated.user_id,

@@ -117,3 +117,24 @@ async def test_login_session_prompt_messages_flow(monkeypatch: pytest.MonkeyPatc
             assert r.status_code == 401
     finally:
         await _drop_owner()
+
+
+@pytest.mark.asyncio
+async def test_stale_session_is_invalidated() -> None:
+    """A session whose owner tenant was wiped must 401 on /auth/session (self-heal)."""
+    if not await ping_db() or not await ping_redis():
+        pytest.skip("database or redis not reachable")
+    await _drop_owner()
+    try:
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            login = await client.post(
+                "/auth/login",
+                json={"email": settings.owner_email, "password": settings.owner_password},
+            )
+            assert login.status_code == 200
+            await _drop_owner()  # wipe the principal out from under the live session
+            stale = await client.get("/auth/session")
+            assert stale.status_code == 401
+    finally:
+        await _drop_owner()
