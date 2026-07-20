@@ -18,6 +18,7 @@ import uuid
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import READ, record_receipt
 from app.connectors.gmail import GmailSyncClient
 from app.models import Connector, ConnectorItem
 from app.security import (
@@ -134,5 +135,19 @@ async def sync_gmail(
     if connector.status in ("pending_oauth", "syncing"):
         connector.status = "active"
     await session.flush()
+
+    await record_receipt(
+        session,
+        tenant_id=connector.tenant_id,
+        receipt_type=READ,
+        actor_type="connector",
+        trigger_type="sync",
+        action="gmail_sync",
+        outcome="succeeded",
+        subject_type="connector",
+        subject_id=connector.id,
+        summary={"seen": len(message_ids), "new_items": new_items},
+        occurred_at=now,
+    )
 
     return SyncResult(seen=len(message_ids), new_items=new_items)

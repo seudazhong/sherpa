@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response, status
 
 from app import __version__
+from app.api.activity import router as activity_router
 from app.api.auth import router as auth_router
 from app.api.candidates import router as candidates_router
 from app.api.connectors import router as connectors_router
@@ -40,6 +41,7 @@ app.include_router(connectors_router)
 app.include_router(candidates_router)
 app.include_router(notifications_router)
 app.include_router(permissions_router)
+app.include_router(activity_router)
 app.include_router(sse_router)
 app.include_router(prompt_router)
 

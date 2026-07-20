@@ -21,6 +21,7 @@ export default defineConfig({
       "/notifications": target,
       "/settings": target,
       "/permissions": target,
+      "/activity": target,
       "/health": target,
       "/readyz": target,
     },

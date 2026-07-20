@@ -163,6 +163,30 @@ export interface PendingApprovalPage {
   next_cursor: string | null;
 }
 
+export interface ActivityReceipt {
+  id: string;
+  receipt_type: string;
+  actor_type: string;
+  trigger_type: string;
+  action: string;
+  outcome: string;
+  reversible: boolean;
+  summary: Record<string, unknown>;
+  run_id: string | null;
+  subject_type: string | null;
+  subject_id: string | null;
+  occurred_at: string;
+}
+
+export interface ActivityPage {
+  items: ActivityReceipt[];
+  next_cursor: string | null;
+}
+
+export interface DeleteImportedResult {
+  deleted: Record<string, number>;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -222,7 +246,15 @@ export const api = {
     req<Todo>(`/todos/${id}`, jsonInit("PATCH", csrf, patch)),
   listNotifications: () => req<NotificationPage>("/notifications"),
   listPermissions: () => req<PendingApprovalPage>("/permissions"),
+  listActivity: (type?: string) =>
+    req<ActivityPage>(`/activity${type ? `?type=${encodeURIComponent(type)}` : ""}`),
+  deleteImported: (csrf: string) =>
+    req<DeleteImportedResult>("/activity/delete-imported", jsonInit("POST", csrf)),
 };
+
+export function exportUrl(): string {
+  return "/activity/export";
+}
 
 export function eventsUrl(sid: string, cursor: string | number): string {
   return `/sessions/${sid}/events?cursor=${cursor}`;

@@ -20,6 +20,7 @@ from collections import defaultdict
 
 from sqlalchemy import func, select
 
+from app.audit import ACTION, record_receipt
 from app.effects import begin_invocation, mark_running, settle_failed, settle_succeeded
 from app.events import append_event
 from app.models import Message, Part, Run, Session
@@ -190,6 +191,22 @@ async def _run_tool(  # type: ignore[no-untyped-def]
                 "expires_at": env.expires_at.isoformat(),
                 "nonce": created.nonce,
             },
+        )
+        await record_receipt(
+            session,
+            tenant_id=run.tenant_id,
+            receipt_type=ACTION,
+            actor_type="system",
+            trigger_type="agent",
+            action=tool.name,
+            outcome="awaiting_approval",
+            run_id=run.id,
+            invocation_id=handle.invocation_id,
+            approval_envelope_id=env.id,
+            subject_type="approval_envelope",
+            subject_id=env.id,
+            summary={"permission_scope": env.permission_scope},
+            reversible=True,
         )
         observation = (
             f"permission_required: approval requested for {tool.name} "

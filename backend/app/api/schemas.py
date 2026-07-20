@@ -376,3 +376,28 @@ class PendingApproval(StrictModel):
 class PendingApprovalPage(StrictModel):
     items: list[PendingApproval]
     next_cursor: str | None
+
+
+# --- Activity ledger + data controls (ADR-021) ---
+class ActivityReceipt(StrictModel):
+    id: uuid.UUID
+    receipt_type: str
+    actor_type: str
+    trigger_type: str
+    action: str
+    outcome: str
+    reversible: bool
+    summary: dict[str, object]
+    run_id: uuid.UUID | None
+    subject_type: str | None
+    subject_id: uuid.UUID | None
+    occurred_at: datetime.datetime
+
+
+class ActivityPage(StrictModel):
+    items: list[ActivityReceipt]
+    next_cursor: str | None
+
+
+class DeleteImportedResult(StrictModel):
+    deleted: dict[str, int]

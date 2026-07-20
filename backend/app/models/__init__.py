@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.models.analysis import Candidate, Extraction, Generation, Todo
+from app.models.audit import AuditReceipt
 from app.models.base import Base
 from app.models.connectors import Connector, ConnectorItem
 from app.models.core import (
@@ -43,4 +44,5 @@ __all__ = [
     "Schedule",
     "ScheduleFiring",
     "UserSettings",
+    "AuditReceipt",
 ]

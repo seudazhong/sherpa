@@ -21,6 +21,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import INFERENCE, record_receipt
 from app.models import Candidate, ConnectorItem, Extraction, Generation, Trace
 from app.providers import Provider, TextDelta
 
@@ -252,6 +253,21 @@ async def run_extraction(
         extraction.completed_at = completed
         extraction.error_redacted = error
         await session.flush()
+
+    await record_receipt(
+        session,
+        tenant_id=tenant_id,
+        receipt_type=INFERENCE,
+        actor_type="system",
+        trigger_type="connector_analysis",
+        action="extract_candidates",
+        outcome=extraction_status,
+        run_id=run_id,
+        subject_type="connector_item",
+        subject_id=connector_item.id,
+        summary={"candidates": count, "model": model, "provider": provider_name},
+        occurred_at=completed,
+    )
 
     return ExtractionResult(
         extraction_id=extraction_id,

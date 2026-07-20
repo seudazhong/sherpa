@@ -19,6 +19,9 @@ export default function Sidebar() {
       <Link className={cls("/inbox")} to="/inbox">
         ✉ Inbox
       </Link>
+      <Link className={cls("/data")} to="/data">
+        ▤ Activity
+      </Link>
       <span className="nav-item muted">◷ Schedules</span>
       <span className="nav-item muted">⌁ Connectors</span>
       <div className="nav-spacer" />
