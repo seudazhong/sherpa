@@ -10,7 +10,10 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import uuid
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class ToolError(Exception):
@@ -21,9 +24,10 @@ class ToolError(Exception):
 class ToolContext:
     """Runtime-injected tool-execution context (api.md §7); never model-controlled.
 
-    `tenant_id` is always set at execution time; the run binding is populated by the
-    core loop. The tool adapter converts this into a `CallerContext(actor="agent")`
-    before calling the capability layer.
+    `tenant_id` is always set at execution time; the run binding + `session` are
+    populated by the core loop. The tool adapter converts this into a
+    `CallerContext(actor="agent")` and calls the capability layer with `session`.
+    The `session` is a runtime handle only — never serialized to the model.
     """
 
     tenant_id: uuid.UUID
@@ -33,6 +37,7 @@ class ToolContext:
     invocation_id: uuid.UUID | None = None
     source: str = "web"
     deadline: datetime.datetime | None = None
+    session: AsyncSession | None = None
 
 
 @dataclasses.dataclass(frozen=True)

@@ -52,3 +52,8 @@ class Invalid(ServiceError):
 class Conflict(ServiceError):
     code = "conflict"
     http_status = 409
+
+
+class Internal(ServiceError):
+    code = "internal"
+    http_status = 500

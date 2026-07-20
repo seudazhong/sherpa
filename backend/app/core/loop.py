@@ -247,6 +247,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
         run_id=run.id,
         invocation_id=handle.invocation_id,
         deadline=run.deadline_at,
+        session=session,
     )
     ok = True
     try:

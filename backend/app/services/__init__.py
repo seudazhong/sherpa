@@ -15,6 +15,7 @@ from app.services.context import CallerContext
 from app.services.errors import (
     Conflict,
     Forbidden,
+    Internal,
     Invalid,
     NotFound,
     ServiceError,
@@ -29,4 +30,5 @@ __all__ = [
     "Forbidden",
     "Invalid",
     "Conflict",
+    "Internal",
 ]
