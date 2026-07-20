@@ -216,7 +216,7 @@ class CandidateDismiss(StrictModel):
 class Todo(StrictModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
-    source_candidate_id: uuid.UUID
+    source_candidate_id: uuid.UUID | None
     title: Annotated[str, Field(min_length=1, max_length=300)]
     description: Annotated[str, Field(max_length=8_000)] | None
     status: Literal["open", "completed", "cancelled"]
@@ -242,6 +242,13 @@ class TodoPatch(StrictModel):
     due_at: datetime.datetime | None = None
     snoozed_until: datetime.datetime | None = None
     priority: Priority | None = None
+
+
+class TodoCreate(StrictModel):
+    title: Annotated[str, Field(min_length=1, max_length=300)]
+    description: Annotated[str, Field(max_length=8_000)] | None = None
+    due_at: datetime.datetime | None = None
+    priority: Priority = "medium"
 
 
 class CandidateAcceptance(StrictModel):
