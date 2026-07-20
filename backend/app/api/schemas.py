@@ -90,3 +90,54 @@ class MessagePage(StrictModel):
     items: list[PublicMessage]
     next_cursor: str | None
     event_cursor: str
+
+
+# --- Gmail connector (api.md §3.4) ---
+ConnectorStatus = Literal[
+    "pending_oauth",
+    "active",
+    "paused",
+    "syncing",
+    "degraded",
+    "disconnecting",
+    "revoked",
+    "error",
+]
+
+
+class GmailSyncScope(StrictModel):
+    lookback_days: Annotated[int, Field(ge=1, le=365)] = 30
+    label_ids: Annotated[list[str], Field(max_length=50)] = Field(default_factory=lambda: ["INBOX"])
+    include_spam_trash: Literal[False] = False
+
+
+class GmailConnectRequest(StrictModel):
+    return_to: Annotated[str, Field(pattern=r"^/[A-Za-z0-9/_?&=.-]*$")]
+    sync_scope: GmailSyncScope = Field(default_factory=GmailSyncScope)
+
+
+class OAuthStart(StrictModel):
+    authorization_url: str
+    expires_at: datetime.datetime
+
+
+class ConnectorSyncStatus(StrictModel):
+    cursor_present: bool
+    last_started_at: datetime.datetime | None
+    last_succeeded_at: datetime.datetime | None
+    last_error_code: str | None
+    last_run_id: uuid.UUID | None
+
+
+class Connector(StrictModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    kind: Literal["gmail"]
+    status: ConnectorStatus
+    account_email: str | None
+    granted_scopes: list[str]
+    sync_scope: GmailSyncScope
+    sync: ConnectorSyncStatus
+    version: int
+    created_at: datetime.datetime
+    updated_at: datetime.datetime

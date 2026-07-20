@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from app.security.connector_token import (
+    ConnectorSeal,
+    ConnectorTokenIdentity,
+    open_connector_token,
+    seal_connector_token,
+)
 from app.security.keyring import KekMaterial, Keyring, KeyringError, load_keyring
 from app.security.redaction import REDACTED, SENSITIVE_KEYS, is_sensitive, redact
 from app.security.vault import (
@@ -36,4 +42,8 @@ __all__ = [
     "open_oauth_credential",
     "rewrap_dek",
     "seal_oauth_credential",
+    "ConnectorSeal",
+    "ConnectorTokenIdentity",
+    "open_connector_token",
+    "seal_connector_token",
 ]

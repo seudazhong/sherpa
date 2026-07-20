@@ -49,5 +49,14 @@ class Settings(BaseSettings):
     kek_key_version: int = 1
     kek_previous_keys: str = "{}"
 
+    # Gmail connector OAuth (contract: config-and-secrets.md §Gmail). Dev
+    # placeholders keep the flow wireable + testable; real client id/secret and
+    # redirect come from env per deployment.
+    gmail_client_id: str = "dev-gmail-client-id"
+    gmail_client_secret: str = "dev-gmail-client-secret"
+    gmail_redirect: str = "http://localhost:8000/connectors/gmail/oauth/callback"
+    gmail_scope: str = "https://www.googleapis.com/auth/gmail.readonly"
+    oauth_state_ttl_seconds: int = 600
+
 
 settings = Settings()
