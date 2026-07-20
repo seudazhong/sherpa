@@ -21,6 +21,8 @@ from collections import defaultdict
 from sqlalchemy import func, select
 
 from app.audit import ACTION, record_receipt
+from app.config import settings
+from app.core.compaction import compact, should_compact
 from app.effects import begin_invocation, mark_running, settle_failed, settle_succeeded
 from app.events import append_event
 from app.models import Message, Part, Run, Session
@@ -283,6 +285,30 @@ async def execute_run(  # type: ignore[no-untyped-def]
         text_chunks: list[str] = []
         tool_calls: list[ToolCall] = []
         stop_reason: str | None = None
+
+        # Compaction guardrail (docs/04): keep head + recent, verify-shrank, no
+        # orphan tool results. Runs at the top of a turn so the window fed to the
+        # provider stays bounded; session identity is unchanged.
+        if should_compact(provider_messages, settings.compaction_char_budget):
+            result = compact(
+                provider_messages,
+                keep_head=settings.compaction_keep_head,
+                keep_recent=settings.compaction_keep_recent,
+            )
+            if result.shrank:
+                provider_messages = result.messages
+                await append_event(
+                    session,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                    event_type="compaction",
+                    payload={
+                        "before": result.before,
+                        "after": result.after,
+                        "omitted": result.omitted,
+                    },
+                )
 
         async for event in provider.stream(
             messages=provider_messages, tools=registry.schemas(tier)

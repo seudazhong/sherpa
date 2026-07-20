@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     provider_model: str = "claude-sonnet-4.6"
     provider_timeout_seconds: int = 60
 
+    # Transcript compaction (docs/04 core-loop). When the assembled provider
+    # message window exceeds the char budget, keep the head + the most recent
+    # turns and summarize the middle; a compaction that does not shrink is
+    # rejected. Tune down to exercise in tests.
+    compaction_char_budget: int = 24_000
+    compaction_keep_head: int = 2
+    compaction_keep_recent: int = 6
+
     # App/session auth (contract: docs/contracts/config-and-secrets.md §2).
     # Dev defaults keep `uv run`/tests working; production MUST override via env
     # and set session_cookie_secure=true. These values are never logged.
