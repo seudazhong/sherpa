@@ -33,3 +33,12 @@ async def enqueue_gmail_sync(connector_id: uuid.UUID, run_id: uuid.UUID) -> None
         await pool.enqueue_job("gmail_sync_job", str(connector_id), str(run_id))
     finally:
         await pool.aclose()
+
+
+async def enqueue_sync_and_analyze(connector_id: uuid.UUID) -> None:
+    """Enqueue a combined sync+analyze job for a connector (periodic pipeline)."""
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job("sync_and_analyze_job", str(connector_id))
+    finally:
+        await pool.aclose()

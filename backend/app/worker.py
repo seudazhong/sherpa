@@ -10,9 +10,11 @@ import datetime
 import uuid
 from typing import Any
 
+from arq import cron
 from arq.connections import RedisSettings
 from sqlalchemy import select
 
+from app import queue
 from app.config import settings
 from app.connectors.gmail import build_gmail_sync_client
 from app.connectors.sync import sync_gmail
@@ -23,6 +25,8 @@ from app.models import Connector, Run
 from app.observability import bind_context, configure_logging, project_run_trace
 from app.providers import build_provider
 from app.redis_client import client as redis_client
+from app.scheduler import fire_due_schedules, try_acquire_leader
+from app.scheduler.pipeline import sync_and_analyze
 from app.tools import build_default_registry
 
 
@@ -157,8 +161,63 @@ async def _shutdown(ctx: dict[str, Any]) -> None:
         task.cancel()
 
 
+async def sync_and_analyze_job(ctx: dict[str, Any], connector_id: str) -> str:
+    """Sync a connector and analyze its new items into candidates."""
+    async with SessionLocal() as session:
+        connector = (
+            await session.execute(select(Connector).where(Connector.id == uuid.UUID(connector_id)))
+        ).scalar_one_or_none()
+        if connector is None:
+            return "unknown_connector"
+        try:
+            result = await sync_and_analyze(
+                session,
+                connector=connector,
+                sync_client=build_gmail_sync_client(),
+                provider=build_provider(),
+                provider_name=settings.provider_kind,
+                model=settings.provider_model,
+            )
+            await session.commit()
+            return (
+                f"synced={result.synced} analyzed={result.analyzed} candidates={result.candidates}"
+            )
+        except Exception:
+            await session.rollback()
+            return "failed"
+
+
+async def scheduler_tick(ctx: dict[str, Any]) -> str:
+    """Leader-gated: fire all due schedules (at-most-once per slot)."""
+    if not await try_acquire_leader("scheduler_tick", ttl_ms=55_000):
+        return "not_leader"
+    async with SessionLocal() as session:
+        fired = await fire_due_schedules(session, datetime.datetime.now(datetime.UTC))
+        await session.commit()
+    return f"fired={len(fired)}"
+
+
+async def periodic_connector_sync(ctx: dict[str, Any]) -> str:
+    """Leader-gated: enqueue a sync+analyze job for every active connector."""
+    if not await try_acquire_leader("connector_sync", ttl_ms=280_000):
+        return "not_leader"
+    async with SessionLocal() as session:
+        connector_ids = (
+            (await session.execute(select(Connector.id).where(Connector.status == "active")))
+            .scalars()
+            .all()
+        )
+    for cid in connector_ids:
+        await queue.enqueue_sync_and_analyze(cid)
+    return f"enqueued={len(connector_ids)}"
+
+
 class WorkerSettings:
-    functions = [ping, run_job, gmail_sync_job]
+    functions = [ping, run_job, gmail_sync_job, sync_and_analyze_job]
+    cron_jobs = [
+        cron(scheduler_tick, second=0),
+        cron(periodic_connector_sync, minute=set(range(0, 60, 5))),
+    ]
     on_startup = _startup
     on_shutdown = _shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

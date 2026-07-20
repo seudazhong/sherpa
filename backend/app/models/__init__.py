@@ -17,6 +17,7 @@ from app.models.core import (
 from app.models.effects import EffectInvocation
 from app.models.events import EventJournal, Outbox
 from app.models.observability import Trace
+from app.models.schedules import Schedule, ScheduleFiring
 
 __all__ = [
     "Base",
@@ -37,4 +38,6 @@ __all__ = [
     "Generation",
     "Candidate",
     "Todo",
+    "Schedule",
+    "ScheduleFiring",
 ]
