@@ -141,3 +141,10 @@ class Connector(StrictModel):
     version: int
     created_at: datetime.datetime
     updated_at: datetime.datetime
+
+
+class ConnectorAdmission(StrictModel):
+    connector_id: uuid.UUID
+    run_id: uuid.UUID
+    state: Literal["queued"] = "queued"
+    admitted_at: datetime.datetime

@@ -20,7 +20,7 @@ from app.config import settings
 from app.connectors.gmail import get_gmail_client
 from app.db import SessionLocal, ping_db
 from app.main import app
-from app.models import Connector
+from app.models import Connector, Run
 from app.redis_client import ping_redis
 from app.security import (
     ConnectorSeal,
@@ -56,7 +56,7 @@ async def _drop_owner() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gmail_oauth_round_trip_and_disconnect() -> None:
+async def test_gmail_oauth_round_trip_and_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
     if not await ping_db() or not await ping_redis():
         pytest.skip("database or redis not reachable")
 
@@ -105,6 +105,29 @@ async def test_gmail_oauth_round_trip_and_disconnect() -> None:
             assert conn["account_email"] == "owner@gmail.com"
             assert settings.gmail_scope in conn["granted_scopes"]
             connector_id = conn["id"]
+
+            # durable sync admission -> 202 + a queued gmail_sync run
+            enqueued: list[tuple[str, str]] = []
+
+            async def _fake_enqueue(cid: uuid.UUID, rid: uuid.UUID) -> None:
+                enqueued.append((str(cid), str(rid)))
+
+            monkeypatch.setattr("app.api.connectors.queue.enqueue_gmail_sync", _fake_enqueue)
+            sync = await client.post(f"/connectors/{connector_id}/sync", headers=headers)
+            assert sync.status_code == 202
+            adm = sync.json()
+            assert adm["state"] == "queued"
+            assert len(enqueued) == 1 and enqueued[0][0] == connector_id
+            tid_run, _ = owner_ids()
+            async with SessionLocal() as s:
+                run = (
+                    await s.execute(
+                        select(Run).where(
+                            Run.tenant_id == tid_run, Run.id == uuid.UUID(adm["run_id"])
+                        )
+                    )
+                ).scalar_one()
+                assert run.run_kind == "gmail_sync" and run.status == "queued"
 
             # the stored token is encrypted and unseals to the original tokens
             tid, _ = owner_ids()

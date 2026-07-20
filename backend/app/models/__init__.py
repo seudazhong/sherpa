@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.models.base import Base
-from app.models.connectors import Connector
+from app.models.connectors import Connector, ConnectorItem
 from app.models.core import (
     Identity,
     Message,
@@ -31,4 +31,5 @@ __all__ = [
     "EffectInvocation",
     "Trace",
     "Connector",
+    "ConnectorItem",
 ]

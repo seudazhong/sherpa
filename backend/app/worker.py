@@ -14,10 +14,12 @@ from arq.connections import RedisSettings
 from sqlalchemy import select
 
 from app.config import settings
+from app.connectors.gmail import build_gmail_sync_client
+from app.connectors.sync import sync_gmail
 from app.core import execute_run
 from app.db import SessionLocal
 from app.events import append_event, relay_once
-from app.models import Run
+from app.models import Connector, Run
 from app.observability import bind_context, configure_logging, project_run_trace
 from app.providers import build_provider
 from app.redis_client import client as redis_client
@@ -56,6 +58,48 @@ async def _settle_failed(
             payload={"reason": "failed", "status": "failed"},
         )
         await session.commit()
+
+
+async def gmail_sync_job(ctx: dict[str, Any], connector_id: str, run_id: str) -> str:
+    """Run a Gmail sync for a connector under a durable gmail_sync run."""
+    cid, rid = uuid.UUID(connector_id), uuid.UUID(run_id)
+    async with SessionLocal() as session:
+        run = (await session.execute(select(Run).where(Run.id == rid))).scalar_one_or_none()
+        connector = (
+            await session.execute(select(Connector).where(Connector.id == cid))
+        ).scalar_one_or_none()
+        if run is None or connector is None:
+            return "unknown"
+        tenant_id, session_id = run.tenant_id, run.session_id
+        bind_context(tenant_id=str(tenant_id), run_id=str(rid))
+        try:
+            run.status = "running"
+            run.started_at = datetime.datetime.now(datetime.UTC)
+            await session.flush()
+            result = await sync_gmail(
+                session, connector=connector, client=build_gmail_sync_client()
+            )
+            run.status = "succeeded"
+            run.settled_at = datetime.datetime.now(datetime.UTC)
+            await session.flush()
+            await append_event(
+                session,
+                tenant_id=tenant_id,
+                run_id=rid,
+                session_id=session_id,
+                event_type="run.settled",
+                payload={
+                    "reason": "completed",
+                    "status": "succeeded",
+                    "new_items": result.new_items,
+                },
+            )
+            await session.commit()
+            return "completed"
+        except Exception:
+            await session.rollback()
+            await _settle_failed(tenant_id, rid, session_id)
+            return "failed"
 
 
 async def run_job(ctx: dict[str, Any], run_id: str) -> str:
@@ -114,7 +158,7 @@ async def _shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions = [ping, run_job]
+    functions = [ping, run_job, gmail_sync_job]
     on_startup = _startup
     on_shutdown = _shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

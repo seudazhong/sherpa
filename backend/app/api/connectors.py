@@ -18,10 +18,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import queue
 from app.api.schemas import (
     Connector as ConnectorSchema,
 )
 from app.api.schemas import (
+    ConnectorAdmission,
     ConnectorSyncStatus,
     GmailConnectRequest,
     GmailSyncScope,
@@ -38,7 +40,7 @@ from app.connectors.oauth_state import (
     new_code_verifier,
 )
 from app.db import get_session
-from app.models import Connector
+from app.models import Connector, Run
 from app.security import ConnectorTokenIdentity, load_keyring, seal_connector_token
 
 router = APIRouter(tags=["connectors"])
@@ -211,3 +213,38 @@ async def disconnect_connector(
     row.updated_at = datetime.datetime.now(datetime.UTC)
     await db.commit()
     return _to_schema(row)
+
+
+@router.post("/connectors/{connector_id}/sync", status_code=status.HTTP_202_ACCEPTED)
+async def sync_connector(
+    connector_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ConnectorAdmission:
+    row = await db.get(Connector, (ctx.tenant_id, connector_id))
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="connector not found")
+    if row.status == "paused":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="connector_paused")
+    if row.status not in ("active", "degraded", "error"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="connector_not_ready")
+
+    run_id = uuid.uuid4()
+    db.add(
+        Run(
+            tenant_id=ctx.tenant_id,
+            id=run_id,
+            session_id=None,
+            run_kind="gmail_sync",
+            status="queued",
+            prompt_version="gmail_sync.v1",
+        )
+    )
+    await db.commit()
+    await queue.enqueue_gmail_sync(connector_id, run_id)
+    return ConnectorAdmission(
+        connector_id=connector_id,
+        run_id=run_id,
+        state="queued",
+        admitted_at=datetime.datetime.now(datetime.UTC),
+    )
