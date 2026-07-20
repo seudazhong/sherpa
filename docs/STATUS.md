@@ -25,11 +25,11 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**M2 #17 — Candidate lifecycle + Inbox UI**: `GET /candidates`, accept/edit/dismiss endpoints that atomically create a `todo` (migration for `todos` + the deferred `fk_candidates_accepted_todo` link), and reshape the UI into a personal Candidate Inbox. Depends on #16 (done).
+**M2 #18 — Scheduler + periodic sync/analysis**: an arq cron leader (`SET NX` lock), at-least-once firing via the outbox, and a periodic job that runs Gmail sync then extraction (wiring `gmail_sync_job` → `run_extraction` for new items). See `docs/06`, ADR-017. (`schedules`/`schedule_firings` tables land here.)
 
 ## In progress
-**M2 — Personal Inbox-to-Action.** Done: real provider, #14 Gmail OAuth, #15 Gmail sync → `connector_items`, **#16 CONNECTOR_ANALYSIS extraction → `candidates`** (no-tool structured output; provenance chain; golden + live real-model verified). #17 next — candidate accept/dismiss → todos + inbox UI.
-Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0008`; `--env-file .env` enables the real model). Note: `uv run pytest` wipes the owner tenant → re-login in the browser (the app self-heals to /login).
+**M2 — Personal Inbox-to-Action.** Done: real provider, #14 Gmail OAuth, #15 sync → `connector_items`, #16 extraction → `candidates`, **#17 candidate lifecycle + Inbox UI** (accept → atomic linked `todo`; dismiss; version-guarded; Candidate Inbox view). The full Gmail→candidate→todo path is UI-verified. #18 next — schedule the sync+analysis so candidates appear automatically.
+Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0009`; `--env-file .env` enables the real model). Note: `uv run pytest` wipes the owner tenant → re-login in the browser (the app self-heals to /login).
 
 ## Blockers
 - **None for M1.** M1 runs on the **mock provider** and needs no external accounts.
@@ -57,7 +57,8 @@ Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -
 | M2 #14 connector base + Gmail read-only OAuth | ✅ done |
 | M2 #15 Gmail incremental sync → connector_items | ✅ done |
 | M2 #16 CONNECTOR_ANALYSIS extraction → candidates | ✅ done |
-| M2 #17–22 candidate lifecycle → todo → reminder | ⬜ next |
+| M2 #17 candidate lifecycle + Inbox UI | ✅ done |
+| M2 #18–22 scheduler → notifications → approval → receipts → compaction | ⬜ next |
 
 ## How to update
 On finishing a task: set its row ✅, move "Next ready", note anything a future agent must know (schema changes, new commands, gotchas), bump "Last updated", and commit (the STATUS bump can ride with the task commit).
