@@ -74,9 +74,16 @@ def build_default_registry() -> ToolRegistry:
     registry.register(SendEmailTool(), safe=False)
     from app.tools.candidate_tools import candidate_tools
     from app.tools.connector_tools import connector_tools
+    from app.tools.insight_tools import insight_tools
     from app.tools.schedule_tools import schedule_tools
     from app.tools.todo_tools import todo_tools
 
-    for tool in [*candidate_tools(), *todo_tools(), *connector_tools(), *schedule_tools()]:
+    for tool in [
+        *candidate_tools(),
+        *todo_tools(),
+        *connector_tools(),
+        *schedule_tools(),
+        *insight_tools(),
+    ]:
         registry.register(tool, safe=False)  # type: ignore[arg-type]
     return registry
