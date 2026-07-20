@@ -15,6 +15,9 @@ export default defineConfig({
     proxy: {
       "/auth": target,
       "/sessions": target,
+      "/connectors": target,
+      "/candidates": target,
+      "/todos": target,
       "/health": target,
       "/readyz": target,
     },
