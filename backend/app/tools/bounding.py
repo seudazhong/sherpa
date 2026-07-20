@@ -1,13 +1,16 @@
-"""Output bounding at the model boundary (docs/05; ~2000 lines / 50 KiB).
+"""Output bounding + spill at the model boundary (docs/05, api.md §7.2; 2000 lines
+/ 50 KiB).
 
 Oversized tool output is trimmed to head+tail with a truncation marker so it never
-blows the context window. A physical spill-to-file store lands with the workspace
-task; for now bounded output carries the original counts + a truncation flag.
+blows the context window, and the full redacted result is spilled to a per-invocation
+file (`TOOL_OUTPUT_ROOT/{invocation_id}.txt`) referenced from the bounded preview.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import pathlib
+import uuid
 
 MAX_LINES = 2000
 MAX_BYTES = 50 * 1024
@@ -35,3 +38,14 @@ def bound_text(text: str, max_lines: int = MAX_LINES, max_bytes: int = MAX_BYTES
     if len(preview.encode("utf-8")) > max_bytes:
         preview = preview.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
     return BoundedOutput(preview, True, len(lines), len(raw))
+
+
+def spill_output(root: str, invocation_id: uuid.UUID, full_text: str) -> str:
+    """Write the full redacted output to a per-invocation file; return a spill ref.
+
+    Callers pass already-redacted text (never secrets/tokens/hidden prompts).
+    """
+    path = pathlib.Path(root) / f"{invocation_id}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(full_text, encoding="utf-8")
+    return f"tool-output:{invocation_id}"

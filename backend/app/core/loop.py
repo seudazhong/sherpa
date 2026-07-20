@@ -29,7 +29,7 @@ from app.models import Message, Part, Run, Session
 from app.permissions import policy as perm_policy
 from app.permissions import request_approval
 from app.providers import Finish, Provider, TextDelta, ToolCall
-from app.tools import FULL, ToolContext, ToolError, ToolRegistry, bound_text
+from app.tools import FULL, ToolContext, ToolError, ToolRegistry, bound_text, spill_output
 
 SYSTEM_PROMPT = "You are Sherpa, a careful assistant. Use tools when needed; be concise."
 
@@ -254,8 +254,20 @@ async def _run_tool(  # type: ignore[no-untyped-def]
         result = await tool.execute(tool_ctx, call.args)
         bounded = bound_text(result.llm_content)
         output = bounded.text
+        spill_ref: str | None = None
+        if bounded.truncated:
+            spill_ref = spill_output(
+                settings.tool_output_root, handle.invocation_id, result.llm_content
+            )
+            output = (
+                f"{bounded.text}\n[full output spilled: {spill_ref} · "
+                f"{bounded.original_lines} lines / {bounded.original_bytes} bytes]"
+            )
         await settle_succeeded(
-            session, run.tenant_id, handle.invocation_id, result={"truncated": bounded.truncated}
+            session,
+            run.tenant_id,
+            handle.invocation_id,
+            result={"truncated": bounded.truncated, "spill_ref": spill_ref},
         )
     except ToolError as exc:
         ok = False

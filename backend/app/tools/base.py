@@ -41,9 +41,21 @@ class ToolContext:
 
 
 @dataclasses.dataclass(frozen=True)
+class DisplayPayload:
+    """User-facing tool projection (api.md §7): a format + bounded content.
+
+    Separately sanitized from `llm_content`; never fed back to the model and never
+    trusted as executable markup by a renderer.
+    """
+
+    format: str  # "text" | "markdown" | "json"
+    content: object
+
+
+@dataclasses.dataclass(frozen=True)
 class ToolResult:
     llm_content: str
-    return_display: str | None = None
+    return_display: DisplayPayload | None = None
 
 
 @dataclasses.dataclass(frozen=True)

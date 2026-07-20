@@ -68,3 +68,23 @@ async def test_get_time_executes() -> None:
     reg = build_default_registry()
     result = await reg.get("get_time").execute(_ctx(), {})
     assert "T" in result.llm_content
+
+
+def test_spill_output_writes_full_file(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from app.tools import spill_output
+
+    iid = uuid.uuid4()
+    ref = spill_output(str(tmp_path), iid, "line\n" * 5000)
+    assert ref == f"tool-output:{iid}"
+    spilled = tmp_path / f"{iid}.txt"
+    assert spilled.exists()
+    assert spilled.read_text(encoding="utf-8").count("line") == 5000
+
+
+def test_display_payload_on_tool_result() -> None:
+    from app.tools import DisplayPayload, ToolResult
+
+    r = ToolResult(llm_content="x", return_display=DisplayPayload(format="json", content={"a": 1}))
+    assert r.return_display is not None
+    assert r.return_display.format == "json"
+    assert ToolResult(llm_content="y").return_display is None

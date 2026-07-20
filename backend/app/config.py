@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     compaction_keep_head: int = 2
     compaction_keep_recent: int = 6
 
+    # Tool output spill (api.md §7.2). Oversized tool output (>2000 lines / 50 KB)
+    # is written here as {invocation_id}.txt and replaced with a head/tail summary.
+    tool_output_root: str = ".sherpa/tool-output"
+
     # App/session auth (contract: docs/contracts/config-and-secrets.md §2).
     # Dev defaults keep `uv run`/tests working; production MUST override via env
     # and set session_cookie_secure=true. These values are never logged.
