@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime
 
-from app.tools.base import ToolFlags, ToolResult
+from app.tools.base import ToolContext, ToolFlags, ToolResult
 from app.tools.registry import ToolRegistry
 from app.tools.validate import validate_args
 
@@ -24,7 +24,7 @@ class EchoTool:
     }
     flags = ToolFlags()
 
-    async def execute(self, args: dict[str, object]) -> ToolResult:
+    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
         validate_args(self.input_schema, args)
         return ToolResult(llm_content=str(args["text"]))
 
@@ -35,7 +35,7 @@ class GetTimeTool:
     input_schema: dict[str, object] = {"type": "object", "properties": {}}
     flags = ToolFlags()
 
-    async def execute(self, args: dict[str, object]) -> ToolResult:
+    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
         validate_args(self.input_schema, args)
         now = datetime.datetime.now(datetime.UTC).isoformat()
         return ToolResult(llm_content=now)
@@ -61,7 +61,7 @@ class SendEmailTool:
     }
     flags = ToolFlags(is_read_only=False, is_concurrency_safe=False, is_destructive=True)
 
-    async def execute(self, args: dict[str, object]) -> ToolResult:
+    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
         validate_args(self.input_schema, args)
         # Only reachable after an approval grant resumes the invocation (post-v1).
         return ToolResult(llm_content=f"email sent to {args['to']}")

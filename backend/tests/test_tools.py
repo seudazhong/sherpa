@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
-from app.tools import ToolError, bound_text, build_default_registry, validate_args
+from app.tools import ToolContext, ToolError, bound_text, build_default_registry, validate_args
+
+
+def _ctx() -> ToolContext:
+    return ToolContext(tenant_id=uuid.uuid4(), user_id=uuid.uuid4())
 
 
 def test_validate_missing_required() -> None:
@@ -53,12 +59,12 @@ def test_unknown_tool_raises() -> None:
 @pytest.mark.asyncio
 async def test_echo_executes() -> None:
     reg = build_default_registry()
-    result = await reg.get("echo").execute({"text": "hello"})
+    result = await reg.get("echo").execute(_ctx(), {"text": "hello"})
     assert result.llm_content == "hello"
 
 
 @pytest.mark.asyncio
 async def test_get_time_executes() -> None:
     reg = build_default_registry()
-    result = await reg.get("get_time").execute({})
+    result = await reg.get("get_time").execute(_ctx(), {})
     assert "T" in result.llm_content

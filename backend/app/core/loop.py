@@ -29,7 +29,7 @@ from app.models import Message, Part, Run, Session
 from app.permissions import policy as perm_policy
 from app.permissions import request_approval
 from app.providers import Finish, Provider, TextDelta, ToolCall
-from app.tools import FULL, ToolError, ToolRegistry, bound_text
+from app.tools import FULL, ToolContext, ToolError, ToolRegistry, bound_text
 
 SYSTEM_PROMPT = "You are Sherpa, a careful assistant. Use tools when needed; be concise."
 
@@ -219,9 +219,17 @@ async def _run_tool(  # type: ignore[no-untyped-def]
         return
 
     await mark_running(session, run.tenant_id, handle.invocation_id)
+    tool_ctx = ToolContext(
+        tenant_id=run.tenant_id,
+        user_id=decider_user_id,
+        session_id=run.session_id,
+        run_id=run.id,
+        invocation_id=handle.invocation_id,
+        deadline=run.deadline_at,
+    )
     ok = True
     try:
-        result = await tool.execute(call.args)
+        result = await tool.execute(tool_ctx, call.args)
         bounded = bound_text(result.llm_content)
         output = bounded.text
         await settle_succeeded(

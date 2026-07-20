@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.tools.base import Tool, ToolError, ToolFlags, ToolResult
+from app.tools.base import Tool, ToolContext, ToolError, ToolFlags, ToolResult
 from app.tools.bounding import BoundedOutput, bound_text
 from app.tools.builtin import EchoTool, GetTimeTool, build_default_registry
 from app.tools.registry import FULL, SAFE, ToolRegistry
@@ -10,6 +10,7 @@ from app.tools.validate import validate_args
 
 __all__ = [
     "Tool",
+    "ToolContext",
     "ToolResult",
     "ToolFlags",
     "ToolError",
