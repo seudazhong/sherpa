@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-20 · Phase: **M2 complete (Personal Inbox-to-Action)**. M1 complete. The full IMPLEMENTATION.md backlog (M1 #1–13 + M2 #14–22) is shipped; **M3 (eval harness) is the next phase but not yet broken into tasks**.
+> Last updated: 2026-07-20 · Phase: **M-tools complete (Agent tool surface)**. M1 + M2 complete. The agent can now drive candidates, todos, connectors (sync), schedules, and settings via chat tools (ADR-023). Next: v1 wrap-up (approval closure + M3) and the post-v1 milestones in `09-roadmap.md`.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -12,7 +12,7 @@ The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) 
 The **design + contracts + runnable skeleton** are done, and the **v1 durable spine (M1) is complete and verified end-to-end**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, the REST auth + session/message surface, the credential vault (AEAD/KEK), run traces + structured logging, and the web chat client (#1–#13) are all implemented and green. A live smoke (login → session → prompt → real arq worker loop → outbox relay → SSE `run.settled` → persisted transcript) passes. Next: **M2 — Personal Inbox-to-Action (Gmail → candidate → todo → reminder)**.
 
 ## Verified state
-- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **61 passed** (needs Postgres+Redis up; vault/formatter/compaction-unit tests need neither) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic `0013`.
+- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **88 passed** (needs Postgres+Redis up; vault/formatter/compaction/spill-unit tests need neither) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic `0014`.
 - **Frontend** (`frontend/`): Vite+React+TS SPA (login + chat). `npm install` done, `npm run build` + `npm run lint` green. `package-lock.json` committed.
 - **Runtime**: web (`uv run uvicorn app.main:app`) + worker (`uv run arq app.worker.WorkerSettings`, runs the run loop + outbox relay) verified live against docker Postgres+Redis.
 - **Infra**: `infra/docker-compose.yml` (postgres+redis+web+worker+frontend) defined. **CI**: `.github/workflows/ci.yml` (backend uv lint/type/test + frontend build).
@@ -25,12 +25,14 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**Agent tool surface (Phase M-tools) — design drafted, pending review.** Per ADR-023 the agent must be able to drive every UI capability via tools (shared service layer + REST/Tool dual adapters). Design + capability matrix + templates: [`11-agent-tool-surface.md`](11-agent-tool-surface.md); tasks T1–T8 in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). Start with **T1 (ToolContext + CallerContext + service scaffolding)**, then T2 (ALLOWED policy engine), then per-capability vertical slices.
-The prior "M3 eval harness" remains deferred/unspecced; M-tools is now the active next phase (user priority: agent autonomy over the UI surface).
+**M-tools is complete** (T1–T8: ToolContext + capability layer, ALLOWED policy engine, and candidate/todo/connector/schedule/read-settings tools + output spill). The agent can drive every own-data UI capability via chat, permission-gated. Two ready directions:
+1. **v1 approval closure** — web approve/reject renderer + run resume so the agent's external actions (`send_email`) complete end-to-end (the channel-agnostic base per `09-roadmap.md`).
+2. **M3 eval harness** — extraction-precision goldens + regression dataset (deferred; unspecced).
+Then the **post-v1 milestones** in `09-roadmap.md` (memory → files → sandbox → IM → agentic email → cron → GitHub → …), in the owner's chosen order.
 
 ## In progress
-_Nothing in progress — M2 shipped._ **M2 — Personal Inbox-to-Action** is complete: real provider, #14 Gmail OAuth, #15 sync, #16 extraction, #17 candidate Inbox, #18 scheduler, #19 notifications, #20 permission engine + approval envelope (gate `send_email`), #21 activity receipts + data controls (`/data`), #22 transcript compaction. Full Gmail→candidate→todo→[schedule→notify] pipeline, approval-gated external actions, an activity ledger with export/delete, and window compaction all land.
-Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0013`; `--env-file .env` enables the real model). Note: `uv run pytest` wipes the owner tenant → re-login in the browser (the app self-heals to /login). **SPA routes must not collide with an API proxy prefix** (Activity UI lives at `/data`, not `/activity`).
+_Nothing in progress._ **M-tools shipped** (ADR-023, [`11-agent-tool-surface.md`](11-agent-tool-surface.md)): app/services/ capability layer + REST/Tool dual adapters; the agent tools = list/accept/edit/dismiss candidates, create/update/complete/list todos (+ POST /todos, migration 0014 for standalone agent todos), list/sync connectors, create/list/cancel reminders + digests (+ /schedules REST), list notifications/activity + get/update settings; ALLOWED policy engine (own-data writes allowed, external actions ask); tool output spill.
+Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0014`; `--env-file .env` enables the real model). Note: `uv run pytest` wipes the owner tenant → re-login in the browser. **SPA routes must not collide with an API proxy prefix** (Activity UI lives at `/data`).
 
 ## Blockers
 - **None for M1.** M1 runs on the **mock provider** and needs no external accounts.
@@ -64,8 +66,9 @@ Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -
 | M2 #20 permission engine + approval envelope (gate send_email) | ✅ done |
 | M2 #21 activity receipts + data controls (export/delete) | ✅ done |
 | M2 #22 transcript compaction | ✅ done |
+| M-tools T1–T8 agent tool surface (candidates/todos/connectors/schedules/settings + spill) | ✅ done |
 
-**M2 complete — full M1+M2 backlog shipped.** Next named phase: M3 eval harness (deferred, unspecced).
+**M2 + M-tools complete.** Next: v1 approval closure (renderer + run resume) / M3 eval harness; then post-v1 milestones (`09-roadmap.md`).
 
 ## How to update
 On finishing a task: set its row ✅, move "Next ready", note anything a future agent must know (schema changes, new commands, gotchas), bump "Last updated", and commit (the STATUS bump can ride with the task commit).
