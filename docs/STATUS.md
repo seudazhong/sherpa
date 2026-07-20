@@ -25,11 +25,11 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**M2 #14 — Connector base + Gmail read-only OAuth**: `connectors`/`connector_items` tables, OAuth connect/disconnect endpoints, token sealed via the M1 AEAD vault; tested with a mocked Google. First real external connector. (Real model provider is already wired — see above.)
+**M2 #15 — Gmail incremental sync → `connector_items`** (migration for `connector_items`, a Gmail sync job with a durable cursor + dedupe, idempotent re-sync). Depends on #14 (done). Uses the sealed connector token (unseal via the connector-vault capability) to call Gmail; a fake Gmail client keeps tests offline.
 
 ## In progress
-**None — M1 is complete.** Ready to start M2 (Gmail → candidate → todo → reminder). M2 introduces the first real external connector, so confirm the open impl params first.
-Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schema at alembic `0005`).
+**M2 — Personal Inbox-to-Action.** Done: real provider (m2-provider), **#14 Gmail connector base + read-only OAuth** (connect/callback/list/disconnect; PKCE + signed single-use state; token sealed under the KEK; live + fake-Google tests). Also fixed a real-model tool-loop (proper `role:tool` protocol). #15 next — pull Gmail messages into `connector_items`.
+Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0006`; `--env-file .env` enables the real model).
 
 ## Blockers
 - **None for M1.** M1 runs on the **mock provider** and needs no external accounts.
@@ -53,7 +53,10 @@ Dev DB: `docker compose -f infra/docker-compose.yml up -d postgres redis` (schem
 | M1 #12 observability | ✅ done |
 | M1 #13 frontend chat | ✅ done |
 | **M1 exit** (web prompt → loop → SSE → transcript; live-verified) | ✅ **met** |
-| M2 #14–22 Gmail→candidate→todo→reminder | ⬜ next |
+| M2 provider — real OpenAI-compatible (litellm/Copilot) | ✅ done |
+| M2 #14 connector base + Gmail read-only OAuth | ✅ done |
+| M2 #15 Gmail incremental sync → connector_items | ⬜ next |
+| M2 #16–22 extraction → candidate → todo → reminder | ⬜ |
 
 ## How to update
 On finishing a task: set its row ✅, move "Next ready", note anything a future agent must know (schema changes, new commands, gotchas), bump "Last updated", and commit (the STATUS bump can ride with the task commit).
