@@ -129,6 +129,40 @@ export interface NotificationPage {
   next_cursor: string | null;
 }
 
+export interface ApprovalPreviewDetail {
+  label: string;
+  value: string;
+}
+
+export interface ApprovalPreview {
+  action: string;
+  summary: string;
+  details: ApprovalPreviewDetail[];
+  risk: string | null;
+}
+
+export interface PendingApproval {
+  correlation_id: string;
+  tenant_id: string;
+  run_id: string;
+  session_id: string;
+  invocation_id: string;
+  tool_name: string;
+  permission_scope: string;
+  effect_class: string;
+  policy_version: string;
+  normalized_args_hash: string;
+  human_readable_preview: ApprovalPreview;
+  authorized_actor: { type: string; id: string };
+  expires_at: string;
+  requested_at: string;
+}
+
+export interface PendingApprovalPage {
+  items: PendingApproval[];
+  next_cursor: string | null;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -187,6 +221,7 @@ export const api = {
   patchTodo: (csrf: string, id: string, patch: Record<string, unknown>) =>
     req<Todo>(`/todos/${id}`, jsonInit("PATCH", csrf, patch)),
   listNotifications: () => req<NotificationPage>("/notifications"),
+  listPermissions: () => req<PendingApprovalPage>("/permissions"),
 };
 
 export function eventsUrl(sid: string, cursor: string | number): string {

@@ -22,7 +22,9 @@ from sqlalchemy import func, select
 
 from app.effects import begin_invocation, mark_running, settle_failed, settle_succeeded
 from app.events import append_event
-from app.models import Message, Part, Run
+from app.models import Message, Part, Run, Session
+from app.permissions import policy as perm_policy
+from app.permissions import request_approval
 from app.providers import Finish, Provider, TextDelta, ToolCall
 from app.tools import FULL, ToolError, ToolRegistry, bound_text
 
@@ -124,7 +126,26 @@ async def _run_tool(  # type: ignore[no-untyped-def]
     call: ToolCall,
     registry: ToolRegistry,
     provider_messages: list[dict[str, object]],
+    *,
+    decider_user_id: uuid.UUID | None,
 ) -> None:
+    try:
+        tool = registry.get(call.name)
+    except ToolError as exc:
+        await append_event(
+            session,
+            tenant_id=run.tenant_id,
+            run_id=run.id,
+            session_id=run.session_id,
+            event_type="tool-error",
+            payload={"id": call.id, "name": call.name, "ok": False, "output": f"error: {exc}"},
+        )
+        provider_messages.append(
+            {"role": "tool", "tool_call_id": call.id, "content": f"error: {exc}"}
+        )
+        return
+
+    effect_class = perm_policy.classify_effect(tool.flags)
     key = f"tool:{run.id}:{turn}:{call.id}"
     handle = await begin_invocation(
         session,
@@ -132,15 +153,56 @@ async def _run_tool(  # type: ignore[no-untyped-def]
         run_id=run.id,
         effect_name=call.name,
         idempotency_key=key,
-        effect_class="read_only",
+        effect_class=effect_class,
         retry_policy="transient_before_dispatch",
         args=call.args,
         turn_seq=turn,
     )
+
+    # Permission gate (ADR-020): a non-read-only action is not dispatched without an
+    # approval. Persist a pending envelope bound to this invocation, surface the ask,
+    # and feed the model a bounded observation that the action was NOT performed.
+    if perm_policy.requires_approval(tool) and decider_user_id is not None:
+        created = await request_approval(
+            session,
+            tenant_id=run.tenant_id,
+            run_id=run.id,
+            session_id=run.session_id,  # type: ignore[arg-type]
+            invocation_id=handle.invocation_id,
+            tool_name=tool.name,
+            effect_class=effect_class,
+            args=call.args,
+            decider_user_id=decider_user_id,
+        )
+        env = created.envelope
+        await append_event(
+            session,
+            tenant_id=run.tenant_id,
+            run_id=run.id,
+            session_id=run.session_id,
+            event_type="permission.asked",
+            payload={
+                "correlation_id": str(env.correlation_id),
+                "tool_name": env.tool_name,
+                "permission_scope": env.permission_scope,
+                "effect_class": env.effect_class,
+                "preview": env.preview_redacted,
+                "expires_at": env.expires_at.isoformat(),
+                "nonce": created.nonce,
+            },
+        )
+        observation = (
+            f"permission_required: approval requested for {tool.name} "
+            f"(correlation {env.correlation_id}); the action was NOT performed and awaits "
+            "the user's decision."
+        )
+        provider_messages.append({"role": "tool", "tool_call_id": call.id, "content": observation})
+        return
+
     await mark_running(session, run.tenant_id, handle.invocation_id)
     ok = True
     try:
-        result = await registry.get(call.name).execute(call.args)
+        result = await tool.execute(call.args)
         bounded = bound_text(result.llm_content)
         output = bounded.text
         await settle_succeeded(
@@ -175,6 +237,9 @@ async def execute_run(  # type: ignore[no-untyped-def]
     if run.session_id is None:
         raise ValueError("execute_run requires a session-bound run")
     tenant_id, run_id, session_id = run.tenant_id, run.id, run.session_id
+    decider_user_id = await session.scalar(
+        select(Session.user_id).where(Session.tenant_id == tenant_id, Session.id == session_id)
+    )
 
     run.status = "running"
     run.started_at = _now()
@@ -266,7 +331,15 @@ async def execute_run(  # type: ignore[no-untyped-def]
         # Stop-reason gate: only dispatch tools on a structured tool_use stop.
         if stop_reason == "tool_use" and tool_calls:
             for call in tool_calls:
-                await _run_tool(session, run, turn, call, registry, provider_messages)
+                await _run_tool(
+                    session,
+                    run,
+                    turn,
+                    call,
+                    registry,
+                    provider_messages,
+                    decider_user_id=decider_user_id,
+                )
             continue
         break
     else:

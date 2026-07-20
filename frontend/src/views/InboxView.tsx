@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api, type Candidate, type Notification, type Todo } from "../api";
+import { api, type Candidate, type Notification, type PendingApproval, type Todo } from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
@@ -21,19 +21,22 @@ export default function InboxView() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = async () => {
     try {
-      const [c, t, n] = await Promise.all([
+      const [c, t, n, p] = await Promise.all([
         api.listCandidates(),
         api.listTodos(),
         api.listNotifications(),
+        api.listPermissions(),
       ]);
       setCandidates(c.items);
       setTodos(t.items);
       setNotifications(n.items);
+      setApprovals(p.items);
     } catch {
       setError("Could not load your inbox. Is the backend running?");
     }
@@ -120,6 +123,37 @@ export default function InboxView() {
                   <button className="btn" disabled={busy === c.id} onClick={() => void dismiss(c)}>
                     Dismiss
                   </button>
+                </div>
+              </article>
+            ))}
+          </section>
+
+          <section>
+            <div className="section-head">
+              Pending approvals <span className="count">{approvals.length}</span>
+            </div>
+            {approvals.length === 0 && (
+              <div className="empty small muted">
+                External actions (like sending email) wait here for your approval.
+              </div>
+            )}
+            {approvals.map((a) => (
+              <article className="cand-card" key={a.correlation_id}>
+                <div className="cand-main">
+                  <div className="cand-title">
+                    <span className="pill pill-error">approval</span> {a.tool_name}
+                  </div>
+                  <div className="cand-desc small muted">{a.human_readable_preview.summary}</div>
+                  <div className="cand-meta small">
+                    {a.human_readable_preview.details.map((d) => (
+                      <span className="muted" key={d.label}>
+                        · {d.label}: {d.value}
+                      </span>
+                    ))}
+                    <span className="muted">
+                      · expires {new Date(a.expires_at).toLocaleString()}
+                    </span>
+                  </div>
                 </div>
               </article>
             ))}

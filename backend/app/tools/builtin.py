@@ -41,8 +41,35 @@ class GetTimeTool:
         return ToolResult(llm_content=now)
 
 
+class SendEmailTool:
+    """First external (non-idempotent) action. Gated by the permission engine:
+    the loop never dispatches it without an approved envelope (ADR-020)."""
+
+    name = "send_email"
+    description = (
+        "Send an email on the user's behalf. This is an external action and requires "
+        "explicit approval before it is sent."
+    )
+    input_schema: dict[str, object] = {
+        "type": "object",
+        "properties": {
+            "to": {"type": "string"},
+            "subject": {"type": "string"},
+            "body": {"type": "string"},
+        },
+        "required": ["to", "subject", "body"],
+    }
+    flags = ToolFlags(is_read_only=False, is_concurrency_safe=False, is_destructive=True)
+
+    async def execute(self, args: dict[str, object]) -> ToolResult:
+        validate_args(self.input_schema, args)
+        # Only reachable after an approval grant resumes the invocation (post-v1).
+        return ToolResult(llm_content=f"email sent to {args['to']}")
+
+
 def build_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(EchoTool(), safe=True)
     registry.register(GetTimeTool(), safe=True)
+    registry.register(SendEmailTool(), safe=False)
     return registry

@@ -14,7 +14,7 @@ from app.models.core import (
     Tenant,
     User,
 )
-from app.models.effects import EffectInvocation
+from app.models.effects import ApprovalEnvelope, EffectInvocation
 from app.models.events import EventJournal, Outbox
 from app.models.observability import Trace
 from app.models.schedules import Schedule, ScheduleFiring
@@ -32,6 +32,7 @@ __all__ = [
     "EventJournal",
     "Outbox",
     "EffectInvocation",
+    "ApprovalEnvelope",
     "Trace",
     "Connector",
     "ConnectorItem",

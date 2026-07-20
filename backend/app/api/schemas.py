@@ -286,3 +286,93 @@ class SettingsPatch(StrictModel):
     timezone: str | None = None
     quiet_hours_enabled: bool | None = None
     daily_cap: Annotated[int, Field(ge=0, le=100)] | None = None
+
+
+# --- Approval envelope (api.md §6) — FROZEN (ADR-020) ---
+EffectClass = Literal[
+    "read_only",
+    "idempotent_write",
+    "reconcilable_write",
+    "non_idempotent_write",
+]
+
+
+class ApprovalActor(StrictModel):
+    type: Literal["user"]
+    id: uuid.UUID
+
+
+class ApprovalBound(StrictModel):
+    tenant_id: uuid.UUID
+    run_id: uuid.UUID
+    invocation_id: uuid.UUID
+
+
+class ApprovalAction(StrictModel):
+    tool_name: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
+    permission_scope: Annotated[str, Field(min_length=1, max_length=512)]
+    session_id: uuid.UUID
+
+
+class ApprovalPreviewDetail(StrictModel):
+    label: Annotated[str, Field(min_length=1, max_length=100)]
+    value: Annotated[str, Field(max_length=1000)]
+
+
+class ApprovalPreview(StrictModel):
+    action: Annotated[str, Field(min_length=1, max_length=200)]
+    summary: Annotated[str, Field(min_length=1, max_length=2000)]
+    details: Annotated[list[ApprovalPreviewDetail], Field(max_length=20)]
+    risk: Annotated[str, Field(max_length=1000)] | None = None
+
+
+class ApprovalDecision(StrictModel):
+    actor: ApprovalActor
+    channel: Literal["web", "qq", "email"]
+    choice: Literal["allow_once", "allow_session", "always", "reject"]
+
+
+class ApprovalEnvelope(StrictModel):
+    schema_version: Literal["1.0"]
+    correlation_id: uuid.UUID
+    bound: ApprovalBound
+    action: ApprovalAction
+    effect_class: EffectClass
+    normalized_args_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    human_readable_preview: ApprovalPreview
+    policy_version: Annotated[str, Field(min_length=1, max_length=200)]
+    expires_at: datetime.datetime
+    nonce: Annotated[str, Field(min_length=43, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
+    authorized_actor: ApprovalActor
+    decision: ApprovalDecision | None
+
+
+class ApprovalResolution(StrictModel):
+    correlation_id: uuid.UUID
+    state: Literal["resolved"]
+    winning_decision: ApprovalDecision
+    decided_at: datetime.datetime
+
+
+class PendingApproval(StrictModel):
+    """Read projection of a pending envelope for the web inbox (no nonce)."""
+
+    correlation_id: uuid.UUID
+    tenant_id: uuid.UUID
+    run_id: uuid.UUID
+    session_id: uuid.UUID
+    invocation_id: uuid.UUID
+    tool_name: str
+    permission_scope: str
+    effect_class: EffectClass
+    policy_version: str
+    normalized_args_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    human_readable_preview: ApprovalPreview
+    authorized_actor: ApprovalActor
+    expires_at: datetime.datetime
+    requested_at: datetime.datetime
+
+
+class PendingApprovalPage(StrictModel):
+    items: list[PendingApproval]
+    next_cursor: str | None
