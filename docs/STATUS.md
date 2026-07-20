@@ -25,11 +25,11 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**M2 #19 — Notifications**: deliver `schedule_firings` (web inbox + outbound digest/reminder email) with opt-in, quiet hours, cap, idempotent send; surface missed/failed/unknown. Consumes the pending firings created by the #18 tick. See ADR-017, `docs/contracts` settings.
+**M2 #20 — Permission engine + approval envelope**: the frozen approval contract (`approval_envelopes` table, `POST /permissions/{id}/resolve`) gating the first external action (send email); once/session/always/reject; first-valid-response-wins. See `docs/contracts/api.md §6`, ADR-020/008. No external dependency.
 
 ## In progress
-**M2 — Personal Inbox-to-Action.** Done: real provider, #14 Gmail OAuth, #15 sync, #16 extraction, #17 candidate Inbox, **#18 scheduler + periodic sync/analyze pipeline** (Redis leader lock, at-most-once firing tick, sync→analyze cron; live-verified). #19 next — deliver firings as reminders/digests.
-Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0010`; `--env-file .env` enables the real model). Note: `uv run pytest` wipes the owner tenant → re-login in the browser (the app self-heals to /login).
+**M2 — Personal Inbox-to-Action.** Done: real provider, #14 Gmail OAuth, #15 sync, #16 extraction, #17 candidate Inbox, #18 scheduler, **#19 notifications** (firing delivery: delivered-once, quiet hours, cap, honest failures; web inbox + settings; email pluggable/stubbed pending an account). #20 next — approval gate for external actions.
+Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0011`; `--env-file .env` enables the real model). Note: `uv run pytest` wipes the owner tenant → re-login in the browser (the app self-heals to /login).
 
 ## Blockers
 - **None for M1.** M1 runs on the **mock provider** and needs no external accounts.
@@ -59,7 +59,8 @@ Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -
 | M2 #16 CONNECTOR_ANALYSIS extraction → candidates | ✅ done |
 | M2 #17 candidate lifecycle + Inbox UI | ✅ done |
 | M2 #18 scheduler + periodic sync/analyze | ✅ done |
-| M2 #19–22 notifications → approval → receipts → compaction | ⬜ next |
+| M2 #19 notifications (delivery + web inbox + settings) | ✅ done |
+| M2 #20–22 approval → receipts → compaction | ⬜ next |
 
 ## How to update
 On finishing a task: set its row ✅, move "Next ready", note anything a future agent must know (schema changes, new commands, gotchas), bump "Last updated", and commit (the STATUS bump can ride with the task commit).
