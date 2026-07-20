@@ -1,9 +1,11 @@
-version: "3.9"
-
-# Sherpa v1 supported stack: Postgres + Redis + web + worker + frontend.
-# MinIO / pgvector are deferred out of v1 (ADR-012/022).
-# One-command dev: `docker compose --env-file .env up --build`
-
+# Sherpa v1 stack: Postgres + Redis + migrate + web + worker + frontend.
+# One command:  docker compose -f infra/docker-compose.yml up --build
+#
+# Boots with safe DEV defaults (owner: owner@localhost / sherpa-dev-password).
+# For a real deployment, copy .env.example -> .env, set real APP_SECRET / KEK /
+# OWNER_* / provider keys, and pass `--env-file .env` (or add env_file back).
+#
+# URLs once up:  UI http://localhost:5173  ·  API http://localhost:8000
 services:
   postgres:
     image: postgres:16
@@ -30,10 +32,19 @@ services:
       timeout: 3s
       retries: 10
 
+  # One-shot: apply DB migrations before web/worker start. Re-runs are no-ops.
+  migrate:
+    build: ../backend
+    command: uv run alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sherpa}:${POSTGRES_PASSWORD:-sherpa}@postgres:5432/${POSTGRES_DB:-sherpa}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres: {condition: service_healthy}
+
   web:
     build: ../backend
     command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
-    env_file: [../.env]
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sherpa}:${POSTGRES_PASSWORD:-sherpa}@postgres:5432/${POSTGRES_DB:-sherpa}
       REDIS_URL: redis://redis:6379/0
@@ -41,21 +52,23 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
 
   worker:
     build: ../backend
     command: uv run arq app.worker.WorkerSettings
-    env_file: [../.env]
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sherpa}:${POSTGRES_PASSWORD:-sherpa}@postgres:5432/${POSTGRES_DB:-sherpa}
       REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
 
   frontend:
     build: ../frontend
-    command: npm run dev -- --host
+    environment:
+      VITE_API_PROXY: http://web:8000
     ports: ["5173:5173"]
     depends_on: [web]
 
