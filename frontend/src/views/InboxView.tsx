@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api, type Candidate, type Todo } from "../api";
+import { api, type Candidate, type Notification, type Todo } from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
@@ -10,18 +10,30 @@ function priorityPill(priority: string): string {
   return "pill pill-running";
 }
 
+function outcomePill(outcome: string | null): string {
+  if (outcome === "delivered") return "pill pill-success";
+  if (outcome === "missed") return "pill pill-idle";
+  return "pill pill-error";
+}
+
 export default function InboxView() {
   const { csrf } = useAuth();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = async () => {
     try {
-      const [c, t] = await Promise.all([api.listCandidates(), api.listTodos()]);
+      const [c, t, n] = await Promise.all([
+        api.listCandidates(),
+        api.listTodos(),
+        api.listNotifications(),
+      ]);
       setCandidates(c.items);
       setTodos(t.items);
+      setNotifications(n.items);
     } catch {
       setError("Could not load your inbox. Is the backend running?");
     }
@@ -129,6 +141,28 @@ export default function InboxView() {
                 {t.due_at && (
                   <span className="small muted">due {new Date(t.due_at).toLocaleDateString()}</span>
                 )}
+              </article>
+            ))}
+          </section>
+
+          <section>
+            <div className="section-head">
+              Notifications <span className="count">{notifications.length}</span>
+            </div>
+            {notifications.length === 0 && (
+              <div className="empty small muted">
+                Reminders and digests appear here once schedules fire.
+              </div>
+            )}
+            {notifications.map((n) => (
+              <article className="todo-row" key={n.firing_id}>
+                <span className={outcomePill(n.delivery_outcome)}>
+                  {n.delivery_outcome ?? n.status}
+                </span>
+                <span className="todo-title">{n.schedule_name}</span>
+                <span className="small muted">
+                  {n.channel} · {new Date(n.scheduled_for).toLocaleString()}
+                </span>
               </article>
             ))}
           </section>

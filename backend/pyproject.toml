@@ -15,6 +15,7 @@ dependencies = [
     "arq>=0.26",
     "redis>=5.0",
     "cryptography>=42.0",
+    "tzdata>=2024.1",
 ]
 
 [dependency-groups]

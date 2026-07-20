@@ -113,6 +113,22 @@ export interface TodoPage {
   next_cursor: string | null;
 }
 
+export interface Notification {
+  firing_id: string;
+  schedule_id: string;
+  schedule_name: string;
+  channel: string;
+  scheduled_for: string;
+  status: string;
+  delivery_outcome: string | null;
+  settled_at: string | null;
+}
+
+export interface NotificationPage {
+  items: Notification[];
+  next_cursor: string | null;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -170,6 +186,7 @@ export const api = {
   listTodos: () => req<TodoPage>("/todos"),
   patchTodo: (csrf: string, id: string, patch: Record<string, unknown>) =>
     req<Todo>(`/todos/${id}`, jsonInit("PATCH", csrf, patch)),
+  listNotifications: () => req<NotificationPage>("/notifications"),
 };
 
 export function eventsUrl(sid: string, cursor: string | number): string {

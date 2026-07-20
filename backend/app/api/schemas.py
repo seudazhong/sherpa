@@ -247,3 +247,42 @@ class TodoPatch(StrictModel):
 class CandidateAcceptance(StrictModel):
     candidate: Candidate
     todo: Todo
+
+
+# --- Notifications + settings (api.md §4.6) ---
+class Notification(StrictModel):
+    firing_id: uuid.UUID
+    schedule_id: uuid.UUID
+    schedule_name: str
+    channel: str
+    scheduled_for: datetime.datetime
+    status: str
+    delivery_outcome: str | None
+    settled_at: datetime.datetime | None
+
+
+class NotificationPage(StrictModel):
+    items: list[Notification]
+    next_cursor: str | None
+
+
+class Settings(StrictModel):
+    notifications_enabled: bool
+    web_enabled: bool
+    email_digest_enabled: bool
+    timezone: str
+    quiet_hours_enabled: bool
+    quiet_hours_start: datetime.time
+    quiet_hours_end: datetime.time
+    daily_cap: int
+    version: int
+
+
+class SettingsPatch(StrictModel):
+    if_version: int
+    notifications_enabled: bool | None = None
+    web_enabled: bool | None = None
+    email_digest_enabled: bool | None = None
+    timezone: str | None = None
+    quiet_hours_enabled: bool | None = None
+    daily_cap: Annotated[int, Field(ge=0, le=100)] | None = None

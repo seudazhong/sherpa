@@ -22,6 +22,7 @@ from app.core import execute_run
 from app.db import SessionLocal
 from app.events import append_event, relay_once
 from app.models import Connector, Run
+from app.notifications import build_email_sender, deliver_due_firings
 from app.observability import bind_context, configure_logging, project_run_trace
 from app.providers import build_provider
 from app.redis_client import client as redis_client
@@ -212,10 +213,23 @@ async def periodic_connector_sync(ctx: dict[str, Any]) -> str:
     return f"enqueued={len(connector_ids)}"
 
 
+async def delivery_tick(ctx: dict[str, Any]) -> str:
+    """Leader-gated: deliver ready pending schedule firings (web/email)."""
+    if not await try_acquire_leader("delivery_tick", ttl_ms=55_000):
+        return "not_leader"
+    async with SessionLocal() as session:
+        counts = await deliver_due_firings(
+            session, build_email_sender(), datetime.datetime.now(datetime.UTC)
+        )
+        await session.commit()
+    return f"delivered={counts}"
+
+
 class WorkerSettings:
     functions = [ping, run_job, gmail_sync_job, sync_and_analyze_job]
     cron_jobs = [
         cron(scheduler_tick, second=0),
+        cron(delivery_tick, second=15),
         cron(periodic_connector_sync, minute=set(range(0, 60, 5))),
     ]
     on_startup = _startup

@@ -18,6 +18,7 @@ from app.models.effects import EffectInvocation
 from app.models.events import EventJournal, Outbox
 from app.models.observability import Trace
 from app.models.schedules import Schedule, ScheduleFiring
+from app.models.settings import UserSettings
 
 __all__ = [
     "Base",
@@ -40,4 +41,5 @@ __all__ = [
     "Todo",
     "Schedule",
     "ScheduleFiring",
+    "UserSettings",
 ]

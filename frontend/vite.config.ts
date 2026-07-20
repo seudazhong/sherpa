@@ -18,6 +18,8 @@ export default defineConfig({
       "/connectors": target,
       "/candidates": target,
       "/todos": target,
+      "/notifications": target,
+      "/settings": target,
       "/health": target,
       "/readyz": target,
     },
