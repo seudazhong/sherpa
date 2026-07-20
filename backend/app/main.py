@@ -20,6 +20,7 @@ from app.api.connectors import router as connectors_router
 from app.api.notifications import router as notifications_router
 from app.api.permissions import router as permissions_router
 from app.api.prompt import router as prompt_router
+from app.api.schedules import router as schedules_router
 from app.api.sessions import router as sessions_router
 from app.api.sse import router as sse_router
 from app.api.todos import router as todos_router
@@ -41,6 +42,7 @@ app.include_router(sessions_router)
 app.include_router(connectors_router)
 app.include_router(candidates_router)
 app.include_router(todos_router)
+app.include_router(schedules_router)
 app.include_router(notifications_router)
 app.include_router(permissions_router)
 app.include_router(activity_router)

@@ -251,6 +251,49 @@ class TodoCreate(StrictModel):
     priority: Priority = "medium"
 
 
+# --- Schedules (api.md §4.4) ---
+ScheduleKind = Literal["todo_reminder", "daily_digest"]
+ReminderKind = Literal["due_soon", "overdue"]
+DeliveryChannel = Literal["web", "digest_email"]
+
+
+class Schedule(StrictModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    kind: ScheduleKind
+    name: str
+    todo_id: uuid.UUID | None
+    reminder_kind: ReminderKind | None
+    delivery_channel: DeliveryChannel
+    timezone: str
+    local_time: datetime.time | None
+    next_fire_at: datetime.datetime
+    status: str
+    version: int
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+
+class ScheduleCreate(StrictModel):
+    kind: ScheduleKind
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    delivery_channel: DeliveryChannel = "web"
+    timezone: Annotated[str, Field(min_length=1, max_length=100)] = "UTC"
+    local_time: datetime.time | None = None
+    todo_id: uuid.UUID | None = None
+    reminder_kind: ReminderKind | None = None
+    next_fire_at: datetime.datetime | None = None
+
+
+class SchedulePage(StrictModel):
+    items: list[Schedule]
+    next_cursor: str | None
+
+
+class ScheduleCancel(StrictModel):
+    if_version: int
+
+
 class CandidateAcceptance(StrictModel):
     candidate: Candidate
     todo: Todo
