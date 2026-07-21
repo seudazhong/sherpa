@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 1536
 
+    # Object storage for personal files (ADR-012). "memory" keeps dev/tests
+    # offline; "minio" targets an S3-compatible MinIO service.
+    storage_kind: str = "memory"
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bucket: str = "sherpa-files"
+    minio_secure: bool = False
+
     # Transcript compaction (docs/04 core-loop). When the assembled provider
     # message window exceeds the char budget, keep the head + the most recent
     # turns and summarize the middle; a compaction that does not shrink is

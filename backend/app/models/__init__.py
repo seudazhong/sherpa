@@ -17,6 +17,7 @@ from app.models.core import (
 )
 from app.models.effects import ApprovalEnvelope, EffectInvocation
 from app.models.events import EventJournal, Outbox
+from app.models.files import File
 from app.models.memory import MemoryPassage, UserMemory
 from app.models.observability import Trace
 from app.models.schedules import Schedule, ScheduleFiring
@@ -48,4 +49,5 @@ __all__ = [
     "AuditReceipt",
     "UserMemory",
     "MemoryPassage",
+    "File",
 ]

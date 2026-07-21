@@ -74,6 +74,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(SendEmailTool(), safe=False)
     from app.tools.candidate_tools import candidate_tools
     from app.tools.connector_tools import connector_tools
+    from app.tools.file_tools import file_tools
     from app.tools.insight_tools import insight_tools
     from app.tools.memory_tools import memory_tools
     from app.tools.schedule_tools import schedule_tools
@@ -86,6 +87,7 @@ def build_default_registry() -> ToolRegistry:
         *schedule_tools(),
         *insight_tools(),
         *memory_tools(),
+        *file_tools(),
     ]:
         registry.register(tool, safe=False)  # type: ignore[arg-type]
     return registry
