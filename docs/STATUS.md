@@ -25,9 +25,10 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**M-tools is complete** (T1–T8: ToolContext + capability layer, ALLOWED policy engine, and candidate/todo/connector/schedule/read-settings tools + output spill). The agent can drive every own-data UI capability via chat, permission-gated. Two ready directions:
-1. **v1 approval closure** — web approve/reject renderer + run resume so the agent's external actions (`send_email`) complete end-to-end (the channel-agnostic base per `09-roadmap.md`).
-2. **M3 eval harness** — extraction-precision goldens + regression dataset (deferred; unspecced).
+**M-tools is complete** (T1–T8: ToolContext + capability layer, ALLOWED policy engine, and candidate/todo/connector/schedule/read-settings tools + output spill). The agent can drive every own-data UI capability via chat, permission-gated. The **UI-completion** pass then added session mgmt (new chat) + Schedules + Settings pages. Ready directions:
+1. **UI/UX backlog** — [`ui-backlog.md`](ui-backlog.md): P1 (todo controls in Inbox, session-label cleanup, real-model label) → P2 → P3, from the acceptance+UX review. Good small next batch.
+2. **v1 approval closure** — web approve/reject renderer + run resume so the agent's external actions (`send_email`) complete end-to-end (channel-agnostic base per `09-roadmap.md`).
+3. **M3 eval harness** — extraction-precision goldens + regression dataset (deferred; unspecced).
 Then the **post-v1 milestones** in `09-roadmap.md` (memory → files → sandbox → IM → agentic email → cron → GitHub → …), in the owner's chosen order.
 
 ## In progress
