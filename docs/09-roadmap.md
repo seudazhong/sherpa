@@ -36,6 +36,8 @@
 
 **依赖提醒（不改顺序，仅标注给未来的执行者）**：① 记忆的「tenant 共享」层要等「多用户」（里程碑10）才完整——单用户阶段先做 user 私有记忆；② ~~agentic email/QQ 批审批依赖跨渠道渲染器~~ **已解决**：审批基座（web 渲染器 + run 恢复）在 v1 收尾，各渠道渲染器随其渠道（QQ→4、邮件→5）一起交付，无前向依赖。
 
+> **实现提醒（里程碑5 · 真实发信落地时，记录于 2026-07-21，按需实现）**：统一两条邮件发送接缝。当前 `send_email` 工具（`backend/app/tools/builtin.py`）内联返回 stub 字符串「email sent to …」，而通知投递（日报/提醒）走 `backend/app/notifications/email.py` 的 `EmailSender` Protocol（v1 `RecordingEmailSender`，只记录不发）。接真实 SMTP/agentic-email 时，让 `send_email` 也改为调用 `build_email_sender().send(...)`，两条路径共用同一套发信集成 + 脱敏/审计，避免各写一遍、行为漂移。
+
 ## 构建顺序细则（手册 Ch18 build sequence，映射到本项目）
 
 > 注：以下为**长期完整**构建序；v1（M1–M3）只覆盖其子集——沙箱(7)、两层记忆的 tenant 共享部分(9)、多 provider failover(10)、IM/扩展(12) 均推迟出 v1（见 ADR-022）。
