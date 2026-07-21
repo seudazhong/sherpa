@@ -100,6 +100,9 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-sherpa}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-sherpa-dev-secret}
       MINIO_BUCKET: ${MINIO_BUCKET:-sherpa-files}
+      SANDBOX_KIND: ${SANDBOX_KIND:-docker}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

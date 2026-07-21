@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     minio_bucket: str = "sherpa-files"
     minio_secure: bool = False
 
+    # Code execution sandbox (ADR-007/025). "disabled" (default) keeps dev/tests
+    # offline; "docker" runs each snippet in a hardened ephemeral container
+    # (no network, dropped caps, non-root, read-only rootfs, mem/pids/time caps).
+    sandbox_kind: str = "disabled"
+    sandbox_image: str = "python:3.11-slim"
+    sandbox_timeout_seconds: int = 10
+    sandbox_mem_mb: int = 256
+    sandbox_pids_limit: int = 128
+
     # Transcript compaction (docs/04 core-loop). When the assembled provider
     # message window exceeds the char budget, keep the head + the most recent
     # turns and summarize the middle; a compaction that does not shrink is

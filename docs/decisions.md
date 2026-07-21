@@ -15,6 +15,7 @@
 | 2026-07-19 | Web 聊天界面 | ✅ **v1 保留**（次要界面；Candidate Inbox 为主） | 新增 ADR-022 |
 | 2026-07-20 | agent 是否应能自主驱动全部 UI 功能 | ✅ **应**——凡 UI 可见功能都要有对应 agent 工具（共享能力层） | 新增 ADR-023；新增 [docs/11](11-agent-tool-surface.md) + IMPLEMENTATION M-tools |
 | 2026-07-21 | M3 抽取质量门是否留在 v1 | ⏸️ **推迟出 v1** → post-v1 #11（评估飞轮）；单用户自托管期不设外部质量门 | 新增 ADR-024；更新 roadmap/STATUS/IMPLEMENTATION |
+| 2026-07-22 | 代码执行沙箱如何隔离 | ✅ 落地 ADR-007（Docker 硬化一次性容器：断网/掉权/非root/只读/资源+时间上限）；worker 挂 docker.sock（单用户自托管的信任让步，已记录） | 新增 ADR-025 |
 
 ---
 
@@ -167,3 +168,13 @@
 - **边界 / 重启条件（不弱化，只是推迟）**：**在 onboard 任何外部 beta 用户之前必须重新引入**该质量门（精度基准 + 回归集）。若期间改动抽取路径（如上记忆/RAG），建议先补一条**便宜的确定性回归泳道**（mock + 小 golden 集，锁 parser/dedupe/字段映射）作为最小护栏。
 - **影响**：更新 [09-roadmap.md](09-roadmap.md)（v1 收尾定义 + M3 行 + #11）、[STATUS.md](STATUS.md)（Next-ready）、[IMPLEMENTATION.md](IMPLEMENTATION.md)（cross-cutting eval 行）。
 - **来源**：用户输入「M3 要花多大 effort，可不可以跳过 M3？因为我比较期待尽快完成 v1 收尾，开始 09-roadmap.md 内容的开发」；选择「跳过 M3 评估门（推荐）：v1 收尾 = item 0 修 bug + 审批闭环，评估折进 post-v1 #11」。
+
+### ADR-025 · 代码执行沙箱实现（Docker 硬化容器，落地 ADR-007）
+- **决策（2026-07-22）**：落地 [ADR-007](#adr-007) 的 Docker 后端沙箱。每次 `run_code` 在一个**临时、一次性**容器里执行，硬化项：`network_disabled`（断网）、`cap_drop=ALL` + `no-new-privileges`、非 root（`nobody`）、`read_only` rootfs + `tmpfs /tmp`、内存/pids/CPU 上限、墙钟超时、执行后 `--rm`、`python -I -B`（隔离、不写字节码）。输出限长（loop 的 bound/spill）。默认 `SANDBOX_KIND=disabled`（离线/测试返回明确的 not-enabled）；栈内 `=docker`。
+- **威胁模型 + 缓解（履行 roadmap 里程碑3 的"威胁评审"前置）**：
+  - *任意代码执行* → 隔离在一次性容器（无网 · 非 root · 掉全部 caps · 只读 rootfs · 资源上限 · 超时），逃逸面最小化；
+  - *数据外泄* → `network_disabled` 断网；v1 首版**不挂 workspace/MinIO 文件**（纯计算），无本地数据可读；
+  - *资源耗尽/DoS* → mem/pids/CPU/墙钟上限，每 run 强制回收；
+  - **已记录的信任让步**：worker 挂载 `docker.sock` ≈ 对宿主的 root 等价访问。仅在**自托管、单用户** v1 可接受；**生产/多用户前**须换 gVisor/Firecracker、rootless Docker 或 socket-proxy（后续里程碑）。
+- **排除（后置）**：workspace 文件挂载进沙箱、gVisor/Firecracker、跨-run 聚合配额（当前每 run 上限）、多语言（v1 仅 Python）。
+- **来源**：ADR-007；roadmap 里程碑3 前置（中立执行契约 + 隔离 + 出口策略 + 聚合配额 + 威胁评审）。

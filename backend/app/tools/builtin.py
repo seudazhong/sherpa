@@ -77,6 +77,7 @@ def build_default_registry() -> ToolRegistry:
     from app.tools.file_tools import file_tools
     from app.tools.insight_tools import insight_tools
     from app.tools.memory_tools import memory_tools
+    from app.tools.sandbox_tools import sandbox_tools
     from app.tools.schedule_tools import schedule_tools
     from app.tools.todo_tools import todo_tools
 
@@ -88,6 +89,7 @@ def build_default_registry() -> ToolRegistry:
         *insight_tools(),
         *memory_tools(),
         *file_tools(),
+        *sandbox_tools(),
     ]:
         registry.register(tool, safe=False)  # type: ignore[arg-type]
     return registry
