@@ -32,7 +32,7 @@ interface ApprovalItem {
 
 function stripMarkdown(text: string): string {
   return text
-    .replace(/[|#>*_`~-]+/g, " ")
+    .replace(/[|#>*_`~]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
