@@ -1,7 +1,9 @@
-"""Outbound email sender (pluggable). v1 records instead of sending (no SMTP).
+"""Outbound email sender (pluggable) — the single send seam (roadmap unify-note).
 
-A real SMTP/agentic-email sender implements the same EmailSender protocol and is
-selected by config once the account is provided. Bodies are never logged verbatim.
+Both the ``send_email`` tool and notification digests go through
+``build_email_sender()``. v1 default records instead of sending (no account);
+``email_kind='agentmail'`` sends via the agent's AgentMail inbox (ADR-027). Bodies
+are never logged verbatim.
 """
 
 from __future__ import annotations
@@ -9,6 +11,9 @@ from __future__ import annotations
 import dataclasses
 import logging
 from typing import Protocol
+
+from app.channels.email import AgentMailClient
+from app.config import settings
 
 logger = logging.getLogger("sherpa.notifications")
 
@@ -36,9 +41,30 @@ class RecordingEmailSender:
         return True
 
 
+class AgentMailEmailSender:
+    """Sends via the agent's AgentMail inbox (ADR-027). Delegates to AgentMailClient."""
+
+    def __init__(self) -> None:
+        self._client = AgentMailClient(
+            api_base=settings.agentmail_api_base,
+            api_key=settings.agentmail_api_key,
+            inbox_id=settings.agentmail_inbox_id,
+        )
+
+    async def send(self, *, to: str, subject: str, body: str) -> bool:
+        message_id = await self._client.send(to=to, subject=subject, text=body)
+        logger.info(
+            "email sent via agentmail",
+            extra={"to_present": bool(to), "subject": subject, "ok": bool(message_id)},
+        )
+        return message_id is not None
+
+
 _sender = RecordingEmailSender()
 
 
 def build_email_sender() -> EmailSender:
-    """The configured email sender (v1: recording stub; SMTP wires in later)."""
+    """The configured email sender: AgentMail when enabled, else the recording stub."""
+    if settings.email_kind == "agentmail":
+        return AgentMailEmailSender()
     return _sender

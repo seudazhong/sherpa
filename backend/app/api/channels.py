@@ -1,22 +1,23 @@
-"""IM / QQ channel REST (ADR-026, milestone 4).
+"""IM + agentic-email inbound channels REST (ADR-026 QQ, ADR-027 email; milestones 4–5).
 
-Three surfaces:
+Per channel:
 
-- ``POST /channels/qq/webhook`` — inbound OneBot v11 events. Authenticated by an
-  HMAC-SHA1 body signature (not a cookie) **and** an owner-id allowlist (single
-  user, v1). A normal message is admitted as a durable run; an ``approve``/
-  ``reject`` reply resolves the pending approval envelope over the ``qq`` channel
-  (reusing the v1 approval base, ADR-020).
-- ``GET /channels`` — owner-authed status projection + recent IM threads (drives
-  the Messaging page + its "not configured" affordance).
-- ``POST /channels/qq/simulate`` — owner-authed test hook that injects an inbound
-  message as if from the owner's QQ id, so the human verification lane works
-  without a live bot. ``GET /channels/threads/{id}`` reads a thread transcript.
+- ``POST /channels/{qq,email}/webhook`` — inbound events, authenticated by a body
+  signature (QQ: OneBot HMAC-SHA1 + owner allowlist; email: Svix HMAC-SHA256) — not
+  a cookie. A normal message is admitted as a durable run; an ``approve``/``reject``
+  reply resolves the pending approval envelope over that channel (reusing the v1
+  approval base, ADR-020). Both channels share one generic inbound path.
+- ``GET /channels`` — owner-authed status projection + recent threads (drives the
+  Messaging page + its "not configured" affordances).
+- ``POST /channels/{qq,email}/simulate`` — owner-authed test hook injecting an
+  inbound message, so the human verification lane works without a live bot/mailbox.
+  ``GET /channels/threads/{id}`` reads a thread transcript (any channel).
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -32,6 +33,7 @@ from app.channels import (
     find_pending_approval,
     parse_command,
 )
+from app.channels.email import build_email_channel_client, verify_svix_signature
 from app.channels.qq import build_qq_client, verify_signature
 from app.config import settings
 from app.db import get_session
@@ -43,10 +45,17 @@ from app.queue import enqueue_approval_resume, enqueue_run
 router = APIRouter(tags=["channels"])
 
 _CHANNEL = "qq"
+_EMAIL = "email"
+
+Notifier = Callable[[str, str], Awaitable[None]]
 
 
-def _installation() -> str:
-    return settings.qq_owner_id or "local"
+async def _qq_notify(external_id: str, text: str) -> None:
+    await build_qq_client().send_private(external_id, text)
+
+
+async def _email_notify(external_id: str, text: str) -> None:
+    await build_email_channel_client().send(to=external_id, subject="Sherpa", text=text)
 
 
 # --------------------------------------------------------------------------- #
@@ -81,6 +90,9 @@ async def qq_webhook(
     tenant_id, user_id = await ensure_owner(db)
     result = await _handle_inbound(
         db,
+        channel=_CHANNEL,
+        installation=settings.qq_owner_id or "local",
+        notify=_qq_notify,
         tenant_id=tenant_id,
         user_id=user_id,
         sender=sender,
@@ -108,22 +120,91 @@ def _extract_text(event: dict[str, object]) -> str:
     return ""
 
 
+# --------------------------------------------------------------------------- #
+# Inbound email webhook (Svix signature authenticated) — agentic email.        #
+# --------------------------------------------------------------------------- #
+
+
+def _parse_email_address(raw: str) -> str:
+    """Extract the bare address from ``Name <addr>`` or ``addr``."""
+    raw = raw.strip()
+    if "<" in raw and ">" in raw:
+        return raw[raw.index("<") + 1 : raw.index(">")].strip().lower()
+    return raw.lower()
+
+
+@router.post("/channels/email/webhook")
+async def email_webhook(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, str]:
+    if settings.email_kind != "agentmail":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "email_disabled")
+    raw = await request.body()
+    if not verify_svix_signature(
+        settings.agentmail_webhook_secret,
+        raw,
+        svix_id=request.headers.get("svix-id"),
+        svix_timestamp=request.headers.get("svix-timestamp"),
+        svix_signature=request.headers.get("svix-signature"),
+    ):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "bad_signature")
+
+    event = await request.json()
+    if str(event.get("event_type", "")) != "message.received":
+        return {"status": "ignored"}
+    message = event.get("message") or {}
+    if not isinstance(message, dict):
+        return {"status": "ignored"}
+
+    sender = _parse_email_address(str(message.get("from", "")))
+    if not sender:
+        return {"status": "empty"}
+    owner_email = settings.agentmail_owner_email.strip().lower()
+    if owner_email and sender != owner_email:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "sender_not_allowed")
+
+    subject = str(message.get("subject", "")).strip()
+    text = str(message.get("text", "")).strip()
+    if not text:
+        return {"status": "empty"}
+    # Give the model the subject as lightweight context.
+    prompt = f"[Email · subject: {subject}]\n{text}" if subject else text
+    message_id = str(message.get("message_id", "")) or None
+
+    tenant_id, user_id = await ensure_owner(db)
+    return await _handle_inbound(
+        db,
+        channel=_EMAIL,
+        installation=settings.agentmail_inbox_id or "inbox",
+        notify=_email_notify,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        sender=sender,
+        text=prompt,
+        message_id=message_id,
+    )
+
+
 async def _handle_inbound(
     db: AsyncSession,
     *,
+    channel: str,
+    installation: str,
+    notify: Notifier,
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
     sender: str,
     text: str,
     message_id: str | None,
 ) -> dict[str, str]:
-    """Route one inbound IM message: approval command or a new run. Commits."""
+    """Route one inbound message: approval command or a new run. Commits."""
     sess = await ensure_channel_session(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
-        channel=_CHANNEL,
-        installation_id=_installation(),
+        channel=channel,
+        installation_id=installation,
         external_id=sender,
     )
 
@@ -137,9 +218,17 @@ async def _handle_inbound(
         )
         if env is None:
             await db.commit()
-            await build_qq_client().send_private(sender, "No pending approval to act on.")
+            await notify(sender, "No pending approval to act on.")
             return {"status": "no_pending_approval"}
-        return await _resolve_over_qq(db, env=env, user_id=user_id, sender=sender, command=command)
+        return await _resolve_over_channel(
+            db,
+            env=env,
+            user_id=user_id,
+            sender=sender,
+            command=command,
+            channel=channel,
+            notify=notify,
+        )
 
     admission = await admit_inbound(
         db, sess=sess, user_id=user_id, text=text, external_message_id=message_id
@@ -149,35 +238,37 @@ async def _handle_inbound(
     return {"status": "queued", "run_id": str(admission.run_id), "session_id": str(sess.id)}
 
 
-async def _resolve_over_qq(
+async def _resolve_over_channel(
     db: AsyncSession,
     *,
     env: ApprovalEnvelope,
     user_id: uuid.UUID,
     sender: str,
     command: ApprovalCommand,
+    channel: str,
+    notify: Notifier,
 ) -> dict[str, str]:
-    """Resolve a pending approval from an IM command (server-trusted verify)."""
+    """Resolve a pending approval from an inbound command (server-trusted verify)."""
     try:
         result = await resolve_approval(
             db,
             tenant_id=env.tenant_id,
             correlation_id=env.correlation_id,
             actor_id=user_id,
-            channel=_CHANNEL,
+            channel=channel,
             choice=command.choice,
-            verify=lambda _row: None,  # server holds the envelope; owner is HMAC-authed
+            verify=lambda _row: None,  # server holds the envelope; sender is signature-authed
         )
     except ResolveError as exc:
         await db.rollback()
-        await build_qq_client().send_private(sender, f"Could not resolve approval: {exc.detail}")
+        await notify(sender, f"Could not resolve approval: {exc.detail}")
         return {"status": "resolve_failed"}
 
     await db.commit()
     if result.mutated:
         await enqueue_approval_resume(env.correlation_id)
     verb = "Rejected." if command.choice == "reject" else "Approved — running the action now."
-    await build_qq_client().send_private(sender, verb)
+    await notify(sender, verb)
     return {"status": "resolved", "decision": command.choice}
 
 
@@ -196,14 +287,26 @@ class QQStatus(BaseModel):
     webhook_path: str = "/channels/qq/webhook"
 
 
+class EmailStatus(BaseModel):
+    kind: str
+    enabled: bool
+    configured: bool
+    inbox_id: str
+    owner_email: str
+    webhook_secret_set: bool
+    webhook_path: str = "/channels/email/webhook"
+
+
 class ThreadSummary(BaseModel):
     session_id: uuid.UUID
+    channel: str
     external_id: str
     created_at: str
 
 
 class ChannelsStatus(BaseModel):
     qq: QQStatus
+    email: EmailStatus
     threads: list[ThreadSummary]
 
 
@@ -218,10 +321,10 @@ async def channels_status(
                 select(SessionModel)
                 .where(
                     SessionModel.tenant_id == ctx.tenant_id,
-                    SessionModel.channel == _CHANNEL,
+                    SessionModel.channel.in_((_CHANNEL, _EMAIL)),
                 )
                 .order_by(SessionModel.created_at.desc())
-                .limit(20)
+                .limit(30)
             )
         )
         .scalars()
@@ -236,9 +339,18 @@ async def channels_status(
             webhook_secret_set=bool(settings.qq_webhook_secret),
             api_base=settings.qq_api_base,
         ),
+        email=EmailStatus(
+            kind=settings.email_kind,
+            enabled=settings.email_kind == "agentmail",
+            configured=settings.email_kind == "agentmail" and bool(settings.agentmail_inbox_id),
+            inbox_id=settings.agentmail_inbox_id,
+            owner_email=settings.agentmail_owner_email,
+            webhook_secret_set=bool(settings.agentmail_webhook_secret),
+        ),
         threads=[
             ThreadSummary(
                 session_id=r.id,
+                channel=r.channel,
                 external_id=r.external_scope_id,
                 created_at=r.created_at.isoformat(),
             )
@@ -269,6 +381,36 @@ async def qq_simulate(
     sender = body.from_id or settings.qq_owner_id or "sim-owner"
     result = await _handle_inbound(
         db,
+        channel=_CHANNEL,
+        installation=settings.qq_owner_id or "local",
+        notify=_qq_notify,
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        sender=sender,
+        text=body.text,
+        message_id=None,
+    )
+    return SimulateResult(
+        status=result["status"],
+        session_id=uuid.UUID(result["session_id"]) if "session_id" in result else None,
+        run_id=uuid.UUID(result["run_id"]) if "run_id" in result else None,
+        decision=result.get("decision"),
+    )
+
+
+@router.post("/channels/email/simulate")
+async def email_simulate(
+    body: SimulateInbound,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> SimulateResult:
+    """Inject an inbound email as the owner (human-lane test without a live mailbox)."""
+    sender = body.from_id or settings.agentmail_owner_email or "owner@example.com"
+    result = await _handle_inbound(
+        db,
+        channel=_EMAIL,
+        installation=settings.agentmail_inbox_id or "inbox",
+        notify=_email_notify,
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,
         sender=sender,
@@ -298,6 +440,7 @@ class PendingApprovalBrief(BaseModel):
 
 class ThreadTranscript(BaseModel):
     session_id: uuid.UUID
+    channel: str
     external_id: str
     messages: list[ThreadMessage]
     pending_approvals: list[PendingApprovalBrief]
@@ -310,7 +453,7 @@ async def thread_transcript(
     db: Annotated[AsyncSession, Depends(get_session)],
 ) -> ThreadTranscript:
     sess = await db.get(SessionModel, (ctx.tenant_id, session_id))
-    if sess is None or sess.channel != _CHANNEL:
+    if sess is None or sess.channel not in (_CHANNEL, _EMAIL):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "thread_not_found")
     rows = (
         (
@@ -369,6 +512,7 @@ async def thread_transcript(
         )
     return ThreadTranscript(
         session_id=session_id,
+        channel=sess.channel,
         external_id=sess.external_scope_id,
         messages=messages,
         pending_approvals=approvals,

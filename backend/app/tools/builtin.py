@@ -63,7 +63,16 @@ class SendEmailTool:
 
     async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
         validate_args(self.input_schema, args)
-        # Only reachable after an approval grant resumes the invocation (post-v1).
+        # Only reachable after an approval grant resumes the invocation. Goes through
+        # the single email send seam (roadmap unify-note): recording stub by default,
+        # real AgentMail send when email_kind=agentmail (ADR-027).
+        from app.notifications import build_email_sender
+
+        ok = await build_email_sender().send(
+            to=str(args["to"]), subject=str(args["subject"]), body=str(args["body"])
+        )
+        if not ok:
+            return ToolResult(llm_content=f"email send failed for {args['to']}")
         return ToolResult(llm_content=f"email sent to {args['to']}")
 
 

@@ -61,6 +61,23 @@ class Settings(BaseSettings):
     qq_webhook_secret: str = ""
     qq_owner_id: str = ""
 
+    # Agentic email (roadmap milestone 5, ADR-013/027). The single outbound email
+    # seam (`send_email` tool + notification digests both go through
+    # build_email_sender()). "recording" (default) records without sending (offline
+    # /tests); "agentmail" sends via the AgentMail API (agent-owned mailbox). Inbound
+    # agentic email arrives at POST /channels/email/webhook, Svix-signature verified
+    # against agentmail_webhook_secret (whsec_...). Secrets are env-only, never logged.
+    email_kind: str = "recording"
+    agentmail_api_base: str = "https://api.agentmail.to"
+    agentmail_api_key: str = ""
+    agentmail_inbox_id: str = ""
+    agentmail_webhook_secret: str = ""
+    # Trusted-sender allowlist for inbound agentic email (the human owner's address).
+    # When set, only this sender drives the agent (FULL tier, like the QQ owner
+    # allowlist). Empty = accept any sender; ADR-013 then requires dropping to the
+    # SAFE tool tier for untrusted content — a documented post-v1 follow-up.
+    agentmail_owner_email: str = ""
+
     # Transcript compaction (docs/04 core-loop). When the assembled provider
     # message window exceeds the char budget, keep the head + the most recent
     # turns and summarize the middle; a compaction that does not shrink is

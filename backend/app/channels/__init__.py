@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from app.channels.email import (
+    AgentMailClient,
+    EmailChannelClient,
+    RecordingEmailClient,
+    SentEmailRecord,
+    build_email_channel_client,
+    verify_svix_signature,
+)
 from app.channels.inbound import (
     ApprovalCommand,
     admit_inbound,
@@ -42,4 +50,10 @@ __all__ = [
     "build_qq_client",
     "sign_body",
     "verify_signature",
+    "AgentMailClient",
+    "EmailChannelClient",
+    "RecordingEmailClient",
+    "SentEmailRecord",
+    "build_email_channel_client",
+    "verify_svix_signature",
 ]

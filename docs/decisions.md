@@ -17,6 +17,7 @@
 | 2026-07-21 | M3 抽取质量门是否留在 v1 | ⏸️ **推迟出 v1** → post-v1 #11（评估飞轮）；单用户自托管期不设外部质量门 | 新增 ADR-024；更新 roadmap/STATUS/IMPLEMENTATION |
 | 2026-07-22 | 代码执行沙箱如何隔离 | ✅ 落地 ADR-007（Docker 硬化一次性容器：断网/掉权/非root/只读/资源+时间上限）；worker 挂 docker.sock（单用户自托管的信任让步，已记录） | 新增 ADR-025 |
 | 2026-07-22 | QQ/IM 入站如何接入 + 审批如何渲染 | ✅ 通道适配器（OneBot v11/aiocqhttp）：webhook(HMAC+owner allowlist) → 复用 admit_prompt 有界循环 → 出站回推；审批复用 v1 基座（IM `approve/reject` → 同一信封） | 新增 ADR-026 |
+| 2026-07-22 | agentic email 如何落地 + 统一发信接缝 | ✅ AgentMail 自有邮箱：单一 `build_email_sender()` 发信接缝（`send_email` 工具 + 日报都走它，真实发信）；入站 email(Svix 验签+owner allowlist) 复用同一有界循环 + 审批基座 | 新增 ADR-027；实现 roadmap 统一发信 note |
 
 ---
 
@@ -187,3 +188,12 @@
 - **可验证性（无真实账号也能走人工路径）**：`POST /channels/qq/simulate`（owner+CSRF）以 owner 身份注入一条"入站"消息；`GET /channels` 出状态 + 线程；`GET /channels/threads/{id}` 出线程转录，供 Messaging 页做人工点检验收。真实 QQ 账号接入留作**手动验收**（用户备注）。
 - **排除 / 后置（本里程碑显式不做）**：① **定时提醒/日报路由到 QQ**——`schedules.delivery_channel` 受冻结 CHECK 限制（`web`/`digest_email`），需契约迁移，推迟（agent 可在 run 内主动推 QQ，审批也已在 IM）；② 群消息（仅私聊）；③ 官方 `qq-botpy`(WebSocket) 适配器——留作真实账号接入时的第二后端；④ 富媒体/at/图片段（仅纯文本段）；⑤ 出站投递去重（best-effort，post-commit，失败不影响 run 持久性）。
 - **来源**：roadmap 里程碑4（AstrBot/aiocqhttp「在 QQ 里跟 agent 对话、收通知、在 QQ 上批准/拒绝」）；用户备注 QQ python SDK 文档 + 「真实账号接入无法完成的验证部分直接跳过、手动验收」。
+
+### ADR-027 · agentic email（AgentMail 自有邮箱）+ 统一发信接缝（落地 roadmap 里程碑5）
+- **决策（2026-07-22）**：agent 拥有独立邮箱身份（AgentMail inbox，如 `cloudysample676@agentmail.to`）。
+  - **统一发信接缝（落实 roadmap 2026-07-21 note）**：`build_email_sender()` 是**唯一**出站发信口——`send_email` 工具（原内联 stub「email sent to …」）改为调用它，日报/提醒投递本就走它。`email_kind='agentmail'` 时 `AgentMailEmailSender` 经 `AgentMailClient`（`POST /v0/inboxes/{inbox}/messages/send`，Bearer）真实发信；默认 `recording`（离线记录，测试/开发不触网）。两条路径共用同一集成 + 脱敏 + 审计，杜绝行为漂移。
+  - **入站 agentic email**：`POST /channels/email/webhook` 收 AgentMail `message.received`（Svix HMAC-SHA256 验签，`svix-id/timestamp/signature`，secret 为 `whsec_` 后 base64）→ **复用与 QQ 相同的通用入站路径**（`ensure_channel_session(channel='email')` + `admit_prompt` → 有界循环）→ 出站回推 assistant 文本（+ 待审批预览）。**邮件侧审批复用 v1 基座**：回信 `approve/reject <id>` → `resolve_approval(channel='email')` → run 恢复。
+  - **信任 / 工具层级（ADR-013）**：邮件内容不可信。v1 用 **owner-email allowlist**（`agentmail_owner_email`，设了就只放行 owner，FULL 层级；未设=放行任意发件人）。**向任意发件人开放需降到 SAFE 工具层级**（ADR-013），需把 per-run tier 下沉进 `run_job`——**推迟**（记录为后续）。
+- **可验证性**：真实**发信**已用 owner 提供的 API key 验证（自测邮件返回 `message_id`）。**入站真实投递**需公网 webhook（AgentMail→本地 localhost，需 ngrok/隧道）——**留作手动验收**；人工路径用 `POST /channels/email/simulate`（owner+CSRF）注入一封"入站"邮件 + Messaging 页 email 段做点检。
+- **排除 / 后置**：任意发件人 + SAFE 层级下沉；邮件线程/引用抽取（Talon）；附件；富 HTML；出站去重（best-effort）；官方 SDK（用 httpx，零新依赖）。
+- **来源**：ADR-013；roadmap 里程碑5 + 2026-07-21 统一发信 note；用户提供 AgentMail 账号 + API key（本地文件）+「真实账号接入无法完成的验证直接跳过、手动验收」。

@@ -15,7 +15,14 @@ from arq.connections import RedisSettings
 from sqlalchemy import select
 
 from app import queue
-from app.channels import build_qq_client, deliver_run_reply
+from app.channels import (
+    build_qq_client,
+    compose_reply,
+    deliver_run_reply,
+    final_assistant_text,
+    pending_approval_for_run,
+)
+from app.channels.email import build_email_channel_client
 from app.config import settings
 from app.connectors.gmail import build_gmail_sync_client
 from app.connectors.sync import sync_gmail
@@ -110,10 +117,10 @@ async def gmail_sync_job(ctx: dict[str, Any], connector_id: str, run_id: str) ->
 
 
 async def _deliver_im_reply(run_id: uuid.UUID) -> None:
-    """Best-effort: push a settled run's reply back to its IM thread (milestone 4).
+    """Best-effort: push a settled run's reply back to its channel thread (milestones 4–5).
 
     Runs in a fresh read session after the run commits so a delivery failure never
-    affects run durability. Only IM-channel sessions (``channel='qq'``) deliver;
+    affects run durability. Only channel-bound sessions (``qq``/``email``) deliver;
     web sessions are served by SSE.
     """
     try:
@@ -122,15 +129,25 @@ async def _deliver_im_reply(run_id: uuid.UUID) -> None:
             if run is None or run.session_id is None:
                 return
             sess = await session.get(SessionModel, (run.tenant_id, run.session_id))
-            if sess is None or sess.channel != "qq":
+            if sess is None:
                 return
-            await deliver_run_reply(
-                session,
-                client=build_qq_client(),
-                tenant_id=run.tenant_id,
-                run_id=run_id,
-                external_id=sess.external_scope_id,
-            )
+            if sess.channel == "qq":
+                await deliver_run_reply(
+                    session,
+                    client=build_qq_client(),
+                    tenant_id=run.tenant_id,
+                    run_id=run_id,
+                    external_id=sess.external_scope_id,
+                )
+            elif sess.channel == "email":
+                text = await final_assistant_text(session, run.tenant_id, run_id)
+                approval = await pending_approval_for_run(session, run.tenant_id, run_id)
+                if text is None and approval is None:
+                    return
+                body = compose_reply(text, approval)
+                await build_email_channel_client().send(
+                    to=sess.external_scope_id, subject="Re: Sherpa", text=body
+                )
     except Exception:
         return
 
@@ -182,14 +199,19 @@ async def _deliver_im_resume_ack(correlation_id: uuid.UUID, status: str) -> None
             if env is None or env.session_id is None:
                 return
             sess = await session.get(SessionModel, (env.tenant_id, env.session_id))
-            if sess is None or sess.channel != "qq":
+            if sess is None or sess.channel not in ("qq", "email"):
                 return
             msg = (
                 f"\u2705 {env.tool_name} completed."
                 if status == "resumed"
                 else f"\u26a0\ufe0f {env.tool_name} could not be completed."
             )
-            await build_qq_client().send_private(sess.external_scope_id, msg)
+            if sess.channel == "qq":
+                await build_qq_client().send_private(sess.external_scope_id, msg)
+            else:
+                await build_email_channel_client().send(
+                    to=sess.external_scope_id, subject="Re: Sherpa", text=msg
+                )
     except Exception:
         return
 
