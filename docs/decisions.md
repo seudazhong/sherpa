@@ -16,6 +16,7 @@
 | 2026-07-20 | agent 是否应能自主驱动全部 UI 功能 | ✅ **应**——凡 UI 可见功能都要有对应 agent 工具（共享能力层） | 新增 ADR-023；新增 [docs/11](11-agent-tool-surface.md) + IMPLEMENTATION M-tools |
 | 2026-07-21 | M3 抽取质量门是否留在 v1 | ⏸️ **推迟出 v1** → post-v1 #11（评估飞轮）；单用户自托管期不设外部质量门 | 新增 ADR-024；更新 roadmap/STATUS/IMPLEMENTATION |
 | 2026-07-22 | 代码执行沙箱如何隔离 | ✅ 落地 ADR-007（Docker 硬化一次性容器：断网/掉权/非root/只读/资源+时间上限）；worker 挂 docker.sock（单用户自托管的信任让步，已记录） | 新增 ADR-025 |
+| 2026-07-22 | QQ/IM 入站如何接入 + 审批如何渲染 | ✅ 通道适配器（OneBot v11/aiocqhttp）：webhook(HMAC+owner allowlist) → 复用 admit_prompt 有界循环 → 出站回推；审批复用 v1 基座（IM `approve/reject` → 同一信封） | 新增 ADR-026 |
 
 ---
 
@@ -178,3 +179,11 @@
   - **已记录的信任让步**：worker 挂载 `docker.sock` ≈ 对宿主的 root 等价访问。仅在**自托管、单用户** v1 可接受；**生产/多用户前**须换 gVisor/Firecracker、rootless Docker 或 socket-proxy（后续里程碑）。
 - **排除（后置）**：workspace 文件挂载进沙箱、gVisor/Firecracker、跨-run 聚合配额（当前每 run 上限）、多语言（v1 仅 Python）。
 - **来源**：ADR-007；roadmap 里程碑3 前置（中立执行契约 + 隔离 + 出口策略 + 聚合配额 + 威胁评审）。
+
+### ADR-026 · QQ / IM 入站通道 + IM 审批渲染器（落地 roadmap 里程碑4）
+- **决策（2026-07-22）**：以**通道适配器**形态接入 IM，首个后端为自托管的 **OneBot v11 / aiocqhttp** HTTP API（go-cqhttp / Lagrange / AstrBot）。入站与 Web 提示**同源**：`POST /channels/qq/webhook` 收事件 → **复用 `admit_prompt`** 持久化后再调模型 → worker 跑同一有界循环 → 出站 `send_private_msg` 回推最终 assistant 文本。IM 线程**直接映射到既有 `sessions`**（`channel='qq'` + `external_scope_id=<qq user id>`，`umo_key=qq:<inst>:<uid>`）——**不新增表、不改冻结契约**；`run_kind` 仍用 `web_chat`（`runs` CHECK 不动，session.channel 才是判别键）。
+- **审批复用 v1 基座（ADR-020）**：gated 工具在 IM 会话里同样触发 `permission.asked`；回推消息带审批预览 + 短 correlation id，用户回 `approve <id>` / `reject <id>`（中英文动词皆可）→ webhook 用**服务端可信 verify**（服务端持有信封 + owner 已由 HMAC 鉴权）调用同一 `resolve_approval(channel='qq')` → `enqueue_approval_resume` → 复用同一 run 恢复 + 对外写动作执行。无跨渠道前向依赖。
+- **安全**：入站 body 走 **HMAC-SHA1 常数时间校验**（`X-Signature`, `qq_webhook_secret`）；**owner-id allowlist**（单用户 v1 仅 `qq_owner_id` 放行，其余 403）；secrets 只来自 env、不记录。`qq_kind='disabled'`（默认）→ `RecordingQQClient`（离线/测试不触网）。
+- **可验证性（无真实账号也能走人工路径）**：`POST /channels/qq/simulate`（owner+CSRF）以 owner 身份注入一条"入站"消息；`GET /channels` 出状态 + 线程；`GET /channels/threads/{id}` 出线程转录，供 Messaging 页做人工点检验收。真实 QQ 账号接入留作**手动验收**（用户备注）。
+- **排除 / 后置（本里程碑显式不做）**：① **定时提醒/日报路由到 QQ**——`schedules.delivery_channel` 受冻结 CHECK 限制（`web`/`digest_email`），需契约迁移，推迟（agent 可在 run 内主动推 QQ，审批也已在 IM）；② 群消息（仅私聊）；③ 官方 `qq-botpy`(WebSocket) 适配器——留作真实账号接入时的第二后端；④ 富媒体/at/图片段（仅纯文本段）；⑤ 出站投递去重（best-effort，post-commit，失败不影响 run 持久性）。
+- **来源**：roadmap 里程碑4（AstrBot/aiocqhttp「在 QQ 里跟 agent 对话、收通知、在 QQ 上批准/拒绝」）；用户备注 QQ python SDK 文档 + 「真实账号接入无法完成的验证部分直接跳过、手动验收」。

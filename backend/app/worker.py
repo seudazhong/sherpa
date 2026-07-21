@@ -15,13 +15,15 @@ from arq.connections import RedisSettings
 from sqlalchemy import select
 
 from app import queue
+from app.channels import build_qq_client, deliver_run_reply
 from app.config import settings
 from app.connectors.gmail import build_gmail_sync_client
 from app.connectors.sync import sync_gmail
 from app.core import execute_run, resume_approval
 from app.db import SessionLocal
 from app.events import append_event, relay_once
-from app.models import Connector, Run
+from app.models import ApprovalEnvelope, Connector, Run
+from app.models import Session as SessionModel
 from app.notifications import build_email_sender, deliver_due_firings
 from app.observability import bind_context, configure_logging, project_run_trace
 from app.providers import build_provider
@@ -107,6 +109,32 @@ async def gmail_sync_job(ctx: dict[str, Any], connector_id: str, run_id: str) ->
             return "failed"
 
 
+async def _deliver_im_reply(run_id: uuid.UUID) -> None:
+    """Best-effort: push a settled run's reply back to its IM thread (milestone 4).
+
+    Runs in a fresh read session after the run commits so a delivery failure never
+    affects run durability. Only IM-channel sessions (``channel='qq'``) deliver;
+    web sessions are served by SSE.
+    """
+    try:
+        async with SessionLocal() as session:
+            run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+            if run is None or run.session_id is None:
+                return
+            sess = await session.get(SessionModel, (run.tenant_id, run.session_id))
+            if sess is None or sess.channel != "qq":
+                return
+            await deliver_run_reply(
+                session,
+                client=build_qq_client(),
+                tenant_id=run.tenant_id,
+                run_id=run_id,
+                external_id=sess.external_scope_id,
+            )
+    except Exception:
+        return
+
+
 async def run_job(ctx: dict[str, Any], run_id: str) -> str:
     """Execute one durable run. v1 commits at settle; per-turn commit is a later refinement."""
     async with SessionLocal() as session:
@@ -130,11 +158,40 @@ async def run_job(ctx: dict[str, Any], run_id: str) -> str:
             )
             await project_run_trace(session, tenant_id=tenant_id, run_id=rid)
             await session.commit()
+            await _deliver_im_reply(rid)
             return reason
         except Exception:
             await session.rollback()
             await _settle_failed(tenant_id, rid, session_id)
             return "failed"
+
+
+async def _deliver_im_resume_ack(correlation_id: uuid.UUID, status: str) -> None:
+    """Best-effort: confirm an IM-resolved approval's outcome back to the thread."""
+    if status not in ("resumed", "failed"):
+        return
+    try:
+        async with SessionLocal() as session:
+            env = (
+                await session.execute(
+                    select(ApprovalEnvelope).where(
+                        ApprovalEnvelope.correlation_id == correlation_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if env is None or env.session_id is None:
+                return
+            sess = await session.get(SessionModel, (env.tenant_id, env.session_id))
+            if sess is None or sess.channel != "qq":
+                return
+            msg = (
+                f"\u2705 {env.tool_name} completed."
+                if status == "resumed"
+                else f"\u26a0\ufe0f {env.tool_name} could not be completed."
+            )
+            await build_qq_client().send_private(sess.external_scope_id, msg)
+    except Exception:
+        return
 
 
 async def approval_resume_job(ctx: dict[str, Any], correlation_id: str) -> str:
@@ -143,10 +200,12 @@ async def approval_resume_job(ctx: dict[str, Any], correlation_id: str) -> str:
     Thin arq wrapper; the resume logic lives in app.core.resume (session-taking,
     testable). Idempotent on the bound invocation's settled state.
     """
+    cid = uuid.UUID(correlation_id)
     async with SessionLocal() as session:
         try:
-            status = await resume_approval(session, uuid.UUID(correlation_id))
+            status = await resume_approval(session, cid)
             await session.commit()
+            await _deliver_im_resume_ack(cid, status)
             return status
         except Exception:
             await session.rollback()

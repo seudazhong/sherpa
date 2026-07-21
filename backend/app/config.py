@@ -49,6 +49,18 @@ class Settings(BaseSettings):
     sandbox_mem_mb: int = 256
     sandbox_pids_limit: int = 128
 
+    # QQ / IM inbound channel (roadmap milestone 4, ADR-026). "disabled" (default)
+    # keeps dev/tests offline; "onebot" targets a self-hosted OneBot v11 / aiocqhttp
+    # HTTP API (go-cqhttp / Lagrange / AstrBot). Inbound events hit
+    # POST /channels/qq/webhook, HMAC-SHA1 verified against qq_webhook_secret; only
+    # qq_owner_id (the owner's QQ user id) is accepted (single-user v1). Replies +
+    # approval previews are pushed back via the OneBot send_private_msg API.
+    qq_kind: str = "disabled"
+    qq_api_base: str = "http://localhost:5700"
+    qq_access_token: str = ""
+    qq_webhook_secret: str = ""
+    qq_owner_id: str = ""
+
     # Transcript compaction (docs/04 core-loop). When the assembled provider
     # message window exceeds the char budget, keep the head + the most recent
     # turns and summarize the middle; a compaction that does not shrink is

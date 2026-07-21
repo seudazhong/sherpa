@@ -16,6 +16,7 @@ from app import __version__
 from app.api.activity import router as activity_router
 from app.api.auth import router as auth_router
 from app.api.candidates import router as candidates_router
+from app.api.channels import router as channels_router
 from app.api.connectors import router as connectors_router
 from app.api.files import router as files_router
 from app.api.memory import router as memory_router
@@ -50,6 +51,7 @@ app.include_router(permissions_router)
 app.include_router(activity_router)
 app.include_router(memory_router)
 app.include_router(files_router)
+app.include_router(channels_router)
 app.include_router(sse_router)
 app.include_router(prompt_router)
 
