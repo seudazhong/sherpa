@@ -14,6 +14,7 @@
 | 2026-07-19 | 多租户 vs 单实例单人 | ✅ **单实例、单用户**；不追求托管多租户 | 新增 ADR-015（RLS 降级为"后加"） |
 | 2026-07-19 | Web 聊天界面 | ✅ **v1 保留**（次要界面；Candidate Inbox 为主） | 新增 ADR-022 |
 | 2026-07-20 | agent 是否应能自主驱动全部 UI 功能 | ✅ **应**——凡 UI 可见功能都要有对应 agent 工具（共享能力层） | 新增 ADR-023；新增 [docs/11](11-agent-tool-surface.md) + IMPLEMENTATION M-tools |
+| 2026-07-21 | M3 抽取质量门是否留在 v1 | ⏸️ **推迟出 v1** → post-v1 #11（评估飞轮）；单用户自托管期不设外部质量门 | 新增 ADR-024；更新 roadmap/STATUS/IMPLEMENTATION |
 
 ---
 
@@ -159,3 +160,10 @@
 - **理由**：REST 与 Tool 各写一遍业务逻辑必然漂移、双倍 bug、权限不一致；共享 service 让"UI 能做 = agent 能做"成为结构性保证。
 - **落地缺口（→ [docs/11](11-agent-tool-surface.md) + IMPLEMENTATION M-tools）**：`Tool.execute` 需注入 `ToolContext`（当前 `base.py` 缺）；ALLOWED 策略引擎需实现（当前仅 VISIBLE 闸 + 极简 ask）；输出 spill 需落地（api.md §7.2）；候选/待办/连接器/日程/通知/活动均需补 service 抽取 + 工具（`create_todo`/`create_schedule`/日程 REST 连 REST 都缺）。
 - **来源**：用户输入「我认为 agent 肯定要有能力自主控制用户在 UI 上能看到的一切功能」；对齐 api.md §7、docs/05。
+
+### ADR-024 · M3 抽取质量门推迟出 v1（折入 post-v1 评估飞轮）
+- **决策（用户确认 2026-07-21）**：v1 收尾 **不含** M3 抽取精度质量门（goldens + 50–100 封脱敏邮件精度基准 + 回归数据集）。**v1 收尾 = 上下文忠实性修复（跨-run 工具历史 bug）+ 审批闭环**。评估 harness 折入 **post-v1 里程碑 #11（评估飞轮增强）**。
+- **理由**：v1 是自托管、单用户（ADR-022）。抽取质量门的目的是"证明精度够好、值得让**外部用户**接入真实 Gmail" + 防回归；但当前**唯一用户即 owner 本人**，其本身就是评估闭环，无外部用户需保护。50–100 封邮件的**标注成本高**（人工判断为瓶颈），此刻收益低。roadmap 本就把 #11 定义为"贯穿式持续投入"。
+- **边界 / 重启条件（不弱化，只是推迟）**：**在 onboard 任何外部 beta 用户之前必须重新引入**该质量门（精度基准 + 回归集）。若期间改动抽取路径（如上记忆/RAG），建议先补一条**便宜的确定性回归泳道**（mock + 小 golden 集，锁 parser/dedupe/字段映射）作为最小护栏。
+- **影响**：更新 [09-roadmap.md](09-roadmap.md)（v1 收尾定义 + M3 行 + #11）、[STATUS.md](STATUS.md)（Next-ready）、[IMPLEMENTATION.md](IMPLEMENTATION.md)（cross-cutting eval 行）。
+- **来源**：用户输入「M3 要花多大 effort，可不可以跳过 M3？因为我比较期待尽快完成 v1 收尾，开始 09-roadmap.md 内容的开发」；选择「跳过 M3 评估门（推荐）：v1 收尾 = item 0 修 bug + 审批闭环，评估折进 post-v1 #11」。

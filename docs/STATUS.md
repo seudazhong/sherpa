@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-21 · Phase: **M-tools complete (Agent tool surface)**. M1 + M2 complete. The agent can now drive candidates, todos, connectors (sync), schedules, and settings via chat tools (ADR-023). Next: v1 wrap-up (⚠️ **context-fidelity fix** + approval closure + M3) and the post-v1 milestones in `09-roadmap.md`.
+> Last updated: 2026-07-21 · Phase: **M-tools complete (Agent tool surface)**. M1 + M2 complete. The agent can now drive candidates, todos, connectors (sync), schedules, and settings via chat tools (ADR-023). Next: v1 wrap-up (⚠️ **context-fidelity fix** + approval closure; M3 eval gate deferred → post-v1 #11, ADR-024) and the post-v1 milestones in `09-roadmap.md`.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -29,7 +29,7 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 0. **Context-fidelity fix + agent observability (v1 wrap-up · correctness, found 2026-07-21).** **Bug:** every prompt starts a *new run*, and a run rebuilds provider history **text-only** from `messages`/`message_parts` (`core/loop._load_transcript`); prior `tool_use`/`tool_result` live only in the event journal, so **across runs the model loses all evidence it called a tool** → it "forgets", apologizes, and re-does/denies work (observed: created a todo, then on a follow-up claimed it never called the tool and re-created it). Same root cause also weakens mid-run crash resume. **Fix — Option B (no contract change):** add `assemble_provider_history()` reconstructing the OpenAI-protocol window (assistant + `tool_calls`, `role:tool` results, `permission.asked`/deny placeholders, crash-halfway backfill) from the event journal (the declared tool-history source of truth), replacing the text-only reload; + regression test (run1 creates a todo → run2's assembled history contains the `tool_use`, not a re-creation). *(Option A = persist tool steps as `messages`/`parts` — rejected for now: needs a frozen-contract change + ADR + migration + a wide message-consumer audit.)* **Observability (synergistic, the 2nd ask):** persist **each LLM call's exact assembled input** as a redacted `model.request` journal event and/or a `generations` row, and emit chat-loop generation records (model / prompt-version / tokens / `stop_reason`), so "what each LLM call sent + every internal step" is inspectable for human debugging. refs: `core/loop.py`, `events/journal.py`, ADR-016/017, docs/07-observability.
 1. **UI/UX backlog** — [`ui-backlog.md`](ui-backlog.md): P1 (todo controls in Inbox, session-label cleanup, real-model label) → P2 → P3, from the acceptance+UX review. Good small next batch.
 2. **v1 approval closure** — web approve/reject renderer + run resume so the agent's external actions (`send_email`) complete end-to-end (channel-agnostic base per `09-roadmap.md`).
-3. **M3 eval harness** — extraction-precision goldens + regression dataset (deferred; unspecced).
+3. ~~**M3 eval harness**~~ — **deferred out of v1** into post-v1 #11 (eval flywheel) per **ADR-024**: v1 is single-user self-hosted, the owner *is* the eval loop, so no external-user quality gate now; re-instate before onboarding external beta users. Optional cheap insurance: a ~1-day deterministic mock regression lane on the extraction path.
 Then the **post-v1 milestones** in `09-roadmap.md` (memory → files → sandbox → IM → agentic email → cron → GitHub → …), in the owner's chosen order.
 
 ## In progress
@@ -70,7 +70,7 @@ Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -
 | M2 #22 transcript compaction | ✅ done |
 | M-tools T1–T8 agent tool surface (candidates/todos/connectors/schedules/settings + spill) | ✅ done |
 
-**M2 + M-tools complete.** Next: v1 approval closure (renderer + run resume) / M3 eval harness; then post-v1 milestones (`09-roadmap.md`).
+**M2 + M-tools complete.** Next (v1 wrap-up): context-fidelity fix (item 0, correctness) + v1 approval closure (renderer + run resume); **M3 eval gate deferred → post-v1 #11 (ADR-024)**; then post-v1 milestones (`09-roadmap.md`).
 
 ## How to update
 On finishing a task: set its row ✅, move "Next ready", note anything a future agent must know (schema changes, new commands, gotchas), bump "Last updated", and commit (the STATUS bump can ride with the task commit).

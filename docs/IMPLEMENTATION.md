@@ -81,7 +81,7 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 ## Cross-cutting (do continuously, not a separate phase)
 - **Tests with every task** — deterministic, mock provider, `pytest-asyncio`. No real model calls in tests.
 - **Migrations** — one Alembic head; every schema change is a migration.
-- **Eval harness** (M3): goldens for extraction precision; regression dataset; deferred until M2 lands.
+- **Eval harness** (~~M3~~): extraction-precision goldens + regression dataset — **deferred out of v1 into post-v1 #11** (eval flywheel) per **ADR-024** (single-user self-hosted; owner is the eval loop; re-instate before external beta). A ~1-day deterministic mock regression lane on the extraction path is the optional minimum guard if that path changes.
 
 ## Open decisions that bind M2 (not M1) — see [reviews/README.md §5](reviews/README.md)
 Initial real provider/model · Gmail OAuth operating mode · data-retention window · notification defaults. **Safe v1 defaults are in `contracts/config-and-secrets.md`** so M1 (and M2 scaffolding) proceed unblocked; confirm before M2 ships to real users.
