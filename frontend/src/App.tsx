@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth";
 import ActivityView from "./views/ActivityView";
 import ChatView from "./views/ChatView";
+import FilesView from "./views/FilesView";
 import InboxView from "./views/InboxView";
 import LoginView from "./views/LoginView";
 import MemoryView from "./views/MemoryView";
@@ -65,6 +66,14 @@ export default function App() {
         element={
           <Protected>
             <MemoryView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/workspace"
+        element={
+          <Protected>
+            <FilesView />
           </Protected>
         }
       />

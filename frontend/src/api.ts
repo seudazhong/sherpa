@@ -271,6 +271,19 @@ export interface PassagePage {
   items: PassageItem[];
 }
 
+export interface FileItem {
+  id: string;
+  path: string;
+  size_bytes: number;
+  content_type: string;
+  version: number;
+  updated_at: string;
+}
+
+export interface FilePage {
+  items: FileItem[];
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -404,10 +417,29 @@ export const api = {
     req<PassageItem>("/memory/passages", jsonInit("POST", csrf, { text })),
   deletePassage: (csrf: string, id: string) =>
     req<void>(`/memory/passages/${encodeURIComponent(id)}`, jsonInit("DELETE", csrf)),
+  listFiles: () => req<FilePage>("/files"),
+  uploadFile: async (csrf: string, path: string, file: File): Promise<FileItem> => {
+    const fd = new FormData();
+    fd.append("path", path);
+    fd.append("upload", file);
+    const res = await fetch("/files", {
+      method: "POST",
+      credentials: "include",
+      headers: { "X-CSRF-Token": csrf },
+      body: fd,
+    });
+    if (!res.ok) throw new ApiError(res.status, `POST /files -> ${res.status}`);
+    return (await res.json()) as FileItem;
+  },
+  deleteFile: (csrf: string, id: string) => req<void>(`/files/${id}`, jsonInit("DELETE", csrf)),
 };
 
 export function exportUrl(): string {
   return "/activity/export";
+}
+
+export function fileDownloadUrl(id: string): string {
+  return `/files/${id}/content`;
 }
 
 export function eventsUrl(sid: string, cursor: string | number): string {
