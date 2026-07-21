@@ -74,6 +74,20 @@ export default function InboxView() {
     }
   };
 
+  const completeTodo = async (t: Todo) => {
+    if (!csrf) return;
+    setBusy(t.id);
+    setError(null);
+    try {
+      await api.patchTodo(csrf, t.id, { if_version: t.version, status: "completed" });
+      await load();
+    } catch {
+      setError("Could not complete the todo.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="app">
       <Sidebar />
@@ -174,6 +188,15 @@ export default function InboxView() {
                 <span className="todo-title">{t.title}</span>
                 {t.due_at && (
                   <span className="small muted">due {new Date(t.due_at).toLocaleDateString()}</span>
+                )}
+                {t.status !== "completed" && (
+                  <button
+                    className="btn todo-action"
+                    disabled={busy === t.id}
+                    onClick={() => void completeTodo(t)}
+                  >
+                    Complete
+                  </button>
                 )}
               </article>
             ))}

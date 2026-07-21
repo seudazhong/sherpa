@@ -64,3 +64,15 @@ async def readyz(response: Response) -> dict[str, object]:
     if not ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return {"ready": ready, "checks": checks}
+
+
+@app.get("/meta")
+async def meta() -> dict[str, object]:
+    """Public client metadata: which provider/model currently backs the assistant."""
+    real = settings.provider_kind != "mock"
+    return {
+        "version": __version__,
+        "provider_kind": settings.provider_kind,
+        "model": settings.provider_model if real else "mock",
+        "real_model": real,
+    }

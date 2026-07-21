@@ -18,3 +18,15 @@ async def test_health() -> None:
     body = resp.json()
     assert body["status"] == "ok"
     assert body["service"] == "sherpa"
+
+
+@pytest.mark.asyncio
+async def test_meta_reports_provider() -> None:
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/meta")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"version", "provider_kind", "model", "real_model"}
+    assert body["real_model"] == (body["provider_kind"] != "mock")
+

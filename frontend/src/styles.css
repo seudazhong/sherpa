@@ -517,3 +517,7 @@ h3 {
   font-weight: 600;
   flex: 1;
 }
+.todo-action {
+  padding: 4px 12px;
+  font-size: 13px;
+}

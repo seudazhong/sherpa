@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
-import { api, eventsUrl, type PendingApproval, type SessionSummary } from "../api";
+import { api, eventsUrl, type AppMeta, type PendingApproval, type SessionSummary } from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
@@ -29,9 +29,16 @@ interface ApprovalItem {
   nonce: string;
 }
 
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/[|#>*_`~-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function sessionLabel(s: SessionSummary): string {
-  const raw = s.title || s.last_message_preview || "New chat";
-  return raw.length > 40 ? raw.slice(0, 40) + "…" : raw;
+  const clean = stripMarkdown(s.title || s.last_message_preview || "") || "New chat";
+  return clean.length > 40 ? clean.slice(0, 40) + "…" : clean;
 }
 
 export default function ChatView() {
@@ -45,6 +52,7 @@ export default function ChatView() {
   const [running, setRunning] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<AppMeta | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -180,6 +188,13 @@ export default function ChatView() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [bubbles, activities]);
 
+  useEffect(() => {
+    void api
+      .getMeta()
+      .then(setMeta)
+      .catch(() => {});
+  }, []);
+
   const newChat = async () => {
     if (!csrf) return;
     try {
@@ -234,7 +249,8 @@ export default function ChatView() {
           <div>
             <h2>Chat</h2>
             <p className="page-sub small">
-              Personal workspace · <span className="chip">Web chat</span> · Mock model
+              Personal workspace · <span className="chip">Web chat</span> ·{" "}
+              {meta ? (meta.real_model ? meta.model : "Mock model") : "…"}
             </p>
           </div>
           <div className="cand-actions">

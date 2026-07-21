@@ -10,6 +10,13 @@ export interface AuthSession {
   expires_at: string;
 }
 
+export interface AppMeta {
+  version: string;
+  provider_kind: string;
+  model: string;
+  real_model: boolean;
+}
+
 export interface SessionSummary {
   id: string;
   tenant_id: string;
@@ -275,6 +282,7 @@ export const api = {
   login: (email: string, password: string) =>
     req<AuthSession>("/auth/login", jsonInit("POST", null, { email, password })),
   session: () => req<AuthSession>("/auth/session"),
+  getMeta: () => req<AppMeta>("/meta"),
   logout: (csrf: string) => req<void>("/auth/logout", jsonInit("POST", csrf)),
   listSessions: () => req<SessionPage>("/sessions"),
   createSession: (csrf: string, title?: string | null) =>
