@@ -72,8 +72,12 @@ Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -
 | v1 wrap-up: context-fidelity fix (cross-run tool history) | ✅ done (`de1eb91`, browser-verified) |
 | v1 wrap-up: approval closure (resume + web renderer) | ✅ done (`c29b86f`, browser-verified) |
 | UI/UX backlog P1–P3 (UX-1…UX-11) | ✅ done (browser-verified; +2 infra fixes) |
+| **Milestone 1 — core memory** (storage + tools + context injection + REST + UI) | ✅ done (browser-verified: agent stores + recalls cross-session) |
+| Milestone 1 — pgvector/RAG (slice 1c) | ⬜ **next** — needs the pgvector image + an embedding provider decision |
 
-**M2 + M-tools complete; v1 wrap-up landed; UI/UX backlog cleared** (all browser-verified). Deferred: agent observability (owner), M3 eval gate (ADR-024 → post-v1 #11). **Now starting the post-v1 milestones** (`09-roadmap.md`), owner-directed batch: **1 two-tier memory + RAG → 2 files/MinIO → 3 sandbox → 4 QQ/IM → 5 agentic email**. Each: full tests + per-milestone Playwright human-lane acceptance; QQ/agentic-email real-account verification may be left for manual acceptance.
+**M2 + M-tools complete; v1 wrap-up landed; UI/UX backlog cleared** (all browser-verified). **Milestone 1 core memory done** (alembic `0015` user_memory; `memory_user_*` tools + `/memory` REST + `/remember` Memory page; core memory injected into the loop system prompt — 铁律#6). Verified end-to-end with the real model: the agent saved "favorite fruit = mango" and recalled it in a **new** session with no tool call. Deferred: agent observability (owner), M3 eval gate (ADR-024).
+
+**▶ Next: Milestone 1 slice 1c — pgvector/RAG.** Decision to make first: **the embedding provider** (does the litellm proxy expose an embedding model? else pick a source) + swap `postgres:16` → a `pgvector`-enabled image (ADR-012 anticipated pgvector; ADR-022 deferred it out of v1). Then `memory_passages` (embedding+visibility+model/dims/version), tenant-filtered hybrid retrieval (FTS `tsvector` GIN + HNSW, RRF fusion — architect-review §pgvector), a retrieval tool, and UI. Then milestones **2 files/MinIO → 3 sandbox → 4 QQ/IM → 5 agentic email**; each: full tests + per-milestone Playwright; QQ/agentic-email real-account verification may be left for manual acceptance.
 
 ## How to update
 On finishing a task: set its row ✅, move "Next ready", note anything a future agent must know (schema changes, new commands, gotchas), bump "Last updated", and commit (the STATUS bump can ride with the task commit).
