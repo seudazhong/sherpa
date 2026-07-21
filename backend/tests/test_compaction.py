@@ -119,6 +119,9 @@ async def _seed_long_transcript(s: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, 
     run = Run(tenant_id=tid, id=rid, session_id=sid, run_kind="web_chat", prompt_version="v1")
     s.add(run)
     await s.flush()
+    # A long prior window. `assemble_provider_history` sources user turns from
+    # `messages` and assistant turns from the event journal; seeded rows without
+    # events would not reconstruct, so we build the long window from user turns.
     for seq in range(1, 13):
         mid = uuid.uuid4()
         s.add(
@@ -127,9 +130,9 @@ async def _seed_long_transcript(s: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, 
                 id=mid,
                 session_id=sid,
                 run_id=rid,
-                author_user_id=uid if seq % 2 else None,
+                author_user_id=uid,
                 seq=seq,
-                role="user" if seq % 2 else "assistant",
+                role="user",
             )
         )
         await s.flush()

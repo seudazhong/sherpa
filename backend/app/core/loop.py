@@ -16,13 +16,13 @@ from __future__ import annotations
 import datetime
 import json
 import uuid
-from collections import defaultdict
 
 from sqlalchemy import func, select
 
 from app.audit import ACTION, record_receipt
 from app.config import settings
 from app.core.compaction import compact, should_compact
+from app.core.history import assemble_provider_history
 from app.effects import begin_invocation, mark_running, settle_failed, settle_succeeded
 from app.events import append_event
 from app.models import Message, Part, Run, Session
@@ -84,44 +84,6 @@ async def _persist_message(  # type: ignore[no-untyped-def]
     await session.flush()
 
 
-async def _load_transcript(  # type: ignore[no-untyped-def]
-    session, tenant_id: uuid.UUID, session_id: uuid.UUID
-) -> list[dict[str, object]]:
-    messages = (
-        (
-            await session.execute(
-                select(Message)
-                .where(Message.tenant_id == tenant_id, Message.session_id == session_id)
-                .order_by(Message.seq)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not messages:
-        return []
-    ids = [m.id for m in messages]
-    parts = (
-        (
-            await session.execute(
-                select(Part)
-                .where(Part.tenant_id == tenant_id, Part.message_id.in_(ids))
-                .order_by(Part.ordinal)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    by_msg: dict[uuid.UUID, list[Part]] = defaultdict(list)
-    for p in parts:
-        by_msg[p.message_id].append(p)
-    out: list[dict[str, object]] = []
-    for m in messages:
-        text = " ".join(str(p.content_redacted.get("text", "")) for p in by_msg.get(m.id, []))
-        out.append({"role": m.role, "content": text})
-    return out
-
-
 async def _run_tool(  # type: ignore[no-untyped-def]
     session,
     run: Run,
@@ -178,6 +140,11 @@ async def _run_tool(  # type: ignore[no-untyped-def]
             decider_user_id=decider_user_id,
         )
         env = created.envelope
+        observation = (
+            f"permission_required: approval requested for {tool.name} "
+            f"(correlation {env.correlation_id}); the action was NOT performed and awaits "
+            "the user's decision."
+        )
         await append_event(
             session,
             tenant_id=run.tenant_id,
@@ -185,6 +152,8 @@ async def _run_tool(  # type: ignore[no-untyped-def]
             session_id=run.session_id,
             event_type="permission.asked",
             payload={
+                "id": call.id,
+                "observation": observation,
                 "correlation_id": str(env.correlation_id),
                 "tool_name": env.tool_name,
                 "permission_scope": env.permission_scope,
@@ -209,11 +178,6 @@ async def _run_tool(  # type: ignore[no-untyped-def]
             subject_id=env.id,
             summary={"permission_scope": env.permission_scope},
             reversible=True,
-        )
-        observation = (
-            f"permission_required: approval requested for {tool.name} "
-            f"(correlation {env.correlation_id}); the action was NOT performed and awaits "
-            "the user's decision."
         )
         provider_messages.append({"role": "tool", "tool_call_id": call.id, "content": observation})
         return
@@ -314,7 +278,7 @@ async def execute_run(  # type: ignore[no-untyped-def]
         payload={"run_kind": run.run_kind},
     )
 
-    transcript = await _load_transcript(session, tenant_id, session_id)
+    transcript = await assemble_provider_history(session, tenant_id, session_id)
     provider_messages: list[dict[str, object]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         *transcript,
