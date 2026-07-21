@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     provider_api_key: str = ""
     provider_model: str = "claude-sonnet-4.6"
     provider_timeout_seconds: int = 60
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dim: int = 1536
 
     # Transcript compaction (docs/04 core-loop). When the assembled provider
     # message window exceeds the char budget, keep the head + the most recent

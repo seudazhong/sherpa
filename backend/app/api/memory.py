@@ -7,6 +7,8 @@ also need CSRF.
 
 from __future__ import annotations
 
+import datetime
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,8 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import RequestContext, require_context, require_csrf
 from app.db import get_session
+from app.models import MemoryPassage
 from app.services import CallerContext, ServiceError
 from app.services import memory as svc
+from app.services import passages as psvc
 
 router = APIRouter(tags=["memory"])
 
@@ -77,6 +81,66 @@ async def delete_memory(
 ) -> None:
     try:
         await svc.delete_memory(db, _caller(ctx), key=key)
+        await db.commit()
+    except ServiceError as e:
+        raise _http(e) from None
+
+
+class PassageItem(BaseModel):
+    id: uuid.UUID
+    text: str
+    source: str
+    created_at: datetime.datetime
+
+
+class PassagePage(BaseModel):
+    items: list[PassageItem]
+
+
+class PassageCreate(BaseModel):
+    text: Annotated[str, Field(min_length=1, max_length=65536)]
+
+
+def _passage(row: MemoryPassage) -> PassageItem:
+    return PassageItem(
+        id=row.id,
+        text=row.text_content,
+        source=row.source,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/memory/passages")
+async def list_passages(
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> PassagePage:
+    rows = await psvc.list_passages(db, _caller(ctx))
+    return PassagePage(items=[_passage(r) for r in rows])
+
+
+@router.post("/memory/passages", status_code=201)
+async def add_passage(
+    body: PassageCreate,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> PassageItem:
+    try:
+        row = await psvc.add_passage(db, _caller(ctx), text=body.text)
+        await db.commit()
+    except ServiceError as e:
+        raise _http(e) from None
+    return _passage(row)
+
+
+@router.delete("/memory/passages/{passage_id}", status_code=204)
+async def delete_passage(
+    passage_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    try:
+        await psvc.delete_passage(db, _caller(ctx), passage_id=passage_id)
         await db.commit()
     except ServiceError as e:
         raise _http(e) from None

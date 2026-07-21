@@ -9,7 +9,8 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import DateTime, Integer, LargeBinary, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,4 +30,22 @@ class UserMemory(Base):
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MemoryPassage(Base):
+    """Archival/RAG passage with a pgvector embedding (migration 0016)."""
+
+    __tablename__ = "memory_passages"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    text_content: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1536))
+    embedding_model: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[bytes] = mapped_column(LargeBinary)
+    source: Mapped[str] = mapped_column(Text, server_default="agent")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )

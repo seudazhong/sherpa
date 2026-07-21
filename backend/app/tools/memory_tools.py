@@ -8,8 +8,8 @@ This is the bounded core-memory tier; embeddings/RAG are deferred (ADR-012/022).
 
 from __future__ import annotations
 
-from app.services import ServiceError, memory
-from app.tools.adapter import as_tool_error, require_session, to_caller
+from app.services import ServiceError, memory, passages
+from app.tools.adapter import arg_int, as_tool_error, require_session, to_caller
 from app.tools.base import ToolContext, ToolFlags, ToolResult
 from app.tools.validate import validate_args
 
@@ -108,5 +108,66 @@ class MemoryDeleteTool:
         return ToolResult(llm_content=f"forgot '{args['key']}'")
 
 
+class MemoryNoteTool:
+    name = "memory_note"
+    description = (
+        "Save a longer note or passage to durable archival memory for later "
+        "semantic recall (e.g. context, a decision, a summary). Retrieve later with "
+        "memory_search. Prefer memory_user_set for short structured facts. Own-data "
+        "write; no approval needed."
+    )
+    input_schema: dict[str, object] = {
+        "type": "object",
+        "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 65536}},
+        "required": ["text"],
+    }
+    flags = _WRITE
+
+    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
+        validate_args(self.input_schema, args)
+        db, cc = require_session(ctx), to_caller(ctx)
+        try:
+            row = await passages.add_passage(db, cc, text=str(args["text"]))
+        except ServiceError as e:
+            raise as_tool_error(e) from None
+        return ToolResult(llm_content=f"noted (id {row.id})")
+
+
+class MemorySearchTool:
+    name = "memory_search"
+    description = (
+        "Search the user's archival memory (saved notes/passages) by meaning and "
+        "keywords; returns the most relevant notes. Read-only."
+    )
+    input_schema: dict[str, object] = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "minLength": 1},
+            "k": {"type": "integer", "minimum": 1, "maximum": 10},
+        },
+        "required": ["query"],
+    }
+    flags = ToolFlags(is_read_only=True)
+
+    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
+        validate_args(self.input_schema, args)
+        db, cc = require_session(ctx), to_caller(ctx)
+        k = arg_int(args["k"]) if "k" in args else 5
+        try:
+            hits = await passages.search_passages(db, cc, query=str(args["query"]), k=k)
+        except ServiceError as e:
+            raise as_tool_error(e) from None
+        if not hits:
+            return ToolResult(llm_content="no matching notes")
+        return ToolResult(llm_content="relevant notes:\n" + "\n".join(f"- {h.text}" for h in hits))
+
+
 def memory_tools() -> list[object]:
-    return [MemorySetTool(), MemoryGetTool(), MemoryListTool(), MemoryDeleteTool()]
+    return [
+        MemorySetTool(),
+        MemoryGetTool(),
+        MemoryListTool(),
+        MemoryDeleteTool(),
+        MemoryNoteTool(),
+        MemorySearchTool(),
+    ]

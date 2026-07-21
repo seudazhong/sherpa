@@ -17,7 +17,7 @@ from app.models.core import (
 )
 from app.models.effects import ApprovalEnvelope, EffectInvocation
 from app.models.events import EventJournal, Outbox
-from app.models.memory import UserMemory
+from app.models.memory import MemoryPassage, UserMemory
 from app.models.observability import Trace
 from app.models.schedules import Schedule, ScheduleFiring
 from app.models.settings import UserSettings
@@ -47,4 +47,5 @@ __all__ = [
     "UserSettings",
     "AuditReceipt",
     "UserMemory",
+    "MemoryPassage",
 ]
