@@ -29,4 +29,3 @@ async def test_meta_reports_provider() -> None:
     body = resp.json()
     assert set(body) == {"version", "provider_kind", "model", "real_model"}
     assert body["real_model"] == (body["provider_kind"] != "mock")
-
