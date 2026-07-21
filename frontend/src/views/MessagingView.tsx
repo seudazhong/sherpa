@@ -9,7 +9,8 @@ export default function MessagingView() {
   const [status, setStatus] = useState<ChannelsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [text, setText] = useState("");
+  const [qqText, setQqText] = useState("");
+  const [emailText, setEmailText] = useState("");
   const [active, setActive] = useState<string | null>(null);
   const [thread, setThread] = useState<ThreadTranscript | null>(null);
   const pollRef = useRef<number | null>(null);
@@ -59,18 +60,17 @@ export default function MessagingView() {
     }, 1500);
   };
 
-  const simulate = async () => {
-    if (!csrf || !text.trim()) return;
-    await sendInbound(text.trim());
-  };
-
-  const sendInbound = async (message: string) => {
-    if (!csrf) return;
+  const sendInbound = async (channel: "qq" | "email", message: string) => {
+    if (!csrf || !message.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const res = await api.simulateQQ(csrf, message);
-      setText("");
+      const res =
+        channel === "qq"
+          ? await api.simulateQQ(csrf, message.trim())
+          : await api.simulateEmail(csrf, message.trim());
+      if (channel === "qq") setQqText("");
+      else setEmailText("");
       await loadStatus();
       const sid = res.session_id ?? active;
       if (sid) {
@@ -86,6 +86,8 @@ export default function MessagingView() {
   };
 
   const qq = status?.qq;
+  const email = status?.email;
+  const threadChannel = (thread?.channel === "email" ? "email" : "qq") as "qq" | "email";
 
   return (
     <div className="app">
@@ -95,8 +97,8 @@ export default function MessagingView() {
           <div>
             <h2>Messaging</h2>
             <p className="page-sub small">
-              Chat with Sherpa over QQ / IM — inbound messages run the same agent loop, and you
-              can approve actions right from the chat.
+              Reach Sherpa over QQ / IM and email — inbound messages run the same agent loop, and
+              you can approve actions right from the conversation.
             </p>
           </div>
         </header>
@@ -105,7 +107,7 @@ export default function MessagingView() {
           {error && <div className="auth-error">{error}</div>}
 
           <section>
-            <div className="section-head">QQ connection</div>
+            <div className="section-head">QQ / IM</div>
             <article className="cand-card">
               <div className="cand-main">
                 <div className="cand-title">
@@ -119,52 +121,89 @@ export default function MessagingView() {
                 </div>
                 <div className="cand-meta small muted">
                   <div>
-                    Backend: <code>{qq?.kind ?? "…"}</code> (OneBot v11 / aiocqhttp)
+                    Backend: <code>{qq?.kind ?? "…"}</code> (OneBot v11 / aiocqhttp) · webhook{" "}
+                    <code>{qq?.webhook_path ?? "/channels/qq/webhook"}</code>
                   </div>
-                  <div>
-                    Webhook: <code>{qq?.webhook_path ?? "/channels/qq/webhook"}</code> ·
-                    signature {qq?.webhook_secret_set ? "set" : "not set"}
-                  </div>
-                  <div>
-                    Owner QQ id: {qq?.owner_id_set ? "set" : "not set"} · API base{" "}
-                    <code>{qq?.api_base ?? "…"}</code>
-                  </div>
+                  {!qq?.configured && (
+                    <div>
+                      Set <code>QQ_KIND=onebot</code>, <code>QQ_OWNER_ID</code>,{" "}
+                      <code>QQ_WEBHOOK_SECRET</code>, <code>QQ_API_BASE</code> and point a
+                      self-hosted OneBot bridge at the webhook. Try it below without a bot.
+                    </div>
+                  )}
                 </div>
-                {!qq?.configured && (
-                  <p className="small muted">
-                    To connect a real bot: run a self-hosted OneBot bridge (go-cqhttp / Lagrange /
-                    AstrBot), set <code>QQ_KIND=onebot</code>, <code>QQ_OWNER_ID</code>,{" "}
-                    <code>QQ_WEBHOOK_SECRET</code> and <code>QQ_API_BASE</code>, and point its
-                    event webhook at <code>/channels/qq/webhook</code>. You can try the flow below
-                    without a bot.
-                  </p>
-                )}
               </div>
             </article>
-          </section>
-
-          <section>
-            <div className="section-head">Try it (simulate an inbound message)</div>
             <div className="composer">
               <textarea
                 rows={2}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="e.g. Remind me to file taxes on April 10, or: what can you do?"
-                aria-label="Simulated inbound message"
+                value={qqText}
+                onChange={(e) => setQqText(e.target.value)}
+                placeholder="Simulate an inbound QQ message, e.g. what can you do?"
+                aria-label="Simulated inbound QQ message"
               />
               <button
                 className="btn btn-primary"
-                disabled={busy || !text.trim()}
-                onClick={() => void simulate()}
+                disabled={busy || !qqText.trim()}
+                onClick={() => void sendInbound("qq", qqText)}
               >
-                {busy ? "Sending…" : "Send as QQ"}
+                Send as QQ
+              </button>
+            </div>
+          </section>
+
+          <section>
+            <div className="section-head">Agentic email</div>
+            <article className="cand-card">
+              <div className="cand-main">
+                <div className="cand-title">
+                  {email?.configured ? (
+                    <span className="pill pill-success">Connected</span>
+                  ) : email?.enabled ? (
+                    <span className="pill pill-running">Enabled · needs inbox</span>
+                  ) : (
+                    <span className="pill pill-idle">Not configured</span>
+                  )}
+                </div>
+                <div className="cand-meta small muted">
+                  <div>
+                    Inbox: <code>{email?.inbox_id || "(none — set AGENTMAIL_INBOX_ID)"}</code> ·
+                    backend <code>{email?.kind ?? "…"}</code> (AgentMail)
+                  </div>
+                  <div>
+                    Webhook: <code>{email?.webhook_path ?? "/channels/email/webhook"}</code> ·
+                    signature {email?.webhook_secret_set ? "set" : "not set"} · owner allowlist{" "}
+                    {email?.owner_email ? <code>{email.owner_email}</code> : "any"}
+                  </div>
+                  {!email?.configured && (
+                    <div>
+                      Set <code>EMAIL_KIND=agentmail</code>, <code>AGENTMAIL_API_KEY</code>,{" "}
+                      <code>AGENTMAIL_INBOX_ID</code> (and <code>AGENTMAIL_WEBHOOK_SECRET</code> for
+                      inbound). Try it below without a live mailbox.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </article>
+            <div className="composer">
+              <textarea
+                rows={2}
+                value={emailText}
+                onChange={(e) => setEmailText(e.target.value)}
+                placeholder="Simulate an inbound email, e.g. summarize my open tasks"
+                aria-label="Simulated inbound email"
+              />
+              <button
+                className="btn btn-primary"
+                disabled={busy || !emailText.trim()}
+                onClick={() => void sendInbound("email", emailText)}
+              >
+                Send as email
               </button>
             </div>
             <p className="small muted">
-              This injects a message as if it arrived from your QQ, runs the agent, and shows the
-              reply below. Approvals appear as an <code>approve &lt;id&gt;</code> prompt — reply
-              with that to authorize an action.
+              Injecting a message runs the agent and shows the reply below. Approvals appear as an{" "}
+              <code>approve &lt;id&gt;</code> prompt — reply (or click the button) to authorize.
             </p>
           </section>
 
@@ -173,14 +212,17 @@ export default function MessagingView() {
               Threads <span className="count">{status?.threads.length ?? 0}</span>
             </div>
             {(status?.threads.length ?? 0) === 0 && (
-              <div className="empty small muted">No IM threads yet. Send a message above.</div>
+              <div className="empty small muted">No threads yet. Send a message above.</div>
             )}
             {status?.threads.map((t) => (
               <article
                 className={"todo-row" + (active === t.session_id ? " active" : "")}
                 key={t.session_id}
               >
-                <span className="todo-title">QQ · {t.external_id}</span>
+                <span className="todo-title">
+                  <span className="pill pill-idle">{t.channel === "email" ? "email" : "QQ"}</span>{" "}
+                  {t.external_id}
+                </span>
                 <span className="small muted">{new Date(t.created_at).toLocaleString()}</span>
                 <button className="btn todo-action" onClick={() => void openThread(t.session_id)}>
                   Open
@@ -192,7 +234,7 @@ export default function MessagingView() {
           {thread && (
             <section>
               <div className="section-head">
-                Transcript · QQ {thread.external_id}
+                Transcript · {thread.channel === "email" ? "email" : "QQ"} {thread.external_id}
                 <button
                   className="btn todo-action"
                   style={{ marginLeft: "auto" }}
@@ -229,14 +271,14 @@ export default function MessagingView() {
                     <button
                       className="btn btn-primary"
                       disabled={busy}
-                      onClick={() => void sendInbound(`approve ${a.short_id}`)}
+                      onClick={() => void sendInbound(threadChannel, `approve ${a.short_id}`)}
                     >
                       Approve
                     </button>
                     <button
                       className="btn"
                       disabled={busy}
-                      onClick={() => void sendInbound(`reject ${a.short_id}`)}
+                      onClick={() => void sendInbound(threadChannel, `reject ${a.short_id}`)}
                     >
                       Reject
                     </button>

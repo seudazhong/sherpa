@@ -294,14 +294,26 @@ export interface QQStatus {
   webhook_path: string;
 }
 
+export interface EmailStatus {
+  kind: string;
+  enabled: boolean;
+  configured: boolean;
+  inbox_id: string;
+  owner_email: string;
+  webhook_secret_set: boolean;
+  webhook_path: string;
+}
+
 export interface ThreadSummary {
   session_id: string;
+  channel: string;
   external_id: string;
   created_at: string;
 }
 
 export interface ChannelsStatus {
   qq: QQStatus;
+  email: EmailStatus;
   threads: ThreadSummary[];
 }
 
@@ -327,6 +339,7 @@ export interface PendingApprovalBrief {
 
 export interface ThreadTranscript {
   session_id: string;
+  channel: string;
   external_id: string;
   messages: ThreadMessage[];
   pending_approvals: PendingApprovalBrief[];
@@ -484,6 +497,11 @@ export const api = {
   simulateQQ: (csrf: string, text: string, fromId?: string) =>
     req<SimulateResult>(
       "/channels/qq/simulate",
+      jsonInit("POST", csrf, { text, from_id: fromId ?? "" }),
+    ),
+  simulateEmail: (csrf: string, text: string, fromId?: string) =>
+    req<SimulateResult>(
+      "/channels/email/simulate",
       jsonInit("POST", csrf, { text, from_id: fromId ?? "" }),
     ),
   threadTranscript: (sid: string) => req<ThreadTranscript>(`/channels/threads/${sid}`),
