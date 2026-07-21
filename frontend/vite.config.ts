@@ -20,6 +20,7 @@ export default defineConfig({
       "/todos": target,
       "/notifications": target,
       "/settings": target,
+      "/schedules": target,
       "/permissions": target,
       "/activity": target,
       "/health": target,

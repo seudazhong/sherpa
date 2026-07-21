@@ -187,6 +187,40 @@ export interface DeleteImportedResult {
   deleted: Record<string, number>;
 }
 
+export interface Schedule {
+  id: string;
+  tenant_id: string;
+  kind: string;
+  name: string;
+  todo_id: string | null;
+  reminder_kind: string | null;
+  delivery_channel: string;
+  timezone: string;
+  local_time: string | null;
+  next_fire_at: string;
+  status: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SchedulePage {
+  items: Schedule[];
+  next_cursor: string | null;
+}
+
+export interface Settings {
+  notifications_enabled: boolean;
+  web_enabled: boolean;
+  email_digest_enabled: boolean;
+  timezone: string;
+  quiet_hours_enabled: boolean;
+  quiet_hours_start: string;
+  quiet_hours_end: string;
+  daily_cap: number;
+  version: number;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -250,6 +284,23 @@ export const api = {
     req<ActivityPage>(`/activity${type ? `?type=${encodeURIComponent(type)}` : ""}`),
   deleteImported: (csrf: string) =>
     req<DeleteImportedResult>("/activity/delete-imported", jsonInit("POST", csrf)),
+  listSchedules: () => req<SchedulePage>("/schedules"),
+  createDigest: (csrf: string, localTime: string, timezone: string, name?: string) =>
+    req<Schedule>(
+      "/schedules",
+      jsonInit("POST", csrf, {
+        kind: "daily_digest",
+        name: name ?? "Daily digest",
+        local_time: localTime,
+        timezone,
+        delivery_channel: "web",
+      }),
+    ),
+  cancelSchedule: (csrf: string, id: string, ifVersion: number) =>
+    req<Schedule>(`/schedules/${id}/cancel`, jsonInit("POST", csrf, { if_version: ifVersion })),
+  getSettings: () => req<Settings>("/settings"),
+  updateSettings: (csrf: string, patch: Record<string, unknown>) =>
+    req<Settings>("/settings", jsonInit("PATCH", csrf, patch)),
 };
 
 export function exportUrl(): string {

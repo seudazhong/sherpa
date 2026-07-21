@@ -5,6 +5,8 @@ import ActivityView from "./views/ActivityView";
 import ChatView from "./views/ChatView";
 import InboxView from "./views/InboxView";
 import LoginView from "./views/LoginView";
+import SchedulesView from "./views/SchedulesView";
+import SettingsView from "./views/SettingsView";
 
 function Protected({ children }: { children: JSX.Element }) {
   const { ready, authed } = useAuth();
@@ -38,6 +40,22 @@ export default function App() {
         element={
           <Protected>
             <ActivityView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/reminders"
+        element={
+          <Protected>
+            <SchedulesView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/preferences"
+        element={
+          <Protected>
+            <SettingsView />
           </Protected>
         }
       />

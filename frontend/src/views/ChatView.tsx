@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
-import { api, eventsUrl } from "../api";
+import { api, eventsUrl, type SessionSummary } from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
@@ -24,8 +24,14 @@ interface Envelope {
   payload: Record<string, unknown>;
 }
 
+function sessionLabel(s: SessionSummary): string {
+  const raw = s.title || s.last_message_preview || "New chat";
+  return raw.length > 40 ? raw.slice(0, 40) + "…" : raw;
+}
+
 export default function ChatView() {
   const { email, csrf } = useAuth();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [draft, setDraft] = useState("");
@@ -36,106 +42,139 @@ export default function ChatView() {
   const esRef = useRef<EventSource | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
+  const openStream = useCallback((sid: string, cursor: string) => {
+    const es = new EventSource(eventsUrl(sid, cursor));
+    esRef.current = es;
+    const parse = (e: Event) => JSON.parse((e as MessageEvent).data) as Envelope;
+
+    es.onopen = () => setConnected(true);
+    es.onerror = () => setConnected(false);
+    es.addEventListener("run.started", () => setRunning(true));
+    es.addEventListener("text-delta", (e) => {
+      const env = parse(e);
+      setBubbles((b) => [
+        ...b,
+        { key: env.event_id, role: "assistant", text: String(env.payload.text ?? "") },
+      ]);
+    });
+    es.addEventListener("tool-call", (e) => {
+      const env = parse(e);
+      setActivities((a) => [
+        ...a,
+        { key: env.event_id, label: `Tool · ${String(env.payload.name ?? "")}`, state: "running" },
+      ]);
+    });
+    es.addEventListener("tool-result", (e) => {
+      const env = parse(e);
+      setActivities((a) => [
+        ...a,
+        {
+          key: env.event_id,
+          label: `Tool result · ${String(env.payload.name ?? "")}`,
+          state: "success",
+          detail: String(env.payload.output ?? ""),
+        },
+      ]);
+    });
+    es.addEventListener("tool-error", (e) => {
+      const env = parse(e);
+      setActivities((a) => [
+        ...a,
+        {
+          key: env.event_id,
+          label: `Tool error · ${String(env.payload.name ?? "")}`,
+          state: "error",
+          detail: String(env.payload.output ?? ""),
+        },
+      ]);
+    });
+    es.addEventListener("run.settled", (e) => {
+      const env = parse(e);
+      setRunning(false);
+      setActivities((a) => [
+        ...a,
+        {
+          key: env.event_id,
+          label: `Run ${String(env.payload.status ?? "settled")}`,
+          state: "success",
+          detail: String(env.payload.reason ?? ""),
+        },
+      ]);
+    });
+  }, []);
+
+  const loadSession = useCallback(
+    async (sid: string) => {
+      esRef.current?.close();
+      esRef.current = null;
+      setSessionId(sid);
+      setBubbles([]);
+      setActivities([]);
+      setRunning(false);
+      const mp = await api.listMessages(sid);
+      setBubbles(
+        mp.items.map((m) => ({
+          key: m.id,
+          role: m.role,
+          text: m.parts.map((p) => p.text).join(" "),
+        })),
+      );
+      openStream(sid, mp.event_cursor);
+    },
+    [openStream],
+  );
+
   useEffect(() => {
     let cancelled = false;
-
-    const openStream = (sid: string, cursor: string) => {
-      const es = new EventSource(eventsUrl(sid, cursor));
-      esRef.current = es;
-      const parse = (e: Event) => JSON.parse((e as MessageEvent).data) as Envelope;
-
-      es.onopen = () => setConnected(true);
-      es.onerror = () => setConnected(false);
-      es.addEventListener("run.started", () => setRunning(true));
-      es.addEventListener("text-delta", (e) => {
-        const env = parse(e);
-        setBubbles((b) => [
-          ...b,
-          { key: env.event_id, role: "assistant", text: String(env.payload.text ?? "") },
-        ]);
-      });
-      es.addEventListener("tool-call", (e) => {
-        const env = parse(e);
-        setActivities((a) => [
-          ...a,
-          { key: env.event_id, label: `Tool · ${String(env.payload.name ?? "")}`, state: "running" },
-        ]);
-      });
-      es.addEventListener("tool-result", (e) => {
-        const env = parse(e);
-        setActivities((a) => [
-          ...a,
-          {
-            key: env.event_id,
-            label: `Tool result · ${String(env.payload.name ?? "")}`,
-            state: "success",
-            detail: String(env.payload.output ?? ""),
-          },
-        ]);
-      });
-      es.addEventListener("tool-error", (e) => {
-        const env = parse(e);
-        setActivities((a) => [
-          ...a,
-          {
-            key: env.event_id,
-            label: `Tool error · ${String(env.payload.name ?? "")}`,
-            state: "error",
-            detail: String(env.payload.output ?? ""),
-          },
-        ]);
-      });
-      es.addEventListener("run.settled", (e) => {
-        const env = parse(e);
-        setRunning(false);
-        setActivities((a) => [
-          ...a,
-          {
-            key: env.event_id,
-            label: `Run ${String(env.payload.status ?? "settled")}`,
-            state: "success",
-            detail: String(env.payload.reason ?? ""),
-          },
-        ]);
-      });
-    };
-
     const boot = async () => {
       try {
         const page = await api.listSessions();
+        if (cancelled) return;
+        setSessions(page.items);
         let sid = page.items[0]?.id ?? null;
         if (!sid) {
           if (!csrf) return;
-          sid = (await api.createSession(csrf)).id;
+          const created = await api.createSession(csrf);
+          setSessions([created]);
+          sid = created.id;
         }
         if (cancelled) return;
-        setSessionId(sid);
-        const mp = await api.listMessages(sid);
-        if (cancelled) return;
-        setBubbles(
-          mp.items.map((m) => ({
-            key: m.id,
-            role: m.role,
-            text: m.parts.map((p) => p.text).join(" "),
-          })),
-        );
-        openStream(sid, mp.event_cursor);
+        await loadSession(sid);
       } catch {
         if (!cancelled) setError("Could not load your workspace. Is the backend running?");
       }
     };
-
     void boot();
     return () => {
       cancelled = true;
       esRef.current?.close();
       esRef.current = null;
     };
-  }, [csrf]);
+  }, [csrf, loadSession]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [bubbles, activities]);
+
+  const newChat = async () => {
+    if (!csrf) return;
+    try {
+      const created = await api.createSession(csrf);
+      setSessions((s) => [created, ...s]);
+      await loadSession(created.id);
+    } catch {
+      setError("Could not start a new chat.");
+    }
+  };
+
+  const switchSession = async (sid: string) => {
+    if (sid === sessionId) return;
+    try {
+      await loadSession(sid);
+    } catch {
+      setError("Could not open that conversation.");
+    }
+  };
 
   const send = async (e: FormEvent) => {
     e.preventDefault();
@@ -162,9 +201,28 @@ export default function ChatView() {
               Personal workspace · <span className="chip">Web chat</span> · Mock model
             </p>
           </div>
-          <span className={connected ? "pill pill-live" : "pill pill-idle"}>
-            {connected ? "Live" : "Connecting…"}
-          </span>
+          <div className="cand-actions">
+            {sessions.length > 0 && (
+              <select
+                className="session-select"
+                value={sessionId ?? ""}
+                onChange={(e) => void switchSession(e.target.value)}
+                aria-label="Switch conversation"
+              >
+                {sessions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {sessionLabel(s)}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button className="btn" onClick={() => void newChat()}>
+              + New chat
+            </button>
+            <span className={connected ? "pill pill-live" : "pill pill-idle"}>
+              {connected ? "Live" : "Connecting…"}
+            </span>
+          </div>
         </header>
 
         <div className="thread">

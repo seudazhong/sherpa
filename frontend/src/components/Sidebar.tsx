@@ -22,7 +22,12 @@ export default function Sidebar() {
       <Link className={cls("/data")} to="/data">
         ▤ Activity
       </Link>
-      <span className="nav-item muted">◷ Schedules</span>
+      <Link className={cls("/reminders")} to="/reminders">
+        ◷ Schedules
+      </Link>
+      <Link className={cls("/preferences")} to="/preferences">
+        ⚙ Settings
+      </Link>
       <span className="nav-item muted">⌁ Connectors</span>
       <div className="nav-spacer" />
       <div className="nav-user">
