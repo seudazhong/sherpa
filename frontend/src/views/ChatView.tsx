@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
-import { api, eventsUrl, type SessionSummary } from "../api";
+import { api, eventsUrl, type PendingApproval, type SessionSummary } from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
@@ -24,6 +24,11 @@ interface Envelope {
   payload: Record<string, unknown>;
 }
 
+interface ApprovalItem {
+  pending: PendingApproval;
+  nonce: string;
+}
+
 function sessionLabel(s: SessionSummary): string {
   const raw = s.title || s.last_message_preview || "New chat";
   return raw.length > 40 ? raw.slice(0, 40) + "…" : raw;
@@ -34,6 +39,7 @@ export default function ChatView() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [draft, setDraft] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -88,6 +94,23 @@ export default function ChatView() {
         },
       ]);
     });
+    es.addEventListener("permission.asked", (e) => {
+      const env = parse(e);
+      const correlationId = String(env.payload.correlation_id ?? "");
+      const nonce = String(env.payload.nonce ?? "");
+      if (!correlationId || !nonce) return;
+      // The single-use nonce arrives only on this event; the immutable envelope
+      // fields come from the pending-approvals projection. Combine to resolve.
+      void api.listPermissions().then((page) => {
+        const pending = page.items.find((p) => p.correlation_id === correlationId);
+        if (!pending) return;
+        setApprovals((a) =>
+          a.some((x) => x.pending.correlation_id === correlationId)
+            ? a
+            : [...a, { pending, nonce }],
+        );
+      });
+    });
     es.addEventListener("run.settled", (e) => {
       const env = parse(e);
       setRunning(false);
@@ -110,6 +133,7 @@ export default function ChatView() {
       setSessionId(sid);
       setBubbles([]);
       setActivities([]);
+      setApprovals([]);
       setRunning(false);
       const mp = await api.listMessages(sid);
       setBubbles(
@@ -173,6 +197,18 @@ export default function ChatView() {
       await loadSession(sid);
     } catch {
       setError("Could not open that conversation.");
+    }
+  };
+
+  const resolveApproval = async (item: ApprovalItem, choice: string) => {
+    if (!csrf) return;
+    try {
+      await api.resolvePermission(csrf, item.pending, item.nonce, choice);
+      setApprovals((a) =>
+        a.filter((x) => x.pending.correlation_id !== item.pending.correlation_id),
+      );
+    } catch {
+      setError("Could not submit your decision.");
     }
   };
 
@@ -258,6 +294,41 @@ export default function ChatView() {
                 <div className="bubble-agent">{m.text}</div>
               </article>
             ),
+          )}
+
+          {approvals.length > 0 && (
+            <div className="run-log" aria-label="Pending approvals">
+              <div className="rl-head">Approvals needed</div>
+              {approvals.map((item) => (
+                <div className="tool-card" key={item.pending.correlation_id}>
+                  <div className="row">
+                    <span className="pill pill-error">approval</span>
+                    <strong>{item.pending.tool_name}</strong>
+                  </div>
+                  <div className="small muted mt-8">
+                    {item.pending.human_readable_preview.summary}
+                  </div>
+                  <div className="cand-meta small">
+                    {item.pending.human_readable_preview.details.map((d) => (
+                      <span className="muted" key={d.label}>
+                        · {d.label}: {d.value}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="cand-actions mt-8">
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => void resolveApproval(item, "allow_once")}
+                    >
+                      Approve
+                    </button>
+                    <button className="btn" onClick={() => void resolveApproval(item, "reject")}>
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
 
           {activities.length > 0 && (

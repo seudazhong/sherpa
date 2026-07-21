@@ -209,6 +209,28 @@ export interface SchedulePage {
   next_cursor: string | null;
 }
 
+export interface ApprovalEnvelopeBody {
+  schema_version: "1.0";
+  correlation_id: string;
+  bound: { tenant_id: string; run_id: string; invocation_id: string };
+  action: { tool_name: string; permission_scope: string; session_id: string };
+  effect_class: string;
+  normalized_args_hash: string;
+  human_readable_preview: ApprovalPreview;
+  policy_version: string;
+  expires_at: string;
+  nonce: string;
+  authorized_actor: { type: "user"; id: string };
+  decision: { actor: { type: "user"; id: string }; channel: "web"; choice: string };
+}
+
+export interface ApprovalResolution {
+  correlation_id: string;
+  state: "resolved";
+  winning_decision: { actor: { type: string; id: string }; channel: string; choice: string };
+  decided_at: string;
+}
+
 export interface Settings {
   notifications_enabled: boolean;
   web_enabled: boolean;
@@ -280,6 +302,28 @@ export const api = {
     req<Todo>(`/todos/${id}`, jsonInit("PATCH", csrf, patch)),
   listNotifications: () => req<NotificationPage>("/notifications"),
   listPermissions: () => req<PendingApprovalPage>("/permissions"),
+  resolvePermission: (csrf: string, p: PendingApproval, nonce: string, choice: string) =>
+    req<ApprovalResolution>(
+      `/permissions/${p.correlation_id}/resolve`,
+      jsonInit("POST", csrf, {
+        schema_version: "1.0",
+        correlation_id: p.correlation_id,
+        bound: { tenant_id: p.tenant_id, run_id: p.run_id, invocation_id: p.invocation_id },
+        action: {
+          tool_name: p.tool_name,
+          permission_scope: p.permission_scope,
+          session_id: p.session_id,
+        },
+        effect_class: p.effect_class,
+        normalized_args_hash: p.normalized_args_hash,
+        human_readable_preview: p.human_readable_preview,
+        policy_version: p.policy_version,
+        expires_at: p.expires_at,
+        nonce,
+        authorized_actor: { type: "user", id: p.authorized_actor.id },
+        decision: { actor: { type: "user", id: p.authorized_actor.id }, channel: "web", choice },
+      } satisfies ApprovalEnvelopeBody),
+    ),
   listActivity: (type?: string) =>
     req<ActivityPage>(`/activity${type ? `?type=${encodeURIComponent(type)}` : ""}`),
   deleteImported: (csrf: string) =>

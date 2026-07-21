@@ -37,6 +37,7 @@ from app.permissions import (
     nonce_hash,
     resolve_approval,
 )
+from app.queue import enqueue_approval_resume
 
 router = APIRouter(tags=["permissions"])
 
@@ -139,6 +140,11 @@ async def resolve_permission(
 
     row = result.envelope
     await db.commit()
+    # Wake-up (api.md §6.4.5): on a fresh decision, resume the run to execute the
+    # approved action (or fail it for reject). Enqueued post-commit, at-least-once;
+    # the resume job is idempotent on the bound invocation's settled state.
+    if result.mutated:
+        await enqueue_approval_resume(row.correlation_id)
     return ApprovalResolution(
         correlation_id=row.correlation_id,
         state="resolved",

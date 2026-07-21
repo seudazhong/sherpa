@@ -18,7 +18,7 @@ from app import queue
 from app.config import settings
 from app.connectors.gmail import build_gmail_sync_client
 from app.connectors.sync import sync_gmail
-from app.core import execute_run
+from app.core import execute_run, resume_approval
 from app.db import SessionLocal
 from app.events import append_event, relay_once
 from app.models import Connector, Run
@@ -137,6 +137,22 @@ async def run_job(ctx: dict[str, Any], run_id: str) -> str:
             return "failed"
 
 
+async def approval_resume_job(ctx: dict[str, Any], correlation_id: str) -> str:
+    """Resume a run after an approval decision (api.md §6.3/§6.4).
+
+    Thin arq wrapper; the resume logic lives in app.core.resume (session-taking,
+    testable). Idempotent on the bound invocation's settled state.
+    """
+    async with SessionLocal() as session:
+        try:
+            status = await resume_approval(session, uuid.UUID(correlation_id))
+            await session.commit()
+            return status
+        except Exception:
+            await session.rollback()
+            return "failed"
+
+
 async def _relay_loop() -> None:
     """Continuously publish outbox rows to Redis Streams (at-least-once delivery)."""
     while True:
@@ -226,7 +242,7 @@ async def delivery_tick(ctx: dict[str, Any]) -> str:
 
 
 class WorkerSettings:
-    functions = [ping, run_job, gmail_sync_job, sync_and_analyze_job]
+    functions = [ping, run_job, gmail_sync_job, sync_and_analyze_job, approval_resume_job]
     cron_jobs = [
         cron(scheduler_tick, second=0),
         cron(delivery_tick, second=15),
