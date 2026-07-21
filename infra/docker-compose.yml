@@ -48,6 +48,14 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sherpa}:${POSTGRES_PASSWORD:-sherpa}@postgres:5432/${POSTGRES_DB:-sherpa}
       REDIS_URL: redis://redis:6379/0
+      # Provider config so /meta and any sync path reflect the real model (the
+      # worker runs the loop; the web only reports provider kind/model).
+      PROVIDER_KIND: ${PROVIDER_KIND:-mock}
+      PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-http://host.docker.internal:4000}
+      PROVIDER_MODEL: ${PROVIDER_MODEL:-claude-sonnet-4.6}
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports: ["8000:8000"]
     depends_on:
       postgres: {condition: service_healthy}
