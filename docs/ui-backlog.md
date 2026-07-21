@@ -19,6 +19,7 @@
 | UX-4 | **Create reminder from the UI** | Schedules page can only create a **digest**; reminders must be made in chat, yet you *can* cancel them in the UI → inconsistent entry points. | Add a "new reminder" form (pick a todo + time) on `SchedulesView`, calling `POST /schedules` (kind=todo_reminder). | `SchedulesView.tsx`; `services/schedules.py` |
 | UX-5 | **Settings page looks raw** | Plain stacked checkboxes + inline inputs; inconsistent with the card/pill design used elsewhere. | Card-ify: styled toggles + labeled rows matching Inbox/Activity. | `SettingsView.tsx` |
 | UX-6 | **Connectors nav is a dead placeholder** | Greyed "⌁ Connectors" with no explanation of why it's disabled. | Either build the connect page (needs real Google OAuth creds) or show an explicit "deferred — needs OAuth" affordance. Don't leave a silent placeholder (AGENTS.md §2). | `Sidebar.tsx`; `api/connectors.py` |
+| UX-10 | **Approval outcome not confirmed inline** | After Approve/Reject in chat, the card just vanishes and the result only appears in "Run activity" (`Tool result · send_email: email sent…`); there's no inline "✓ Approved — sent" and the assistant doesn't narrate completion (continuation turn deferred). Found in the approval-closure human-lane pass (2026-07-21). | Show a resolution state on the card (or drive card removal + a ✓ from the catalog's `permission.resolved` event, which the resume path can emit). | `ChatView.tsx` `resolveApproval`; `core/resume.py` |
 
 ## P3 — polish
 
@@ -27,6 +28,7 @@
 | UX-7 | **Quiet-hours times not editable** | Settings toggles quiet hours on/off, but 22:00–08:00 is fixed display; backend `SettingsPatch` doesn't expose start/end either. | Add start/end to `SettingsPatch` + service + a UI time picker (if desired). | `api/schemas.py SettingsPatch`; `services/insights.py` |
 | UX-8 | **Redundant schedule name** | Rows show "Daily digest · Daily digest" (kind + name both the same). | De-dupe display, or let the user name a schedule. | `SchedulesView.tsx` |
 | UX-9 | **Missing favicon + free-text timezone** | `favicon.ico` 404 (console error); timezone is a free-text input with no validation feedback. | Add a favicon; validate/normalize timezone (dropdown or on-blur check with a clear error). | `frontend/index.html`; `SchedulesView`/`SettingsView` |
+| UX-11 | **Model points to an "external approval interface"** | With web inline approval, the assistant still tells the user to "approve via your connected platform or approval interface (reference ID …)" — confusing when the **Approve** button is right there in chat. Found in the approval-closure human-lane pass. | Tune the loop `SYSTEM_PROMPT` so the model references the inline approval control for web sessions instead of an external interface. | `core/loop.py` `SYSTEM_PROMPT` |
 
 ---
 
