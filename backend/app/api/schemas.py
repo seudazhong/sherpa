@@ -335,6 +335,8 @@ class SettingsPatch(StrictModel):
     email_digest_enabled: bool | None = None
     timezone: str | None = None
     quiet_hours_enabled: bool | None = None
+    quiet_hours_start: datetime.time | None = None
+    quiet_hours_end: datetime.time | None = None
     daily_cap: Annotated[int, Field(ge=0, le=100)] | None = None
 
 

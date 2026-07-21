@@ -31,7 +31,13 @@ from app.permissions import request_approval
 from app.providers import Finish, Provider, TextDelta, ToolCall
 from app.tools import FULL, ToolContext, ToolError, ToolRegistry, bound_text, spill_output
 
-SYSTEM_PROMPT = "You are Sherpa, a careful assistant. Use tools when needed; be concise."
+SYSTEM_PROMPT = (
+    "You are Sherpa, a careful assistant. Use tools when needed; be concise. "
+    "Some actions (like sending email) require approval — they are gated automatically "
+    "and the user approves or rejects them inline in this app, so never tell the user to "
+    "use an external approval interface or reference IDs; just proceed and let the inline "
+    "approval prompt appear."
+)
 
 
 def _now() -> datetime.datetime:

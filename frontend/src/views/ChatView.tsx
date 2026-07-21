@@ -27,6 +27,7 @@ interface Envelope {
 interface ApprovalItem {
   pending: PendingApproval;
   nonce: string;
+  resolved?: "approved" | "rejected";
 }
 
 function stripMarkdown(text: string): string {
@@ -219,8 +220,13 @@ export default function ChatView() {
     if (!csrf) return;
     try {
       await api.resolvePermission(csrf, item.pending, item.nonce, choice);
+      const outcome = choice === "reject" ? "rejected" : "approved";
       setApprovals((a) =>
-        a.filter((x) => x.pending.correlation_id !== item.pending.correlation_id),
+        a.map((x) =>
+          x.pending.correlation_id === item.pending.correlation_id
+            ? { ...x, resolved: outcome }
+            : x,
+        ),
       );
     } catch {
       setError("Could not submit your decision.");
@@ -331,17 +337,27 @@ export default function ChatView() {
                       </span>
                     ))}
                   </div>
-                  <div className="cand-actions mt-8">
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => void resolveApproval(item, "allow_once")}
+                  {item.resolved ? (
+                    <div
+                      className={`pill mt-8 ${
+                        item.resolved === "approved" ? "pill-success" : "pill-idle"
+                      }`}
                     >
-                      Approve
-                    </button>
-                    <button className="btn" onClick={() => void resolveApproval(item, "reject")}>
-                      Reject
-                    </button>
-                  </div>
+                      {item.resolved === "approved" ? "✓ Approved — running…" : "✕ Rejected"}
+                    </div>
+                  ) : (
+                    <div className="cand-actions mt-8">
+                      <button
+                        className="btn btn-primary"
+                        onClick={() => void resolveApproval(item, "allow_once")}
+                      >
+                        Approve
+                      </button>
+                      <button className="btn" onClick={() => void resolveApproval(item, "reject")}>
+                        Reject
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

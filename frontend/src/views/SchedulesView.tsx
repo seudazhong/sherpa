@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api, type Schedule } from "../api";
+import { api, type Schedule, type Todo } from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
@@ -10,6 +10,11 @@ function statusPill(status: string): string {
   return "pill pill-running";
 }
 
+function scheduleLabel(s: Schedule): string {
+  const kindLabel = s.kind === "daily_digest" ? "Daily digest" : "Reminder";
+  return s.name && s.name !== kindLabel ? `${kindLabel} · ${s.name}` : kindLabel;
+}
+
 export default function SchedulesView() {
   const { csrf } = useAuth();
   const [items, setItems] = useState<Schedule[]>([]);
@@ -17,11 +22,16 @@ export default function SchedulesView() {
   const [busy, setBusy] = useState<string | null>(null);
   const [time, setTime] = useState("08:00");
   const [tz, setTz] = useState("UTC");
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [todoId, setTodoId] = useState("");
+  const [remTime, setRemTime] = useState("");
+  const [remKind, setRemKind] = useState("due_soon");
 
   const load = async () => {
     try {
-      const page = await api.listSchedules();
+      const [page, tp] = await Promise.all([api.listSchedules(), api.listTodos()]);
       setItems(page.items);
+      setTodos(tp.items.filter((t) => t.status !== "completed"));
     } catch {
       setError("Could not load schedules. Is the backend running?");
     }
@@ -54,6 +64,24 @@ export default function SchedulesView() {
       await load();
     } catch {
       setError("Cancel failed.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const addReminder = async () => {
+    if (!csrf || !todoId || !remTime) return;
+    setBusy("reminder");
+    setError(null);
+    try {
+      const iso = new Date(remTime).toISOString();
+      const todo = todos.find((t) => t.id === todoId);
+      await api.createReminder(csrf, todoId, iso, remKind, tz, todo ? todo.title : "Reminder");
+      setTodoId("");
+      setRemTime("");
+      await load();
+    } catch {
+      setError("Could not create the reminder (check the to-do and time).");
     } finally {
       setBusy(null);
     }
@@ -105,8 +133,68 @@ export default function SchedulesView() {
               </div>
             </article>
             <div className="empty small muted">
-              To set a reminder for a specific to-do, ask Sherpa in chat ("remind me about …").
+              Or set a reminder for a specific to-do below.
             </div>
+          </section>
+
+          <section>
+            <div className="section-head">New reminder</div>
+            {todos.length === 0 ? (
+              <div className="empty small muted">
+                No open to-dos to remind about. Accept a candidate or add a to-do first.
+              </div>
+            ) : (
+              <article className="cand-card">
+                <div className="cand-main">
+                  <div className="cand-meta small">
+                    <label>
+                      To-do&nbsp;
+                      <select
+                        value={todoId}
+                        onChange={(e) => setTodoId(e.target.value)}
+                        aria-label="Reminder to-do"
+                      >
+                        <option value="">Pick a to-do…</option>
+                        {todos.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      &nbsp;When&nbsp;
+                      <input
+                        type="datetime-local"
+                        value={remTime}
+                        onChange={(e) => setRemTime(e.target.value)}
+                        aria-label="Reminder time"
+                      />
+                    </label>
+                    <label>
+                      &nbsp;Kind&nbsp;
+                      <select
+                        value={remKind}
+                        onChange={(e) => setRemKind(e.target.value)}
+                        aria-label="Reminder kind"
+                      >
+                        <option value="due_soon">Due soon</option>
+                        <option value="overdue">Overdue</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                <div className="cand-actions">
+                  <button
+                    className="btn btn-primary"
+                    disabled={busy === "reminder" || !todoId || !remTime}
+                    onClick={() => void addReminder()}
+                  >
+                    Add reminder
+                  </button>
+                </div>
+              </article>
+            )}
           </section>
 
           <section>
@@ -119,9 +207,7 @@ export default function SchedulesView() {
             {items.map((s) => (
               <article className="todo-row" key={s.id}>
                 <span className={statusPill(s.status)}>{s.status}</span>
-                <span className="todo-title">
-                  {s.kind === "daily_digest" ? "Daily digest" : "Reminder"} · {s.name}
-                </span>
+                <span className="todo-title">{scheduleLabel(s)}</span>
                 <span className="small muted">next {new Date(s.next_fire_at).toLocaleString()}</span>
                 {s.status === "active" && (
                   <button className="btn" disabled={busy === s.id} onClick={() => void cancel(s)}>

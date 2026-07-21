@@ -4,6 +4,15 @@ import { api, type Settings } from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
+function tzValid(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default function SettingsView() {
   const { csrf } = useAuth();
   const [s, setS] = useState<Settings | null>(null);
@@ -40,6 +49,8 @@ export default function SettingsView() {
         email_digest_enabled: s.email_digest_enabled,
         timezone: s.timezone,
         quiet_hours_enabled: s.quiet_hours_enabled,
+        quiet_hours_start: s.quiet_hours_start,
+        quiet_hours_end: s.quiet_hours_end,
         daily_cap: s.daily_cap,
       });
       setS(updated);
@@ -51,15 +62,21 @@ export default function SettingsView() {
     }
   };
 
-  const toggle = (key: keyof Settings, label: string) => (
-    <label className="cand-meta small" style={{ display: "block", padding: "6px 0" }}>
-      <input
-        type="checkbox"
-        checked={Boolean(s?.[key])}
-        onChange={(e) => set(key, e.target.checked as never)}
-      />
-      &nbsp;{label}
-    </label>
+  const toggleRow = (key: keyof Settings, label: string, desc: string) => (
+    <div className="setting-row">
+      <div>
+        <strong>{label}</strong>
+        <div className="small muted">{desc}</div>
+      </div>
+      <label className="switch">
+        <input
+          type="checkbox"
+          checked={Boolean(s?.[key])}
+          onChange={(e) => set(key, e.target.checked as never)}
+        />
+        <span className="switch-slider" />
+      </label>
+    </div>
   );
 
   return (
@@ -72,7 +89,11 @@ export default function SettingsView() {
             <p className="page-sub small">Notification preferences</p>
           </div>
           <div className="cand-actions">
-            <button className="btn btn-primary" disabled={busy || !s} onClick={() => void save()}>
+            <button
+              className="btn btn-primary"
+              disabled={busy || !s || (!!s && !tzValid(s.timezone))}
+              onClick={() => void save()}
+            >
               Save
             </button>
           </div>
@@ -86,32 +107,85 @@ export default function SettingsView() {
           {s && (
             <section>
               <div className="section-head">Notifications</div>
-              {toggle("notifications_enabled", "Enable notifications")}
-              {toggle("web_enabled", "Web notifications")}
-              {toggle("email_digest_enabled", "Email digest")}
-              {toggle("quiet_hours_enabled", "Quiet hours")}
-              <label className="cand-meta small" style={{ display: "block", padding: "6px 0" }}>
-                Daily cap&nbsp;
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={s.daily_cap}
-                  onChange={(e) => set("daily_cap", Number(e.target.value) as never)}
-                  aria-label="Daily cap"
-                />
-              </label>
-              <label className="cand-meta small" style={{ display: "block", padding: "6px 0" }}>
-                Timezone&nbsp;
-                <input
-                  value={s.timezone}
-                  onChange={(e) => set("timezone", e.target.value as never)}
-                  placeholder="e.g. Asia/Shanghai"
-                  aria-label="Timezone"
-                />
-              </label>
-              <div className="empty small muted">
-                Quiet hours {s.quiet_hours_start}–{s.quiet_hours_end} · version {s.version}
+              <div className="settings-card">
+                {toggleRow(
+                  "notifications_enabled",
+                  "Enable notifications",
+                  "Master switch for all reminders and digests.",
+                )}
+                {toggleRow(
+                  "web_enabled",
+                  "Web notifications",
+                  "Show notifications in your web inbox.",
+                )}
+                {toggleRow(
+                  "email_digest_enabled",
+                  "Email digest",
+                  "Deliver the daily digest by email.",
+                )}
+                {toggleRow(
+                  "quiet_hours_enabled",
+                  "Quiet hours",
+                  `Suppress delivery ${s.quiet_hours_start.slice(0, 5)}–${s.quiet_hours_end.slice(0, 5)}.`,
+                )}
+                {s.quiet_hours_enabled && (
+                  <div className="setting-row">
+                    <div>
+                      <strong>Quiet hours window</strong>
+                      <div className="small muted">Start and end must differ.</div>
+                    </div>
+                    <div className="cand-meta small">
+                      <input
+                        type="time"
+                        value={s.quiet_hours_start.slice(0, 5)}
+                        onChange={(e) => set("quiet_hours_start", e.target.value as never)}
+                        aria-label="Quiet hours start"
+                      />
+                      &nbsp;–&nbsp;
+                      <input
+                        type="time"
+                        value={s.quiet_hours_end.slice(0, 5)}
+                        onChange={(e) => set("quiet_hours_end", e.target.value as never)}
+                        aria-label="Quiet hours end"
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className="setting-row">
+                  <div>
+                    <strong>Daily cap</strong>
+                    <div className="small muted">Max notifications per day (0–100).</div>
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={s.daily_cap}
+                    onChange={(e) => set("daily_cap", Number(e.target.value) as never)}
+                    aria-label="Daily cap"
+                    style={{ width: 72 }}
+                  />
+                </div>
+                <div className="setting-row">
+                  <div>
+                    <strong>Timezone</strong>
+                    <div className="small muted">Used for digest and reminder times.</div>
+                    {!tzValid(s.timezone) && (
+                      <div className="small" style={{ color: "var(--accent)" }}>
+                        Unknown timezone — e.g. use “Asia/Shanghai” or “UTC”.
+                      </div>
+                    )}
+                  </div>
+                  <input
+                    value={s.timezone}
+                    onChange={(e) => set("timezone", e.target.value as never)}
+                    placeholder="e.g. Asia/Shanghai"
+                    aria-label="Timezone"
+                  />
+                </div>
+              </div>
+              <div className="small muted" style={{ padding: "10px 2px 0" }}>
+                version {s.version}
               </div>
             </section>
           )}

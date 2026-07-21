@@ -7,6 +7,8 @@ owns the transaction.
 
 from __future__ import annotations
 
+import datetime
+
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +22,7 @@ from app.api.schemas import (
 from app.models import AuditReceipt, Schedule, ScheduleFiring, UserSettings
 from app.notifications import ensure_settings
 from app.services.context import CallerContext
-from app.services.errors import VersionConflict
+from app.services.errors import Invalid, VersionConflict
 
 
 def _settings_schema(row: UserSettings) -> Settings:
@@ -127,6 +129,8 @@ async def update_settings(
     email_digest_enabled: bool | None = None,
     timezone: str | None = None,
     quiet_hours_enabled: bool | None = None,
+    quiet_hours_start: datetime.time | None = None,
+    quiet_hours_end: datetime.time | None = None,
     daily_cap: int | None = None,
 ) -> Settings:
     row = await ensure_settings(db, ctx.tenant_id, ctx.user_id)
@@ -142,8 +146,14 @@ async def update_settings(
         row.timezone = timezone
     if quiet_hours_enabled is not None:
         row.quiet_hours_enabled = quiet_hours_enabled
+    if quiet_hours_start is not None:
+        row.quiet_hours_start = quiet_hours_start
+    if quiet_hours_end is not None:
+        row.quiet_hours_end = quiet_hours_end
     if daily_cap is not None:
         row.daily_cap = daily_cap
+    if row.quiet_hours_start == row.quiet_hours_end:
+        raise Invalid("quiet hours start and end must differ")
     row.version += 1
     await db.flush()
     return _settings_schema(row)

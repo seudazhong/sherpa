@@ -348,6 +348,26 @@ export const api = {
         delivery_channel: "web",
       }),
     ),
+  createReminder: (
+    csrf: string,
+    todoId: string,
+    nextFireAt: string,
+    reminderKind: string,
+    timezone: string,
+    name: string,
+  ) =>
+    req<Schedule>(
+      "/schedules",
+      jsonInit("POST", csrf, {
+        kind: "todo_reminder",
+        name,
+        todo_id: todoId,
+        reminder_kind: reminderKind,
+        next_fire_at: nextFireAt,
+        timezone,
+        delivery_channel: "web",
+      }),
+    ),
   cancelSchedule: (csrf: string, id: string, ifVersion: number) =>
     req<Schedule>(`/schedules/${id}/cancel`, jsonInit("POST", csrf, { if_version: ifVersion })),
   getSettings: () => req<Settings>("/settings"),

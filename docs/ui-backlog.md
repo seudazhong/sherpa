@@ -3,6 +3,8 @@
 > Source: per-phase **acceptance + UX review** (Playwright human-lane pass, 2026-07-21) after the UI-completion phase (session mgmt + Schedules + Settings). Process: [`../AGENTS.md §2`](../AGENTS.md).
 >
 > **How to use:** pick the lowest-priority-number open item; fix it end-to-end (incl. the human-lane UI check + a row update here). This is the living board that catches "backend done, frontend forgotten" and UX rough edges. Each row: gap → suggested fix → refs.
+>
+> **Status (2026-07-21): all P1–P3 items (UX-1…UX-11) ✅ cleared** and browser-verified. Rows kept as history; append new findings below.
 
 ## P1 — fix soon (small, high-value)
 

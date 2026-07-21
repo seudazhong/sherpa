@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
 
 import pytest
@@ -14,6 +15,7 @@ from app.models import Run, Tenant, User
 from app.models import Session as SessionModel
 from app.providers import Finish, MockProvider, TextDelta, ToolCall
 from app.services import CallerContext, VersionConflict, insights
+from app.services.errors import Invalid
 from app.tools import ToolContext, build_default_registry
 
 
@@ -61,6 +63,25 @@ async def test_insights_service() -> None:
                 s, ctx, if_version=settings.version, notifications_enabled=True, daily_cap=3
             )
             assert updated.notifications_enabled is True and updated.daily_cap == 3
+
+            # UX-7: quiet-hours window is editable; equal start/end is rejected.
+            q = await insights.update_settings(
+                s,
+                ctx,
+                if_version=updated.version,
+                quiet_hours_start=datetime.time(23, 0),
+                quiet_hours_end=datetime.time(7, 30),
+            )
+            assert q.quiet_hours_start == datetime.time(23, 0)
+            assert q.quiet_hours_end == datetime.time(7, 30)
+            with pytest.raises(Invalid):
+                await insights.update_settings(
+                    s,
+                    ctx,
+                    if_version=q.version,
+                    quiet_hours_start=datetime.time(9, 0),
+                    quiet_hours_end=datetime.time(9, 0),
+                )
         finally:
             await s.rollback()
 

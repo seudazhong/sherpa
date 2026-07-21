@@ -108,8 +108,14 @@ async def patch_settings(
         row.timezone = body.timezone
     if body.quiet_hours_enabled is not None:
         row.quiet_hours_enabled = body.quiet_hours_enabled
+    if body.quiet_hours_start is not None:
+        row.quiet_hours_start = body.quiet_hours_start
+    if body.quiet_hours_end is not None:
+        row.quiet_hours_end = body.quiet_hours_end
     if body.daily_cap is not None:
         row.daily_cap = body.daily_cap
+    if row.quiet_hours_start == row.quiet_hours_end:
+        raise HTTPException(status_code=422, detail="quiet_hours_equal")
     row.version += 1
     await db.commit()
     return _settings_schema(row)
