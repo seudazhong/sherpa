@@ -260,6 +260,17 @@ export interface MemoryPage {
   items: MemoryItem[];
 }
 
+export interface PassageItem {
+  id: string;
+  text: string;
+  source: string;
+  created_at: string;
+}
+
+export interface PassagePage {
+  items: PassageItem[];
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -388,6 +399,11 @@ export const api = {
     req<MemoryItem>("/memory", jsonInit("PUT", csrf, { key, value })),
   deleteMemory: (csrf: string, key: string) =>
     req<void>(`/memory/${encodeURIComponent(key)}`, jsonInit("DELETE", csrf)),
+  listPassages: () => req<PassagePage>("/memory/passages"),
+  addPassage: (csrf: string, text: string) =>
+    req<PassageItem>("/memory/passages", jsonInit("POST", csrf, { text })),
+  deletePassage: (csrf: string, id: string) =>
+    req<void>(`/memory/passages/${encodeURIComponent(id)}`, jsonInit("DELETE", csrf)),
 };
 
 export function exportUrl(): string {
