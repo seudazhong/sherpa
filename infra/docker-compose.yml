@@ -82,6 +82,14 @@ services:
       QQ_ACCESS_TOKEN: ${QQ_ACCESS_TOKEN:-}
       QQ_WEBHOOK_SECRET: ${QQ_WEBHOOK_SECRET:-}
       QQ_OWNER_ID: ${QQ_OWNER_ID:-}
+      # Agentic email (milestone 5). Disabled ('recording') by default; set these
+      # in .env to send/receive via a real AgentMail inbox. The web shows status +
+      # authenticates the inbound webhook; the worker performs the actual send.
+      EMAIL_KIND: ${EMAIL_KIND:-recording}
+      AGENTMAIL_API_KEY: ${AGENTMAIL_API_KEY:-}
+      AGENTMAIL_INBOX_ID: ${AGENTMAIL_INBOX_ID:-}
+      AGENTMAIL_WEBHOOK_SECRET: ${AGENTMAIL_WEBHOOK_SECRET:-}
+      AGENTMAIL_OWNER_EMAIL: ${AGENTMAIL_OWNER_EMAIL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports: ["8000:8000"]
@@ -115,6 +123,11 @@ services:
       QQ_ACCESS_TOKEN: ${QQ_ACCESS_TOKEN:-}
       QQ_WEBHOOK_SECRET: ${QQ_WEBHOOK_SECRET:-}
       QQ_OWNER_ID: ${QQ_OWNER_ID:-}
+      EMAIL_KIND: ${EMAIL_KIND:-recording}
+      AGENTMAIL_API_KEY: ${AGENTMAIL_API_KEY:-}
+      AGENTMAIL_INBOX_ID: ${AGENTMAIL_INBOX_ID:-}
+      AGENTMAIL_WEBHOOK_SECRET: ${AGENTMAIL_WEBHOOK_SECRET:-}
+      AGENTMAIL_OWNER_EMAIL: ${AGENTMAIL_OWNER_EMAIL:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
