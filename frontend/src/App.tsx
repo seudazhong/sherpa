@@ -7,6 +7,7 @@ import FilesView from "./views/FilesView";
 import InboxView from "./views/InboxView";
 import LoginView from "./views/LoginView";
 import MemoryView from "./views/MemoryView";
+import MessagingView from "./views/MessagingView";
 import SchedulesView from "./views/SchedulesView";
 import SettingsView from "./views/SettingsView";
 
@@ -74,6 +75,14 @@ export default function App() {
         element={
           <Protected>
             <FilesView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/messaging"
+        element={
+          <Protected>
+            <MessagingView />
           </Protected>
         }
       />

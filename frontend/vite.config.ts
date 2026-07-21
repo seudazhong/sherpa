@@ -25,6 +25,7 @@ export default defineConfig({
       "/activity": target,
       "/files": target,
       "/memory": target,
+      "/channels": target,
       "/meta": target,
       "/health": target,
       "/readyz": target,

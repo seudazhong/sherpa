@@ -34,6 +34,9 @@ export default function Sidebar() {
       <Link className={cls("/workspace")} to="/workspace">
         ▧ Files
       </Link>
+      <Link className={cls("/messaging")} to="/messaging">
+        ◎ Messaging
+      </Link>
       <span
         className="nav-item muted"
         title="Connectors — deferred in v1 (needs Google OAuth setup); manage Gmail via chat for now"

@@ -191,6 +191,7 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 连接 Gmail(OAuth) | — | connect/callback ✅ | ❌ | ⬜(需真实 Google 凭据) | — | — |
 | 列/解决审批 | — | GET /permissions·/resolve ✅ | ❌ **不给 agent**(不自批) | ⬜ 审批渲染器(v1 收尾) | — | user-only |
 | 导出/删除导入数据 | ✅ | ✅ | ❌(破坏性,不给 agent) | Activity(Export/Delete)✅ | non_idempotent_write | ask/human |
+| QQ/IM 入站对话 + IM 审批(post-v1 里程碑4) | channels ✅ | POST /channels/qq/webhook · GET /channels · /simulate · /threads ✅ | 复用有界循环(非独立 tool);审批复用 v1 基座 | Messaging(/messaging)✅ | idempotent_write | HMAC+owner allowlist |
 
 **剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
 

@@ -284,6 +284,46 @@ export interface FilePage {
   items: FileItem[];
 }
 
+export interface QQStatus {
+  kind: string;
+  enabled: boolean;
+  configured: boolean;
+  owner_id_set: boolean;
+  webhook_secret_set: boolean;
+  api_base: string;
+  webhook_path: string;
+}
+
+export interface ThreadSummary {
+  session_id: string;
+  external_id: string;
+  created_at: string;
+}
+
+export interface ChannelsStatus {
+  qq: QQStatus;
+  threads: ThreadSummary[];
+}
+
+export interface SimulateResult {
+  status: string;
+  session_id: string | null;
+  run_id: string | null;
+  decision: string | null;
+}
+
+export interface ThreadMessage {
+  role: string;
+  text: string;
+  at: string;
+}
+
+export interface ThreadTranscript {
+  session_id: string;
+  external_id: string;
+  messages: ThreadMessage[];
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -432,6 +472,13 @@ export const api = {
     return (await res.json()) as FileItem;
   },
   deleteFile: (csrf: string, id: string) => req<void>(`/files/${id}`, jsonInit("DELETE", csrf)),
+  channelsStatus: () => req<ChannelsStatus>("/channels"),
+  simulateQQ: (csrf: string, text: string, fromId?: string) =>
+    req<SimulateResult>(
+      "/channels/qq/simulate",
+      jsonInit("POST", csrf, { text, from_id: fromId ?? "" }),
+    ),
+  threadTranscript: (sid: string) => req<ThreadTranscript>(`/channels/threads/${sid}`),
 };
 
 export function exportUrl(): string {
