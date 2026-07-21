@@ -165,32 +165,34 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 
 ---
 
-## 9. 能力矩阵(UI 功能 ↔ service ↔ REST ↔ Tool ↔ 权限)
+## 9. 能力矩阵(UI ↔ service ↔ REST ↔ Tool ↔ 权限)— 活的追踪表
 
-> ✅=已有 ⬜=待补 ❌=不给 agent(故意)
+> ✅=已交付 ⬜=待补 ❌=故意不做(附原因) · **一行未完成 = 任一非 ❌ 单元格还是 ⬜**。
+> **UI 列是 DoD 闸**:用户可见能力,UI 还是 ⬜ 就不算 Done(见 AGENTS.md §2)。每个能力两条 Playwright 验证:agent 路径(chat→tool)+ **人工路径(真实点 UI 控件)**。
 
-| UI 功能 | service 函数 | REST | Tool | effect | 策略 | 缺口 |
+| 能力 | service | REST | Tool | **UI** | effect | 策略 |
 |---|---|---|---|---|---|---|
-| 列候选 | `list_candidates` | GET /candidates ✅ | `list_candidates` ⬜ | read_only | allow | Tool |
-| 接受候选→todo | `accept_candidate` | POST …/accept ✅ | `accept_candidate` ⬜ | idempotent_write | allow | service抽取+Tool |
-| 编辑候选 | `edit_candidate` | POST …/edit ✅ | `edit_candidate` ⬜ | idempotent_write | allow | service+Tool |
-| 忽略候选 | `dismiss_candidate` | POST …/dismiss ✅ | `dismiss_candidate` ⬜ | idempotent_write | allow | service+Tool |
-| 列待办 | `list_todos` | GET /todos ✅ | `list_todos` ⬜ | read_only | allow | Tool |
-| 改待办(完成/改期/snooze) | `update_todo` | PATCH /todos/{id} ✅ | `update_todo` ⬜ | idempotent_write | allow | service+Tool |
-| **新建待办** | `create_todo` | ❌ 无 | `todo_write` ⬜ | idempotent_write | allow | **REST+Tool 都缺** |
-| 列连接器 | `list_connectors` | GET /connectors ✅ | `list_connectors` ⬜ | read_only | allow | Tool |
-| **触发同步分析** | `sync_connector` | POST …/sync ✅ | `sync_connector` ⬜ | idempotent_write | allow | Tool(补后 agent 可自主拉邮件生成候选) |
-| 连接器暂停/恢复 | `pause/resume_connector` | POST …/pause·/resume ✅ | ⬜ | idempotent_write | allow | Tool |
-| **建提醒/日程** | `create_schedule` | ❌ 无 | `create_schedule` ⬜ | idempotent_write | allow | **REST+Tool 都缺** |
-| 列/取消日程 | `list/cancel_schedule` | ❌ 无 | ⬜ | — | allow | **REST+Tool 都缺** |
-| 列通知 | `list_notifications` | GET /notifications ✅ | `list_notifications` ⬜ | read_only | allow | Tool |
-| 改通知设置 | `update_settings` | PATCH /settings ✅ | `update_settings` ⬜ | idempotent_write | allow | service+Tool |
-| 活动台账 | `list_activity` | GET /activity ✅ | `list_activity` ⬜ | read_only | allow | Tool |
-| **发邮件(外部)** | `send_email` | ❌(仅 Tool) | `send_email` ✅(#20) | non_idempotent_write | **ask** | — |
-| 列/解决审批 | `list/resolve_approval` | GET /permissions·/resolve ✅ | ❌ **不给 agent** | — | user-only | agent 不批自己的动作 |
-| 导出/删除导入数据 | `export/delete_imported` | ✅ | ⬜(建议 `ask` 或不给) | non_idempotent_write | ask | 谨慎 |
+| 列候选 | ✅ | GET /candidates ✅ | `list_candidates` ✅ | Inbox ✅ | read_only | allow |
+| 接受候选→todo | ✅ | POST …/accept ✅ | `accept_candidate` ✅ | Inbox(Accept)✅ | idempotent_write | allow |
+| 编辑候选 | ✅ | POST …/edit ✅ | `edit_candidate` ✅ | ⬜(仅 chat/REST) | idempotent_write | allow |
+| 忽略候选 | ✅ | POST …/dismiss ✅ | `dismiss_candidate` ✅ | Inbox(Dismiss)✅ | idempotent_write | allow |
+| 列待办 | ✅ | GET /todos ✅ | `list_todos` ✅ | Inbox ✅ | read_only | allow |
+| 改待办(完成/改期/snooze) | ✅ | PATCH /todos/{id} ✅ | `update_todo`/`complete_todo` ✅ | ⬜(Inbox 只读,无完成按钮) | idempotent_write | allow |
+| 新建待办 | ✅ | POST /todos ✅ | `todo_write` ✅ | ⬜ | idempotent_write | allow |
+| 列连接器 | ✅ | GET /connectors ✅ | `list_connectors` ✅ | ⬜(侧栏占位) | read_only | allow |
+| 触发同步分析 | ✅ | POST …/sync ✅ | `sync_connector` ✅ | ⬜ | idempotent_write | allow |
+| 建提醒/日程 | ✅ | POST /schedules ✅ | `create_reminder`/`create_daily_digest` ✅ | Schedules(/reminders)✅ | idempotent_write | allow |
+| 列/取消日程 | ✅ | GET /schedules · /cancel ✅ | `list_schedules`/`cancel_schedule` ✅ | Schedules ✅ | idempotent_write | allow |
+| 列通知 | ✅ | GET /notifications ✅ | `list_notifications` ✅ | Inbox ✅ | read_only | allow |
+| 读/改通知设置 | ✅ | GET·PATCH /settings ✅ | `get_settings`/`update_settings` ✅ | Settings(/preferences)✅ | idempotent_write | allow |
+| 活动台账 | ✅ | GET /activity ✅ | `list_activity` ✅ | Activity(/data)✅ | read_only | allow |
+| 会话:新建/切换 | (会话 API) | POST·GET /sessions ✅ | ❌ 不给 agent | Chat(new chat + 切换)✅ | — | — |
+| 发邮件(外部) | — | ❌(仅 Tool) | `send_email` ✅ | ⬜ 审批渲染器(v1 收尾) | non_idempotent_write | **ask** |
+| 连接 Gmail(OAuth) | — | connect/callback ✅ | ❌ | ⬜(需真实 Google 凭据) | — | — |
+| 列/解决审批 | — | GET /permissions·/resolve ✅ | ❌ **不给 agent**(不自批) | ⬜ 审批渲染器(v1 收尾) | — | user-only |
+| 导出/删除导入数据 | ✅ | ✅ | ❌(破坏性,不给 agent) | Activity(Export/Delete)✅ | non_idempotent_write | ask/human |
 
-**结论**:agent 现有工具仅 `echo`/`get_time`/`send_email`;上表 ⬜ 即"要让 agent 驱动全部 UI"需补的清单。其中 `create_todo` / `create_schedule` / `list/cancel_schedule` 连 REST 都缺,需一并补齐。
+**剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
 
 ---
 

@@ -35,6 +35,10 @@ A task is **Done** only when, for the code you touched:
 - [ ] `uv run pytest` green (you added/updated tests — happy path **and** edge cases).
 - [ ] `uv run ruff check .` + `ruff format --check .` clean; `uv run mypy app` clean (frontend: `npm run lint` + `npm run build`).
 - [ ] Contracts/ADRs honored; docs updated if behavior changed.
+- [ ] **User-facing capability ⇒ UI shipped too.** If a capability is something a user can see/do, it is NOT done until it has a UI page/control — not just a REST endpoint and/or agent tool. Update the capability matrix (`docs/11-agent-tool-surface.md §9`, which has a **UI** column); a row is unfinished while its UI cell is ⬜. Never leave a nav item as a "placeholder" for a backend that already ships (either build the page or mark it explicitly deferred with the blocker).
+- [ ] **Two Playwright verification lanes after each phase** (restart the stack first, per §0):
+      **(a) agent lane** — drive the capability via chat (model → tool); **(b) human lane** — drive the *actual UI control* (click the button/form/page), not only chat. A capability "verified" only through chat while its UI page is missing is a classic miss — check the human lane too.
+      Reminder: SPA route names must not collide with an API proxy prefix (e.g. Activity UI is `/data`, Schedules `/reminders`, Settings `/preferences`).
 - [ ] `docs/STATUS.md` updated; task committed (§3).
 
 Only run/extend **existing** tooling; don't introduce new frameworks without an ADR.
