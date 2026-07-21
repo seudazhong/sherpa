@@ -250,6 +250,16 @@ export interface Settings {
   version: number;
 }
 
+export interface MemoryItem {
+  key: string;
+  value: string;
+  version: number;
+}
+
+export interface MemoryPage {
+  items: MemoryItem[];
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -373,6 +383,11 @@ export const api = {
   getSettings: () => req<Settings>("/settings"),
   updateSettings: (csrf: string, patch: Record<string, unknown>) =>
     req<Settings>("/settings", jsonInit("PATCH", csrf, patch)),
+  listMemory: () => req<MemoryPage>("/memory"),
+  setMemory: (csrf: string, key: string, value: string) =>
+    req<MemoryItem>("/memory", jsonInit("PUT", csrf, { key, value })),
+  deleteMemory: (csrf: string, key: string) =>
+    req<void>(`/memory/${encodeURIComponent(key)}`, jsonInit("DELETE", csrf)),
 };
 
 export function exportUrl(): string {

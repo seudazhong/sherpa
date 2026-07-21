@@ -28,6 +28,9 @@ export default function Sidebar() {
       <Link className={cls("/preferences")} to="/preferences">
         ⚙ Settings
       </Link>
+      <Link className={cls("/remember")} to="/remember">
+        ◈ Memory
+      </Link>
       <span
         className="nav-item muted"
         title="Connectors — deferred in v1 (needs Google OAuth setup); manage Gmail via chat for now"

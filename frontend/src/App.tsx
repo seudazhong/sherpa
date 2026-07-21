@@ -5,6 +5,7 @@ import ActivityView from "./views/ActivityView";
 import ChatView from "./views/ChatView";
 import InboxView from "./views/InboxView";
 import LoginView from "./views/LoginView";
+import MemoryView from "./views/MemoryView";
 import SchedulesView from "./views/SchedulesView";
 import SettingsView from "./views/SettingsView";
 
@@ -56,6 +57,14 @@ export default function App() {
         element={
           <Protected>
             <SettingsView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/remember"
+        element={
+          <Protected>
+            <MemoryView />
           </Protected>
         }
       />

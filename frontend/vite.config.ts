@@ -23,6 +23,7 @@ export default defineConfig({
       "/schedules": target,
       "/permissions": target,
       "/activity": target,
+      "/memory": target,
       "/meta": target,
       "/health": target,
       "/readyz": target,
