@@ -29,6 +29,8 @@ from app.models import Message, Part, Run, Session
 from app.permissions import policy as perm_policy
 from app.permissions import request_approval
 from app.providers import Finish, Provider, TextDelta, ToolCall
+from app.services import CallerContext
+from app.services import memory as memory_service
 from app.tools import FULL, ToolContext, ToolError, ToolRegistry, bound_text, spill_output
 
 SYSTEM_PROMPT = (
@@ -255,6 +257,26 @@ async def _run_tool(  # type: ignore[no-untyped-def]
     provider_messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
 
 
+async def _load_core_memory(  # type: ignore[no-untyped-def]
+    session, tenant_id: uuid.UUID, user_id: uuid.UUID | None
+) -> str:
+    """Render the user's private core memory for the system context (docs/04 铁律#6).
+
+    Durable, always-available facts the agent keeps about the user; injected so it
+    recalls them without an explicit tool call. Empty when there is no user or no
+    stored memory.
+    """
+    if user_id is None:
+        return ""
+    rows = await memory_service.list_memory(
+        session, CallerContext(tenant_id=tenant_id, user_id=user_id, actor="agent")
+    )
+    if not rows:
+        return ""
+    lines = "\n".join(f"- {r.memory_key}: {r.value_text}" for r in rows)
+    return "Durable facts you remember about the user (core memory):\n" + lines
+
+
 async def execute_run(  # type: ignore[no-untyped-def]
     session,
     *,
@@ -285,8 +307,10 @@ async def execute_run(  # type: ignore[no-untyped-def]
     )
 
     transcript = await assemble_provider_history(session, tenant_id, session_id)
+    core_memory = await _load_core_memory(session, tenant_id, decider_user_id)
+    system_content = f"{SYSTEM_PROMPT}\n\n{core_memory}" if core_memory else SYSTEM_PROMPT
     provider_messages: list[dict[str, object]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_content},
         *transcript,
     ]
 
