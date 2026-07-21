@@ -73,6 +73,15 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-sherpa}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-sherpa-dev-secret}
       MINIO_BUCKET: ${MINIO_BUCKET:-sherpa-files}
+      # QQ / IM inbound channel (milestone 4). Disabled by default; set these in
+      # .env to connect a self-hosted OneBot v11 bridge. The web needs the secret
+      # + owner id to auth the webhook; the worker needs the api base + token to
+      # push replies.
+      QQ_KIND: ${QQ_KIND:-disabled}
+      QQ_API_BASE: ${QQ_API_BASE:-http://host.docker.internal:5700}
+      QQ_ACCESS_TOKEN: ${QQ_ACCESS_TOKEN:-}
+      QQ_WEBHOOK_SECRET: ${QQ_WEBHOOK_SECRET:-}
+      QQ_OWNER_ID: ${QQ_OWNER_ID:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports: ["8000:8000"]
@@ -101,6 +110,11 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-sherpa-dev-secret}
       MINIO_BUCKET: ${MINIO_BUCKET:-sherpa-files}
       SANDBOX_KIND: ${SANDBOX_KIND:-docker}
+      QQ_KIND: ${QQ_KIND:-disabled}
+      QQ_API_BASE: ${QQ_API_BASE:-http://host.docker.internal:5700}
+      QQ_ACCESS_TOKEN: ${QQ_ACCESS_TOKEN:-}
+      QQ_WEBHOOK_SECRET: ${QQ_WEBHOOK_SECRET:-}
+      QQ_OWNER_ID: ${QQ_OWNER_ID:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:

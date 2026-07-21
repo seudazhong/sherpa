@@ -61,19 +61,25 @@ export default function MessagingView() {
 
   const simulate = async () => {
     if (!csrf || !text.trim()) return;
+    await sendInbound(text.trim());
+  };
+
+  const sendInbound = async (message: string) => {
+    if (!csrf) return;
     setBusy(true);
     setError(null);
     try {
-      const res = await api.simulateQQ(csrf, text.trim());
+      const res = await api.simulateQQ(csrf, message);
       setText("");
       await loadStatus();
-      if (res.session_id) {
-        setActive(res.session_id);
-        await openThread(res.session_id);
-        pollThread(res.session_id);
+      const sid = res.session_id ?? active;
+      if (sid) {
+        setActive(sid);
+        await openThread(sid);
+        pollThread(sid);
       }
     } catch {
-      setError("Simulate failed.");
+      setError("Send failed.");
     } finally {
       setBusy(false);
     }
@@ -201,6 +207,40 @@ export default function MessagingView() {
               {thread.messages.map((m, i) => (
                 <article className={"msg" + (m.role === "user" ? " me" : "")} key={i}>
                   <div className={m.role === "user" ? "bubble-user" : "bubble-agent"}>{m.text}</div>
+                </article>
+              ))}
+
+              {thread.pending_approvals.length > 0 && (
+                <div className="section-head" style={{ marginTop: "1rem" }}>
+                  Pending approvals <span className="count">{thread.pending_approvals.length}</span>
+                </div>
+              )}
+              {thread.pending_approvals.map((a) => (
+                <article className="cand-card" key={a.correlation_id}>
+                  <div className="cand-main">
+                    <div className="cand-title">
+                      <span className="pill pill-running">approval</span> {a.tool_name}
+                    </div>
+                    <div className="cand-meta small muted">
+                      {a.summary} · reply <code>approve {a.short_id}</code>
+                    </div>
+                  </div>
+                  <div className="cand-actions">
+                    <button
+                      className="btn btn-primary"
+                      disabled={busy}
+                      onClick={() => void sendInbound(`approve ${a.short_id}`)}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      className="btn"
+                      disabled={busy}
+                      onClick={() => void sendInbound(`reject ${a.short_id}`)}
+                    >
+                      Reject
+                    </button>
+                  </div>
                 </article>
               ))}
             </section>

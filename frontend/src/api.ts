@@ -318,10 +318,18 @@ export interface ThreadMessage {
   at: string;
 }
 
+export interface PendingApprovalBrief {
+  correlation_id: string;
+  short_id: string;
+  tool_name: string;
+  summary: string;
+}
+
 export interface ThreadTranscript {
   session_id: string;
   external_id: string;
   messages: ThreadMessage[];
+  pending_approvals: PendingApprovalBrief[];
 }
 
 export class ApiError extends Error {

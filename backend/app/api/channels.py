@@ -289,10 +289,18 @@ class ThreadMessage(BaseModel):
     at: str
 
 
+class PendingApprovalBrief(BaseModel):
+    correlation_id: uuid.UUID
+    short_id: str
+    tool_name: str
+    summary: str
+
+
 class ThreadTranscript(BaseModel):
     session_id: uuid.UUID
     external_id: str
     messages: list[ThreadMessage]
+    pending_approvals: list[PendingApprovalBrief]
 
 
 @router.get("/channels/threads/{session_id}")
@@ -331,6 +339,37 @@ async def thread_transcript(
         text = str((content or {}).get("text", "")).strip()
         if text:
             messages.append(ThreadMessage(role=m.role, text=text, at=m.created_at.isoformat()))
+
+    pending = (
+        (
+            await db.execute(
+                select(ApprovalEnvelope)
+                .where(
+                    ApprovalEnvelope.tenant_id == ctx.tenant_id,
+                    ApprovalEnvelope.session_id == session_id,
+                    ApprovalEnvelope.status == "pending",
+                )
+                .order_by(ApprovalEnvelope.requested_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    approvals: list[PendingApprovalBrief] = []
+    for env in pending:
+        preview = env.preview_redacted or {}
+        summary = str(preview.get("summary") or preview.get("title") or env.tool_name)
+        approvals.append(
+            PendingApprovalBrief(
+                correlation_id=env.correlation_id,
+                short_id=str(env.correlation_id).replace("-", "")[:8],
+                tool_name=env.tool_name,
+                summary=summary,
+            )
+        )
     return ThreadTranscript(
-        session_id=session_id, external_id=sess.external_scope_id, messages=messages
+        session_id=session_id,
+        external_id=sess.external_scope_id,
+        messages=messages,
+        pending_approvals=approvals,
     )
