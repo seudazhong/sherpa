@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-21 · Phase: **M-tools complete (Agent tool surface)**. M1 + M2 complete. The agent can now drive candidates, todos, connectors (sync), schedules, and settings via chat tools (ADR-023). Next: v1 wrap-up (⚠️ **context-fidelity fix** + approval closure; M3 eval gate deferred → post-v1 #11, ADR-024) and the post-v1 milestones in `09-roadmap.md`.
+> Last updated: 2026-07-22 · Phase: **Milestone 1 (two-tier memory + RAG) complete + browser-verified**. v1 (M1+M2+M-tools) + v1 wrap-up + UI/UX backlog all done. Next: post-v1 **Milestone 2 (files/MinIO) → 3 sandbox → 4 QQ/IM → 5 agentic email** (`09-roadmap.md`).
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -12,7 +12,7 @@ The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) 
 The **design + contracts + runnable skeleton** are done, and the **v1 durable spine (M1) is complete and verified end-to-end**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, the REST auth + session/message surface, the credential vault (AEAD/KEK), run traces + structured logging, and the web chat client (#1–#13) are all implemented and green. A live smoke (login → session → prompt → real arq worker loop → outbox relay → SSE `run.settled` → persisted transcript) passes. Next: **M2 — Personal Inbox-to-Action (Gmail → candidate → todo → reminder)**.
 
 ## Verified state
-- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **93 passed** (needs Postgres+Redis up; vault/formatter/compaction/spill-unit tests need neither) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic `0014`.
+- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **98 passed** (needs Postgres+Redis up; vault/formatter/compaction/spill-unit tests need neither) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic `0016`.
 - **Frontend** (`frontend/`): Vite+React+TS SPA (login + chat). `npm install` done, `npm run build` + `npm run lint` green. `package-lock.json` committed.
 - **Runtime**: web (`uv run uvicorn app.main:app`) + worker (`uv run arq app.worker.WorkerSettings`, runs the run loop + outbox relay) verified live against docker Postgres+Redis.
 - **Infra**: `infra/docker-compose.yml` (postgres+redis+web+worker+frontend) defined. **CI**: `.github/workflows/ci.yml` (backend uv lint/type/test + frontend build).
@@ -73,11 +73,11 @@ Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -
 | v1 wrap-up: approval closure (resume + web renderer) | ✅ done (`c29b86f`, browser-verified) |
 | UI/UX backlog P1–P3 (UX-1…UX-11) | ✅ done (browser-verified; +2 infra fixes) |
 | **Milestone 1 — core memory** (storage + tools + context injection + REST + UI) | ✅ done (browser-verified: agent stores + recalls cross-session) |
-| Milestone 1 — pgvector/RAG (slice 1c) | ⬜ **next** — needs the pgvector image + an embedding provider decision |
+| **Milestone 1 — pgvector/RAG** (passages + hybrid retrieval + tools + REST + UI) | ✅ done (browser-verified: agent notes + searches cross-session with real embeddings) |
 
-**M2 + M-tools complete; v1 wrap-up landed; UI/UX backlog cleared** (all browser-verified). **Milestone 1 core memory done** (alembic `0015` user_memory; `memory_user_*` tools + `/memory` REST + `/remember` Memory page; core memory injected into the loop system prompt — 铁律#6). Verified end-to-end with the real model: the agent saved "favorite fruit = mango" and recalled it in a **new** session with no tool call. Deferred: agent observability (owner), M3 eval gate (ADR-024).
+**M2 + M-tools complete; v1 wrap-up landed; UI/UX backlog cleared; Milestone 1 (two-tier memory + RAG) DONE** — all browser-verified. Milestone 1: alembic `0015` (user_memory core) + `0016` (memory_passages, pgvector image, `text-embedding-3-small`); `memory_user_*` + `memory_note`/`memory_search` tools; `/memory` + `/memory/passages` REST; core memory injected into the loop (铁律#6); hybrid (vector+FTS+RRF) retrieval. **Real-model E2E verified**: agent saved "favorite fruit = mango" and recalled it in a new session (no tool); noted "launch March 15, code name Bluebird" and `memory_search`-recalled it cross-session. Deferred: agent observability (owner), M3 eval gate (ADR-024).
 
-**▶ Next: Milestone 1 slice 1c — pgvector/RAG.** Decision to make first: **the embedding provider** (does the litellm proxy expose an embedding model? else pick a source) + swap `postgres:16` → a `pgvector`-enabled image (ADR-012 anticipated pgvector; ADR-022 deferred it out of v1). Then `memory_passages` (embedding+visibility+model/dims/version), tenant-filtered hybrid retrieval (FTS `tsvector` GIN + HNSW, RRF fusion — architect-review §pgvector), a retrieval tool, and UI. Then milestones **2 files/MinIO → 3 sandbox → 4 QQ/IM → 5 agentic email**; each: full tests + per-milestone Playwright; QQ/agentic-email real-account verification may be left for manual acceptance.
+**▶ Next: Milestone 2 — personal files / MinIO** (per-user persistent workspace; upload/sync; agent read/write) → then **3 sandbox → 4 QQ/IM → 5 agentic email**; each full tests + per-milestone Playwright; QQ/agentic-email real-account verification may be left for manual acceptance.
 
 ## How to update
 On finishing a task: set its row ✅, move "Next ready", note anything a future agent must know (schema changes, new commands, gotchas), bump "Last updated", and commit (the STATUS bump can ride with the task commit).
