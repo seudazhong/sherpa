@@ -31,6 +31,7 @@ from app.models import ApprovalEnvelope, Message, Part
 from app.models import Session as SessionModel
 from app.permissions import ResolveError, resolve_approval
 from app.queue import enqueue_approval_resume, enqueue_run
+from app.services.channels import remember_inbound_msg_id
 
 Notifier = Callable[[str, str], Awaitable[None]]
 
@@ -279,6 +280,10 @@ async def handle_inbound(
         installation_id=installation,
         external_id=sender,
     )
+    # Remember the triggering inbound id so a later reply can be a passive reply
+    # (QQ ``post_c2c_message`` needs the msg_id). Harmless for other channels.
+    if message_id:
+        await remember_inbound_msg_id(db, tenant_id, sess.id, message_id)
 
     command = parse_command(text)
     if command is not None:

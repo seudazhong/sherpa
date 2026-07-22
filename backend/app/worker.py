@@ -16,13 +16,12 @@ from sqlalchemy import select
 
 from app import queue
 from app.channels import (
-    build_qq_client,
     compose_reply,
-    deliver_run_reply,
     final_assistant_text,
     pending_approval_for_run,
 )
 from app.channels.email import build_email_channel_client
+from app.channels.qq_official import build_qq_sender
 from app.config import settings
 from app.connectors.gmail import build_gmail_sync_client
 from app.connectors.sync import sync_gmail
@@ -37,6 +36,7 @@ from app.providers import build_provider
 from app.redis_client import client as redis_client
 from app.scheduler import fire_due_schedules, try_acquire_leader
 from app.scheduler.pipeline import sync_and_analyze
+from app.services import channels as chan_svc
 from app.tools import build_default_registry
 
 
@@ -132,13 +132,7 @@ async def _deliver_im_reply(run_id: uuid.UUID) -> None:
             if sess is None:
                 return
             if sess.channel == "qq":
-                await deliver_run_reply(
-                    session,
-                    client=build_qq_client(),
-                    tenant_id=run.tenant_id,
-                    run_id=run_id,
-                    external_id=sess.external_scope_id,
-                )
+                await _deliver_qq_reply(session, sess, run.tenant_id, run_id)
             elif sess.channel == "email":
                 text = await final_assistant_text(session, run.tenant_id, run_id)
                 approval = await pending_approval_for_run(session, run.tenant_id, run_id)
@@ -150,6 +144,26 @@ async def _deliver_im_reply(run_id: uuid.UUID) -> None:
                 )
     except Exception:
         return
+
+
+async def _deliver_qq_reply(
+    session: Any, sess: SessionModel, tenant_id: uuid.UUID, run_id: uuid.UUID
+) -> None:
+    """Deliver a settled run's reply to a QQ thread via a passive C2C reply."""
+    text = await final_assistant_text(session, tenant_id, run_id)
+    approval = await pending_approval_for_run(session, tenant_id, run_id)
+    if text is None and approval is None:
+        return
+    config = await chan_svc.get_config(session, tenant_id, sess.user_id, "qq")
+    if config is None or not config.enabled or not config.app_id:
+        return
+    secret = chan_svc.reveal_secret(config)
+    if secret is None:
+        return
+    msg_id = await chan_svc.last_inbound_msg_id(session, tenant_id, sess.id)
+    body = compose_reply(text, approval)
+    sender = build_qq_sender(config.app_id, secret)
+    await sender.send_private(sess.external_scope_id, body, msg_id)
 
 
 async def run_job(ctx: dict[str, Any], run_id: str) -> str:
@@ -207,7 +221,16 @@ async def _deliver_im_resume_ack(correlation_id: uuid.UUID, status: str) -> None
                 else f"\u26a0\ufe0f {env.tool_name} could not be completed."
             )
             if sess.channel == "qq":
-                await build_qq_client().send_private(sess.external_scope_id, msg)
+                config = await chan_svc.get_config(session, env.tenant_id, sess.user_id, "qq")
+                if config is None or not config.enabled or not config.app_id:
+                    return
+                secret = chan_svc.reveal_secret(config)
+                if secret is None:
+                    return
+                msg_id = await chan_svc.last_inbound_msg_id(session, env.tenant_id, sess.id)
+                await build_qq_sender(config.app_id, secret).send_private(
+                    sess.external_scope_id, msg, msg_id
+                )
             else:
                 await build_email_channel_client().send(
                     to=sess.external_scope_id, subject="Re: Sherpa", text=msg
@@ -248,15 +271,66 @@ async def _relay_loop() -> None:
             await asyncio.sleep(1.0)
 
 
+async def _qq_gateway_loop() -> None:
+    """Supervise the official QQ botpy WebSocket client (ADR-028).
+
+    Polls for an enabled, credentialed QQ config; while one exists, runs the botpy
+    client (``client.start`` blocks until disconnect) and reconnects with a short
+    backoff. When no config exists, idles and re-checks. Leader-gated so only one
+    worker holds the single-account WS connection.
+    """
+    from app.channels.qq_official import build_qq_client_for_gateway
+
+    while True:
+        try:
+            if not await try_acquire_leader("qq_gateway", ttl_ms=55_000):
+                await asyncio.sleep(30)
+                continue
+            creds: tuple[uuid.UUID, uuid.UUID, str, str, str] | None = None
+            async with SessionLocal() as session:
+                configs = await chan_svc.active_qq_configs(session)
+                if configs:
+                    cfg = configs[0]
+                    secret = chan_svc.reveal_secret(cfg)
+                    if secret:
+                        creds = (
+                            cfg.tenant_id,
+                            cfg.user_id,
+                            cfg.app_id,
+                            secret,
+                            cfg.owner_external_id,
+                        )
+            if creds is None:
+                await asyncio.sleep(30)
+                continue
+            tenant_id, user_id, app_id, secret, owner = creds
+            bind_context(tenant_id=str(tenant_id))
+            client = build_qq_client_for_gateway(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                app_id=app_id,
+                secret=secret,
+                owner_openid=owner,
+            )
+            await client.start(app_id, secret)  # blocks until the WS disconnects
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(15)
+
+
 async def _startup(ctx: dict[str, Any]) -> None:
     configure_logging()
     ctx["relay_task"] = asyncio.create_task(_relay_loop())
+    ctx["qq_gateway_task"] = asyncio.create_task(_qq_gateway_loop())
 
 
 async def _shutdown(ctx: dict[str, Any]) -> None:
-    task = ctx.get("relay_task")
-    if task is not None:
-        task.cancel()
+    for key in ("relay_task", "qq_gateway_task"):
+        task = ctx.get(key)
+        if task is not None:
+            task.cancel()
 
 
 async def sync_and_analyze_job(ctx: dict[str, Any], connector_id: str) -> str:
