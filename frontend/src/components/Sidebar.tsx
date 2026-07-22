@@ -26,7 +26,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     label: "Workspace",
     items: [
       { label: "Chat", path: "/", icon: "chat" },
-      { label: "Sessions", path: "/sessions", icon: "sessions" },
+      { label: "Sessions", path: "/history", icon: "sessions" },
       { label: "Inbox", path: "/inbox", icon: "inbox" },
       { label: "Activity", path: "/data", icon: "activity" },
     ],

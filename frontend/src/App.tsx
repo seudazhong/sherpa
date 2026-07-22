@@ -44,7 +44,7 @@ export default function App() {
         }
       />
       <Route
-        path="/sessions"
+        path="/history"
         element={
           <Protected>
             <SessionsView />
