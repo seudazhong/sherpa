@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-22 · Phase: **Milestones 1–5 (memory+manual-note RAG, files/MinIO, sandbox, QQ/IM, agentic email) all complete + browser-verified**. The shipped RAG is archival semantic notes, not a source-backed document knowledge base. v1 + v1 wrap-up + UI/UX backlog + the responsive **Quiet Work** redesign are done. All requested post-v1 milestones done; next candidates in `09-roadmap.md` (#6 cron … #11 eval).
+> Last updated: 2026-07-23 · Phase: **Milestones 1–5 complete + browser-verified**; **post-v1 P0–P2 (Session Library + content search + Personal Drive/W1) complete + Playwright-verified, awaiting unified owner acceptance**. The shipped RAG is archival semantic notes, not a source-backed document knowledge base. v1 + v1 wrap-up + UI/UX backlog + the responsive **Quiet Work** redesign are done.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -12,8 +12,8 @@ The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) 
 The **design + contracts + runnable skeleton** are done, and the **v1 durable spine (M1) is complete and verified end-to-end**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, the REST auth + session/message surface, the credential vault (AEAD/KEK), run traces + structured logging, and the web chat client (#1–#13) are all implemented and green. A live smoke (login → session → prompt → real arq worker loop → outbox relay → SSE `run.settled` → persisted transcript) passes. Next: **M2 — Personal Inbox-to-Action (Gmail → candidate → todo → reminder)**.
 
 ## Verified state
-- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` → **129 passed** (needs Postgres+Redis up; MinIO for file tests; vault/formatter/compaction/spill-unit tests need none) · `ruff check`+`format --check` clean · `mypy app` clean (125 files). `uv.lock` committed. Schema at alembic `0018`.
-- **Frontend** (`frontend/`): Vite+React+TS SPA with the responsive `Quiet Work` design system across login, chat, inbox, activity, schedules, settings, memory, files, messaging, and connectors. `npm run build` + `npm run lint` green. `package-lock.json` committed.
+- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` green (needs Postgres+Redis up; MinIO for file/drive tests) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic **`0022`** (0019 run lease · 0020 session search · 0021 personal drive · 0022 files→drive).
+- **Frontend** (`frontend/`): Vite+React+TS SPA with the responsive `Quiet Work` design system across login, chat, inbox, activity, schedules, settings, memory, **sessions (/history)**, **drive (/workspace)**, messaging, and connectors. `npm run build` + `npm run lint` green. `package-lock.json` committed.
 - **Runtime**: web (`uv run uvicorn app.main:app`) + worker (`uv run arq app.worker.WorkerSettings`, runs the run loop + outbox relay) verified live against docker Postgres+Redis.
 - **Infra**: `infra/docker-compose.yml` (postgres+redis+web+worker+frontend) defined. **CI**: `.github/workflows/ci.yml` (backend uv lint/type/test + frontend build).
 
@@ -35,12 +35,14 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 6. **R-KNOWLEDGE-BASE research** — ✅ complete: audited the shipped manual-note RAG, researched production KB patterns, and designed a separate file-backed Knowledge vertical slice with async source/version ingestion, hybrid retrieval, citations, multilingual handling, UI, tools, and release gates. Recommendation: GO for the narrow slice after owner approval and ADR/contract review; no implementation has started. Report: [`research/knowledge-base.md`](research/knowledge-base.md).
 Then the remaining **post-v1 milestones** in `09-roadmap.md` (cron → GitHub → provider/sub-agent → plugins → teams → eval), in the owner's chosen order.
 
-## ▶▶ Active build (owner-approved 2026-07-23): P0 → P2, no mid-review
+## ▶▶ Active build (owner-approved 2026-07-23): P0 → P2, no mid-review — ✅ **P0–P2 complete, awaiting unified owner acceptance**
 
 Sequenced implementation of the two completed research lines, through **P2**, then unified owner acceptance. Prereqs done: **ADR-029** (Session Library + search) + **ADR-030** (Personal Drive/W1); contract additions in `contracts/data-model.md §"Post-v1 contract additions"` and `contracts/api.md §10`; task breakdown in [`IMPLEMENTATION.md` Phase P0–P2](IMPLEMENTATION.md). Order:
-- **P0 — Session Library**: persisted title, `last_activity_at` + run lease/heartbeat, browse+filters, truthful state-specific Resume/Reconnect/Recover, dedicated `/sessions` page.
-- **P1 — Session search**: `session_search_entries` projection (same-txn jobs + event_journal), FTS + CJK bigram + trigram, grouped results + typed deep-link anchors, rebuild + retention/redaction.
-- **P2 — Personal Drive (W1)**: storage accounts/quota, immutable ref-counted blobs, drive nodes/versions/trash, cross-store commit fix + GC, files→Drive migration, Workspace/Drive UI.
+- **P0 — Session Library** ✅: persisted title, `last_activity_at` + run lease/heartbeat (migration 0019), browse+filters, truthful state-specific Resume/Reconnect/Recover, dedicated Sessions page at **`/history`** (route `/sessions` collides with the API proxy). Browser-verified.
+- **P1 — Session search** ✅: `session_search_entries` projection (migration 0020; inline per-session `reindex_session` from canonical rows in admission + loop settle), FTS + CJK bigram + trigram, grouped results + typed deep-link anchors. Browser-verified English + Chinese.
+- **P2 — Personal Drive (W1)** ✅: storage accounts/quota (5 GiB default, configurable), immutable content-addressed ref-counted blobs, drive nodes/versions/trash, cross-store commit fix + GC/orphan-sweep worker (migrations 0021+0022), files→Drive migration (legacy `/files` kept during transition), REST `/drive/*` + agent tools (`drive_*`, purge human-only), Drive browser UI at **`/workspace`** (folders/breadcrumbs/upload/versions/trash/storage; responsive). Playwright human-lane verified (desktop + 390px). **Trash-view fix:** `GET /drive/nodes?trashed=true` (backend was filtering trashed nodes out).
+
+**Verified P2:** backend gate green (ruff/mypy/pytest, incl. `test_drive*`), frontend build/lint green, Playwright human lane all-pass (create folder → upload → rename → versions → trash → restore → 390px no-overflow). **→ Ready for unified owner acceptance.**
 
 Deferred within these lines: session semantic search + branch/lineage (Phase C); Projects/sandbox/GitHub (W2–W4).
 

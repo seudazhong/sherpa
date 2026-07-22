@@ -77,9 +77,11 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
-## Phase P0–P2 — Session Library, session search, personal Drive (post-v1, ADR-029/030)
+## Phase P0–P2 — Session Library, session search, personal Drive (post-v1, ADR-029/030) — ✅ **COMPLETE (2026-07-23), awaiting unified owner acceptance**
 
 > Owner-approved 2026-07-23: implement through **P2** without mid-review, then unified acceptance. Prereqs done: ADR-029/030 + contract additions (data-model §"Post-v1 contract additions", api.md §10). Each task: implement → backend gate (`alembic upgrade head` · `ruff` · `mypy app` · `pytest`) + frontend (`npm run build`/`lint`) → commit → tick STATUS. Playwright human-lane per phase.
+>
+> **Status:** P0 ✅ (Sessions page at **`/history`**) · P1 ✅ (English + Chinese search verified) · P2 ✅ (Drive at **`/workspace`**; migrations 0019–0022; Playwright human-lane desktop + 390px all-pass). See STATUS.md "Active build".
 
 ### P0 — Session Library: browse + state-specific resume (ADR-029 Phase A)
 

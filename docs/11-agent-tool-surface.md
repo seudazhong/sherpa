@@ -187,6 +187,10 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 读/改通知设置 | ✅ | GET·PATCH /settings ✅ | `get_settings`/`update_settings` ✅ | Settings(/preferences)✅ | idempotent_write | allow |
 | 活动台账 | ✅ | GET /activity ✅ | `list_activity` ✅ | Activity(/data)✅ | read_only | allow |
 | 会话:新建/切换 | (会话 API) | POST·GET /sessions ✅ | ❌ 不给 agent | Chat(new chat + 切换)✅ | — | — |
+| 会话库:浏览/续跑/重命名/恢复(P0) | ✅ sessions | GET/PATCH /sessions · resume-state · recover · timeline ✅ | ❌ 不给 agent | Sessions(/history)✅ | read_only/idempotent_write | allow |
+| 会话内容搜索(P1) | ✅ search | GET /sessions?query= ✅ | ❌ 不给 agent | Sessions 搜索框 ✅ | read_only | allow |
+| 个人网盘:列/建夹/上传/下载/改名·移动/版本·恢复版本/回收站·恢复(P2) | ✅ drive | /drive/* ✅ | `drive_list`/`search`/`make_folder`/`write`/`read`/`move`/`trash`/`restore` ✅ | Drive(/workspace)✅ | idempotent_write | allow |
+| 个人网盘:永久删除(purge) | ✅ drive | DELETE /drive/nodes/{id} ✅ | ❌ **不给 agent**(人工/审批专属) | Drive(Delete forever + 确认)✅ | non_idempotent_write | user-only |
 | 发邮件(外部) | — | ❌(仅 Tool) | `send_email` ✅ | ⬜ 审批渲染器(v1 收尾) | non_idempotent_write | **ask** |
 | 连接 Gmail(OAuth) | — | connect/callback ✅ | ❌ | ⬜(需真实 Google 凭据) | — | — |
 | 列/解决审批 | — | GET /permissions·/resolve ✅ | ❌ **不给 agent**(不自批) | ⬜ 审批渲染器(v1 收尾) | — | user-only |
