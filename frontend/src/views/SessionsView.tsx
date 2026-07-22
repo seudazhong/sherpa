@@ -80,6 +80,7 @@ export default function SessionsView() {
   const { csrf } = useAuth();
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -87,24 +88,34 @@ export default function SessionsView() {
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState<string>("");
 
+  const searching = query.trim().length > 0;
+
   const load = useCallback(async () => {
     try {
-      const page = await api.listSessions({ limit: 100 });
+      const q = query.trim();
+      const page = q
+        ? await api.listSessions({ query: q, limit: 30 })
+        : await api.listSessions({ limit: 100 });
       setSessions(page.items);
-      setSelected((prev) => prev ?? page.items[0]?.id ?? null);
+      setSelected((prev) => {
+        if (prev && page.items.some((s) => s.id === prev)) return prev;
+        return page.items[0]?.id ?? null;
+      });
     } catch {
       setError("Could not load sessions. Is the backend running?");
     }
-  }, []);
+  }, [query]);
 
   useEffect(() => {
-    void load();
+    const t = setTimeout(() => void load(), 200);
+    return () => clearTimeout(t);
   }, [load]);
 
   const visible = useMemo(() => {
+    if (searching) return sessions;
     const f = FILTERS.find((x) => x.key === filter) ?? FILTERS[0];
     return sessions.filter((s) => f.match(s.resume_state));
-  }, [sessions, filter]);
+  }, [sessions, filter, searching]);
 
   const current = useMemo(
     () => sessions.find((s) => s.id === selected) ?? null,
@@ -255,32 +266,53 @@ export default function SessionsView() {
         <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
 
-          <div
-            className="session-filters"
-            role="tablist"
-            aria-label="Session filters"
-          >
-            {FILTERS.map((f) => (
-              <button
-                key={f.key}
-                className={"filter-chip" + (filter === f.key ? " active" : "")}
-                onClick={() => setFilter(f.key)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
+          <label className="session-search-box">
+            <span aria-hidden="true">⌕</span>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search titles, messages, and tool actions…"
+              aria-label="Search sessions"
+              type="search"
+            />
+          </label>
+
+          {!searching && (
+            <div
+              className="session-filters"
+              role="tablist"
+              aria-label="Session filters"
+            >
+              {FILTERS.map((f) => (
+                <button
+                  key={f.key}
+                  className={
+                    "filter-chip" + (filter === f.key ? " active" : "")
+                  }
+                  onClick={() => setFilter(f.key)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="session-library">
             <section className="content-section session-results">
               <div className="section-head">
-                <span>Sessions</span>
+                <span>{searching ? "Search results" : "Sessions"}</span>
                 <span className="count">{visible.length}</span>
               </div>
               {visible.length === 0 && (
                 <div className="empty-state compact">
-                  <strong>No sessions here</strong>
-                  <span>Start a chat, or clear the filter.</span>
+                  <strong>
+                    {searching ? "No matching sessions" : "No sessions here"}
+                  </strong>
+                  <span>
+                    {searching
+                      ? "Try a shorter keyword or another term."
+                      : "Start a chat, or clear the filter."}
+                  </span>
                 </div>
               )}
               {visible.map((s) => {
@@ -305,10 +337,25 @@ export default function SessionsView() {
                       </time>
                     </span>
                     <strong>{label(s)}</strong>
-                    {s.last_message_preview && (
-                      <span className="session-item-preview">
-                        {s.last_message_preview}
+                    {s.match ? (
+                      <span className="session-item-match">
+                        <span className="match-kind">
+                          {s.match.kind.replace("_", " ")}
+                        </span>
+                        {s.match.snippet}
+                        {s.match.additional_matches > 0 && (
+                          <span className="match-more">
+                            {" "}
+                            +{s.match.additional_matches} more
+                          </span>
+                        )}
                       </span>
+                    ) : (
+                      s.last_message_preview && (
+                        <span className="session-item-preview">
+                          {s.last_message_preview}
+                        </span>
+                      )
                     )}
                   </button>
                 );

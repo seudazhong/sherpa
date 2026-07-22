@@ -2658,3 +2658,51 @@ div.run-log {
     max-height: none;
   }
 }
+
+/* Session search (P1) */
+.session-search-box {
+  height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 0 13px;
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgba(15, 15, 15, 0.04);
+}
+.session-search-box > span {
+  color: var(--muted);
+  font-size: 18px;
+}
+.session-search-box input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 14px;
+}
+.session-item-match {
+  display: block;
+  margin-top: 8px;
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.match-kind {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--brand);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.match-more {
+  color: var(--faint);
+}
