@@ -285,13 +285,28 @@ export interface FilePage {
 }
 
 export interface QQStatus {
-  kind: string;
   enabled: boolean;
   configured: boolean;
-  owner_id_set: boolean;
-  webhook_secret_set: boolean;
-  api_base: string;
+  app_id: string;
+  owner_openid_set: boolean;
+  secret_set: boolean;
   webhook_path: string;
+}
+
+export interface QQTestResult {
+  ok: boolean;
+  detail: string;
+}
+
+export interface QQBindStart {
+  task_id: string;
+  qr_url: string;
+}
+
+export interface QQBindPollResult {
+  status: string; // pending | completed | expired
+  app_id: string;
+  owner_openid: string;
 }
 
 export interface EmailStatus {
@@ -505,6 +520,14 @@ export const api = {
       jsonInit("POST", csrf, { text, from_id: fromId ?? "" }),
     ),
   threadTranscript: (sid: string) => req<ThreadTranscript>(`/channels/threads/${sid}`),
+  putQQConfig: (
+    csrf: string,
+    cfg: { app_id: string; enabled: boolean; owner_openid: string; secret: string },
+  ) => req<QQStatus>("/channels/qq/config", jsonInit("PUT", csrf, cfg)),
+  testQQ: (csrf: string) => req<QQTestResult>("/channels/qq/test", jsonInit("POST", csrf)),
+  qqBindStart: (csrf: string) => req<QQBindStart>("/channels/qq/bind/start", jsonInit("POST", csrf)),
+  qqBindPoll: (csrf: string, taskId: string) =>
+    req<QQBindPollResult>("/channels/qq/bind/poll", jsonInit("POST", csrf, { task_id: taskId })),
 };
 
 export function exportUrl(): string {

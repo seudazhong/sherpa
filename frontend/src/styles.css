@@ -585,3 +585,8 @@ h3 {
 .switch input:checked + .switch-slider::before {
   transform: translateX(18px);
 }
+
+.seg { display: inline-flex; gap: 0.35rem; }
+.stack { display: flex; flex-direction: column; gap: 0.6rem; max-width: 34rem; }
+.stack label { display: flex; flex-direction: column; gap: 0.25rem; }
+.stack input { padding: 0.4rem 0.55rem; }

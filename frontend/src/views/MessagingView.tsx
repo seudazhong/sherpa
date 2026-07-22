@@ -113,22 +113,18 @@ export default function MessagingView() {
                 <div className="cand-title">
                   {qq?.configured ? (
                     <span className="pill pill-success">Connected</span>
-                  ) : qq?.enabled ? (
-                    <span className="pill pill-running">Enabled · needs owner id</span>
                   ) : (
-                    <span className="pill pill-idle">Not configured</span>
+                    <span className="pill pill-idle">Not connected</span>
                   )}
                 </div>
                 <div className="cand-meta small muted">
                   <div>
-                    Backend: <code>{qq?.kind ?? "…"}</code> (OneBot v11 / aiocqhttp) · webhook{" "}
-                    <code>{qq?.webhook_path ?? "/channels/qq/webhook"}</code>
+                    Official QQ bot (WebSocket) · AppID <code>{qq?.app_id || "(none)"}</code>
                   </div>
                   {!qq?.configured && (
                     <div>
-                      Set <code>QQ_KIND=onebot</code>, <code>QQ_OWNER_ID</code>,{" "}
-                      <code>QQ_WEBHOOK_SECRET</code>, <code>QQ_API_BASE</code> and point a
-                      self-hosted OneBot bridge at the webhook. Try it below without a bot.
+                      Connect a bot on the <a href="/integrations">Connectors</a> page (scan QR or
+                      paste AppID/Secret). You can try the flow below without a bot.
                     </div>
                   )}
                 </div>

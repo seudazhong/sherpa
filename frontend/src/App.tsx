@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth";
 import ActivityView from "./views/ActivityView";
 import ChatView from "./views/ChatView";
+import ConnectorsView from "./views/ConnectorsView";
 import FilesView from "./views/FilesView";
 import InboxView from "./views/InboxView";
 import LoginView from "./views/LoginView";
@@ -83,6 +84,14 @@ export default function App() {
         element={
           <Protected>
             <MessagingView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/integrations"
+        element={
+          <Protected>
+            <ConnectorsView />
           </Protected>
         }
       />

@@ -37,12 +37,9 @@ export default function Sidebar() {
       <Link className={cls("/messaging")} to="/messaging">
         ◎ Messaging
       </Link>
-      <span
-        className="nav-item muted"
-        title="Connectors — deferred in v1 (needs Google OAuth setup); manage Gmail via chat for now"
-      >
-        ⌁ Connectors <span className="nav-soon">soon</span>
-      </span>
+      <Link className={cls("/integrations")} to="/integrations">
+        ⌁ Connectors
+      </Link>
       <div className="nav-spacer" />
       <div className="nav-user">
         <span className="avatar">{(email ?? "?").slice(0, 1).toUpperCase()}</span>
