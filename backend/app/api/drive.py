@@ -113,6 +113,7 @@ async def list_nodes(
     sort: str = "name",
     cursor: str | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    trashed: bool = False,
 ) -> DriveNodePage:
     try:
         page = await svc.list_nodes(
@@ -123,6 +124,7 @@ async def list_nodes(
             sort=sort,
             cursor=cursor,
             limit=limit,
+            trashed=trashed,
         )
     except ServiceError as e:
         raise _http(e) from None

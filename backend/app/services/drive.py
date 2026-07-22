@@ -274,6 +274,7 @@ async def list_nodes(
     sort: str = "name",
     cursor: str | None = None,
     limit: int = 50,
+    trashed: bool = False,
 ) -> NodePage:
     uid = _require_user(ctx)
     limit = max(1, min(limit, _LIST_LIMIT))
@@ -281,16 +282,35 @@ async def list_nodes(
     stmt = select(DriveNode).where(
         DriveNode.tenant_id == ctx.tenant_id,
         DriveNode.user_id == uid,
-        DriveNode.trashed_at.is_(None),
     )
-    if query and query.strip():
-        stmt = stmt.where(DriveNode.name.ilike(f"%{query.strip()}%"))
-    else:
-        stmt = (
-            stmt.where(DriveNode.parent_id == parent_id)
-            if parent_id is not None
-            else stmt.where(DriveNode.parent_id.is_(None))
+    if trashed:
+        # Flat trash listing (across folders); only the top-most trashed nodes so a
+        # trashed folder's children don't clutter the view.
+        trashed_ids = (
+            select(DriveNode.id)
+            .where(
+                DriveNode.tenant_id == ctx.tenant_id,
+                DriveNode.user_id == uid,
+                DriveNode.trashed_at.is_not(None),
+            )
+            .scalar_subquery()
         )
+        stmt = stmt.where(
+            DriveNode.trashed_at.is_not(None),
+            (DriveNode.parent_id.is_(None)) | (DriveNode.parent_id.not_in(trashed_ids)),
+        )
+        if query and query.strip():
+            stmt = stmt.where(DriveNode.name.ilike(f"%{query.strip()}%"))
+    else:
+        stmt = stmt.where(DriveNode.trashed_at.is_(None))
+        if query and query.strip():
+            stmt = stmt.where(DriveNode.name.ilike(f"%{query.strip()}%"))
+        else:
+            stmt = (
+                stmt.where(DriveNode.parent_id == parent_id)
+                if parent_id is not None
+                else stmt.where(DriveNode.parent_id.is_(None))
+            )
     # Folders first, then by name; stable tiebreak on id for keyset paging.
     order_name = DriveNode.name.desc() if sort == "-name" else DriveNode.name.asc()
     stmt = stmt.order_by(is_file.asc(), order_name, DriveNode.id.asc())

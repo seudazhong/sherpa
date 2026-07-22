@@ -670,6 +670,7 @@ export const api = {
     sort?: string;
     cursor?: string;
     limit?: number;
+    trashed?: boolean;
   }) => {
     const qs = new URLSearchParams();
     if (params.parent) qs.set("parent", params.parent);
@@ -677,6 +678,7 @@ export const api = {
     if (params.sort) qs.set("sort", params.sort);
     if (params.cursor) qs.set("cursor", params.cursor);
     if (params.limit) qs.set("limit", String(params.limit));
+    if (params.trashed) qs.set("trashed", "true");
     const q = qs.toString();
     return req<DriveNodePage>(`/drive/nodes${q ? `?${q}` : ""}`);
   },

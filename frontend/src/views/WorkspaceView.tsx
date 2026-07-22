@@ -57,15 +57,17 @@ export default function WorkspaceView() {
   const load = useCallback(async () => {
     try {
       const q = query.trim();
-      const page = q
-        ? await api.driveList({ query: q, limit: 100 })
-        : await api.driveList({ parent: parent.id, limit: 200 });
+      const page = showTrash
+        ? await api.driveList({ trashed: true, query: q || undefined, limit: 200 })
+        : q
+          ? await api.driveList({ query: q, limit: 100 })
+          : await api.driveList({ parent: parent.id, limit: 200 });
       setNodes(page.items);
       setError(null);
     } catch {
       setError("Could not load your Drive. Is the backend running?");
     }
-  }, [parent.id, query]);
+  }, [parent.id, query, showTrash]);
 
   useEffect(() => {
     const t = setTimeout(() => void load(), 180);
@@ -77,14 +79,11 @@ export default function WorkspaceView() {
   }, [loadStorage]);
 
   const visible = useMemo(() => {
-    const rows = showTrash
-      ? nodes.filter((n) => n.trashed)
-      : nodes.filter((n) => !n.trashed);
-    return [...rows].sort((a, b) => {
+    return [...nodes].sort((a, b) => {
       if (a.node_type !== b.node_type) return a.node_type === "folder" ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
-  }, [nodes, showTrash]);
+  }, [nodes]);
 
   const refresh = async () => {
     await load();

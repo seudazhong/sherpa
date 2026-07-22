@@ -151,6 +151,12 @@ async def test_trash_restore_and_purge_human_only() -> None:
             child = await svc.get_node(s, ctx, f.id)
             assert child.trashed_at is not None  # subtree trashed
 
+            # Trash listing shows the top-most trashed node, not its children.
+            trash_page = await svc.list_nodes(s, ctx, trashed=True)
+            trash_ids = [n.id for n in trash_page.items]
+            assert folder.id in trash_ids
+            assert f.id not in trash_ids  # child hidden under its trashed parent
+
             summary = await svc.storage_summary(s, ctx)
             assert summary.trashed_bytes == 4  # bytes now only under trash
 

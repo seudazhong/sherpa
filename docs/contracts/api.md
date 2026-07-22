@@ -1453,7 +1453,7 @@ class NodeMove(StrictModel):
 
 | Route | Body → response | Auth | Status |
 |---|---|---|---|
-| `GET /drive/nodes?parent=&query=&sort=&cursor=&limit=` | none → `CursorPage[DriveNode]` | Session | `200`, `400`, `401`, `422` |
+| `GET /drive/nodes?parent=&query=&sort=&cursor=&limit=&trashed=` | none → `CursorPage[DriveNode]` | Session | `200`, `400`, `401`, `422` |
 | `POST /drive/folders` | `FolderCreate` → `DriveNode` | Session + CSRF | `201`, `401`, `409`, `422`, `507` |
 | `POST /drive/files` | multipart (`path`, file) → `DriveNode` | Session + CSRF | `201`, `401`, `409`, `413`, `422`, `507` |
 | `GET /drive/nodes/{id}/content` | none → bytes | Session | `200`, `401`, `404` |
@@ -1467,6 +1467,8 @@ class NodeMove(StrictModel):
 
 - `507 insufficient_storage` when a reservation would exceed quota. Reservation is
   taken before the object write and released on failure.
+- `trashed=true` returns a flat listing of the top-most trashed nodes (Trash view);
+  omitted/false returns live nodes under `parent` (or the Drive root).
 - Uploads exceeding the per-file cap return `413`.
 - `DELETE` (permanent purge) is human-only/approval-gated; agent tools may trash
   and restore but not purge.
