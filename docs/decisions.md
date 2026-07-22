@@ -18,6 +18,7 @@
 | 2026-07-22 | 代码执行沙箱如何隔离 | ✅ 落地 ADR-007（Docker 硬化一次性容器：断网/掉权/非root/只读/资源+时间上限）；worker 挂 docker.sock（单用户自托管的信任让步，已记录） | 新增 ADR-025 |
 | 2026-07-22 | QQ/IM 入站如何接入 + 审批如何渲染 | ✅ 通道适配器（OneBot v11/aiocqhttp）：webhook(HMAC+owner allowlist) → 复用 admit_prompt 有界循环 → 出站回推；审批复用 v1 基座（IM `approve/reject` → 同一信封） | 新增 ADR-026 |
 | 2026-07-22 | agentic email 如何落地 + 统一发信接缝 | ✅ AgentMail 自有邮箱：单一 `build_email_sender()` 发信接缝（`send_email` 工具 + 日报都走它，真实发信）；入站 email(Svix 验签+owner allowlist) 复用同一有界循环 + 审批基座 | 新增 ADR-027；实现 roadmap 统一发信 note |
+| 2026-07-22 | QQ 用官方平台还是 OneBot | ✅ **改用腾讯官方 api-v2（qq-botpy / WebSocket），弃用 OneBot**（自建 bridge + 非官方登录，封号/合规风险）；复用现有入站管线+审批基座；配置进复活的 Connectors 页 | 新增 ADR-028（**部分取代 ADR-026**）|
 
 ---
 
@@ -197,3 +198,32 @@
 - **可验证性**：真实**发信**已用 owner 提供的 API key 验证（自测邮件返回 `message_id`）。**入站真实投递**需公网 webhook（AgentMail→本地 localhost，需 ngrok/隧道）——**留作手动验收**；人工路径用 `POST /channels/email/simulate`（owner+CSRF）注入一封"入站"邮件 + Messaging 页 email 段做点检。
 - **排除 / 后置**：任意发件人 + SAFE 层级下沉；邮件线程/引用抽取（Talon）；附件；富 HTML；出站去重（best-effort）；官方 SDK（用 httpx，零新依赖）。
 - **来源**：ADR-013；roadmap 里程碑5 + 2026-07-21 统一发信 note；用户提供 AgentMail 账号 + API key（本地文件）+「真实账号接入无法完成的验证直接跳过、手动验收」。
+
+### ADR-028 · QQ 接入改用腾讯官方平台（api-v2 / qq-botpy / WebSocket），弃用 OneBot（部分取代 ADR-026）
+- **决策（用户拍板 2026-07-22）**：QQ 入站改走**腾讯 QQ 机器人开放平台官方接口（api-v2）**，用官方 SDK **`qq-botpy`（WebSocket 网关）**接入；**弃用 ADR-026 的 OneBot v11/aiocqhttp 传输**。
+- **理由**：
+  - OneBot 需自建 bridge（NapCat/go-cqhttp/Lagrange 等）+ **非官方协议登录 QQ**，有**封号/合规风险**，且多一个运维组件；官方平台用 **AppID + AppSecret**、合规、且 **WebSocket 模式 bot 主动外连网关、无需公网 URL/反代**，最契合自托管单用户。
+  - 生态验证：Hermes / OpenClaw / **AstrBot**（开源，已读其官方适配器源码）均用此路径。
+- **连接模式选择**：**WebSocket**（自托管友好，无需公网）而非 Webhook（需公网 IP+域名+HTTPS+反代、Ed25519 验签）。Webhook 留作后续可选。
+- **接入 UX（复活 Connectors 页）**：**手动 AppID/Secret 优先**（永远可用）；**扫码一键**作为 fast-follow（`q.qq.com/lite/create_bind_task` → 二维码 `q.qq.com/qqbot/openclaw/connect.html?task_id=..` → `poll_bind_result` → 用本地 base64 AES-256 key 对 `bot_encrypt_secret` 做 **AES-GCM** 解密得 AppSecret；**待确认该端点对非合作方是否开放**，不行则仅手动）。Secret → **AEAD 凭据保险库（ADR-019）**，永不日志、响应脱敏（仅显示 set/last4）。
+- **运行位置**：botpy WS 客户端作为 **worker 的有界重连后台任务**（类比 `_relay_loop`），优雅关闭（参考 AstrBot `ManagedBotWebSocket`/`shutdown`）。
+- **复用（不重造）**：通道无关入站管线（`ensure_channel_session(channel='qq', external_id=<user_openid>)` → `admit_prompt` → 有界循环）、**审批基座**（`resolve_approval(channel='qq')`）、`/channels/qq/simulate`（人工验收）、Messaging UI 全部保留。**删除**现有 M4 的 OneBot 部分：`app/channels/qq.py` 的 `OneBotQQClient` + HMAC-SHA1 `verify_signature` + `/channels/qq/webhook` 的 OneBot 事件解析。
+- **发送约束**：**被动回复**用入站 `msg_id`（+`msg_seq`），需按会话保存最近 msg_id（异步 worker 回复可能延迟，超回复窗兜底走**主动推送**，受配额限制）。API：`post_c2c_message`（单聊）等；`msg_type` 0=文本。
+- **owner 归属（单用户 v1）**：仅 owner 的 QQ openid 走 FULL 层级——首绑 openid 或 allowlist 字段。
+- **新依赖**：`qq-botpy`（WS+发送）+ `pycryptodome`（扫码 AES-GCM 解密）。（Webhook 的 Ed25519 依赖 `cryptography`——不做 webhook 则免。）
+- **排除 / 后置**：Webhook 模式；群消息（先私聊/C2C）；富媒体段（先纯文本）；定时提醒路由到 QQ（冻结 `schedules` CHECK，同 ADR-026）。
+- **可验证性**：真实端到端需真实 bot 账号（+ 可能的 IP 白名单）→ **手动验收**（用户已同意此类留手动）；开发期用 `/channels/qq/simulate` + Messaging 页走人工路径。
+- **与 ADR-026 关系**：**部分取代**——保留 ADR-026 的"IM 线程映射到既有 `sessions`（`channel='qq'`）、审批复用 v1 基座、无新表/无冻结契约变更"结论；**只替换传输层**（OneBot → 官方 botpy/WS）。
+- **来源**：用户输入「既然要用官方 bot，OneBot 就不需要了」；调研见会话工作区 `qq-official-bot-research.md`（AstrBot 源码 + 腾讯 api-v2）。
+
+#### 构建任务拆解（评审后再写代码；真实端到端留手动验收）
+1. **ADR + 依赖**（本条已含）：加 `qq-botpy` + `pycryptodome` 到 `backend/pyproject.toml`；`uv sync`；`uv.lock` 提交。
+2. **清理 OneBot**：删 `OneBotQQClient` + HMAC-SHA1 `verify_signature` + `/channels/qq/webhook` OneBot 解析；保留通用入站管线/simulate/Messaging。
+3. **配置持久化 + 保险库**：channel 配置表（tenant+user，非密钥字段：appid/enabled/enable_group_c2c/owner_openid）；AppSecret 走 AEAD vault；`build_*` 从存储读取（env 兜底）。
+4. **官方适配器**（`app/channels/qq_official.py`）：botpy `Client(intents).start(appid, secret)` 封装；入站 C2C→`ensure_channel_session`+`admit_prompt`+`enqueue_run`；存每会话 `msg_id`。
+5. **worker 后台任务**：有界重连的 botpy WS 生命周期（启动/关闭），仅当 QQ 已配置时启动。
+6. **回复投递**：`_deliver_im_reply` 的 qq 分支改为 botpy 被动回复（`post_c2c_message` + 存储的 msg_id），超窗兜底主动推送。
+7. **REST + 复活 Connectors 页**：GET/PUT QQ 配置（owner+CSRF、密钥脱敏）、POST 测试连接；手动 AppID/Secret 表单 + 状态卡（与 `connectors-editable-email` 同页）。
+8. **扫码一键（fast-follow，端点授权确认后）**：create_bind_task/poll + AES-GCM 解密 + 二维码 + 轮询 UI。
+9. **测试**：签名/解密单测、入站路由、配置/vault、回复投递（mock botpy，离线）；`uv run pytest`/`ruff`/`mypy` 全绿。
+10. **验证**：`/simulate` + Messaging 人工路径；真实 bot 端到端 → 手动验收。
