@@ -35,6 +35,7 @@
 ### 架构调研任务（不自动进入实现顺序）
 
 - **R-SESSION-SEARCH · 云端 session 持久化 / 搜索 / 恢复** — 调研 GitHub Copilot CLI、Hermes 及其他 local coding agent 的 JSONL、SQLite、索引重建、上下文恢复和分支语义；再结合 Sherpa 的 Postgres event journal、tenant isolation、跨设备/跨渠道、审批与 effect recovery，提出云端架构与 Session Library UX。先完成证据、方案比较、静态 HTML 流程和 ADR/contract 建议，再决定是否实施。完整任务书：[`research/session-search.md`](research/session-search.md)。
+- **R-WORKSPACE-PRODUCT · 个人网盘 + 项目工作空间** — 将现有 `Files` 视为后台对象存储能力，调研面向用户的 Workspace / Projects / Drive 产品形态；覆盖每用户配额（5 GB 为待验证假设）、GitHub 导入/同步、持久开发空间、sandbox 挂载与保存、版本/回收站、容量核算和未来共享边界。先产出竞品证据、产品 IA、静态 HTML、架构比较及 ADR/contract 建议。完整任务书：[`research/workspace-product.md`](research/workspace-product.md)。
 
 > **审批/对外写动作的归属（已下沉，不再是独立后置里程碑）**：通道无关基座（web 渲染器 + run 恢复 + 权限门）在 **v1 收尾**；各渠道审批渲染器随其渠道交付（QQ→里程碑4、邮件→里程碑5）；各类对外写动作随其系统落地（`send_email` 已在 v1；GitHub repo 写 → 里程碑7；等等），均复用同一审批基座。
 
