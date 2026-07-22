@@ -1,6 +1,10 @@
 # frontend
 
-TypeScript 前端（Next 或 Vite 待定）。**它是 core 事件流的客户端**，不含任何 agent 逻辑。
+Vite + React + TypeScript 前端。**它是 core 事件流的客户端**，不含任何 agent 逻辑。
+
+## UI system
+
+Production UI uses the responsive **Quiet Work** design system: warm neutral surfaces, restrained depth, progressive disclosure for technical details, and a mobile navigation drawer. See [`../docs/design-refined/README.md`](../docs/design-refined/README.md).
 
 ## 页面
 - 登录 / 注册 / 绑定外部身份（QQ、邮箱）。

@@ -1,6 +1,20 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import { api, eventsUrl, type AppMeta, type PendingApproval, type SessionSummary } from "../api";
+import {
+  api,
+  eventsUrl,
+  type AppMeta,
+  type PendingApproval,
+  type SessionSummary,
+} from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
@@ -30,6 +44,12 @@ interface ApprovalItem {
   resolved?: "approved" | "rejected";
 }
 
+const starterPrompts = [
+  "Plan my open tasks for today",
+  "What needs my attention?",
+  "Remember my preferred timezone",
+];
+
 function stripMarkdown(text: string): string {
   return text
     .replace(/[|#>*_`~]+/g, " ")
@@ -38,7 +58,8 @@ function stripMarkdown(text: string): string {
 }
 
 function sessionLabel(s: SessionSummary): string {
-  const clean = stripMarkdown(s.title || s.last_message_preview || "") || "New chat";
+  const clean =
+    stripMarkdown(s.title || s.last_message_preview || "") || "New chat";
   return clean.length > 40 ? clean.slice(0, 40) + "…" : clean;
 }
 
@@ -60,7 +81,8 @@ export default function ChatView() {
   const openStream = useCallback((sid: string, cursor: string) => {
     const es = new EventSource(eventsUrl(sid, cursor));
     esRef.current = es;
-    const parse = (e: Event) => JSON.parse((e as MessageEvent).data) as Envelope;
+    const parse = (e: Event) =>
+      JSON.parse((e as MessageEvent).data) as Envelope;
 
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
@@ -69,14 +91,22 @@ export default function ChatView() {
       const env = parse(e);
       setBubbles((b) => [
         ...b,
-        { key: env.event_id, role: "assistant", text: String(env.payload.text ?? "") },
+        {
+          key: env.event_id,
+          role: "assistant",
+          text: String(env.payload.text ?? ""),
+        },
       ]);
     });
     es.addEventListener("tool-call", (e) => {
       const env = parse(e);
       setActivities((a) => [
         ...a,
-        { key: env.event_id, label: `Tool · ${String(env.payload.name ?? "")}`, state: "running" },
+        {
+          key: env.event_id,
+          label: `Tool · ${String(env.payload.name ?? "")}`,
+          state: "running",
+        },
       ]);
     });
     es.addEventListener("tool-result", (e) => {
@@ -111,7 +141,9 @@ export default function ChatView() {
       // The single-use nonce arrives only on this event; the immutable envelope
       // fields come from the pending-approvals projection. Combine to resolve.
       void api.listPermissions().then((page) => {
-        const pending = page.items.find((p) => p.correlation_id === correlationId);
+        const pending = page.items.find(
+          (p) => p.correlation_id === correlationId,
+        );
         if (!pending) return;
         setApprovals((a) =>
           a.some((x) => x.pending.correlation_id === correlationId)
@@ -174,7 +206,8 @@ export default function ChatView() {
         if (cancelled) return;
         await loadSession(sid);
       } catch {
-        if (!cancelled) setError("Could not load your workspace. Is the backend running?");
+        if (!cancelled)
+          setError("Could not load your workspace. Is the backend running?");
       }
     };
     void boot();
@@ -251,15 +284,15 @@ export default function ChatView() {
       <Sidebar />
 
       <main className="main">
-        <header className="topbar">
-          <div>
+        <header className="topbar chat-topbar">
+          <div className="page-heading">
+            <span className="page-eyebrow">Workspace</span>
             <h2>Chat</h2>
             <p className="page-sub small">
-              Personal workspace · <span className="chip">Web chat</span> ·{" "}
-              {meta ? (meta.real_model ? meta.model : "Mock model") : "…"}
+              Ask, review, and act from one quiet workspace
             </p>
           </div>
-          <div className="cand-actions">
+          <div className="topbar-actions">
             {sessions.length > 0 && (
               <select
                 className="session-select"
@@ -274,22 +307,44 @@ export default function ChatView() {
                 ))}
               </select>
             )}
-            <button className="btn" onClick={() => void newChat()}>
-              + New chat
+            <button
+              className="btn"
+              onClick={() => void newChat()}
+              aria-label="Start a new chat"
+            >
+              <span aria-hidden="true">＋</span> New chat
             </button>
-            <span className={connected ? "pill pill-live" : "pill pill-idle"}>
-              {connected ? "Live" : "Connecting…"}
+            <span
+              className={
+                connected ? "status-indicator online" : "status-indicator"
+              }
+            >
+              <span className="status-dot" />
+              {connected ? "Live" : "Connecting"}
             </span>
           </div>
         </header>
 
         <div className="thread">
+          <div className="thread-meta">
+            <span className="chip">Web chat</span>
+            <span>
+              {meta
+                ? meta.real_model
+                  ? meta.model
+                  : "Mock model"
+                : "Loading model…"}
+            </span>
+          </div>
+
           {running && (
             <section className="run-banner" role="status" aria-live="polite">
               <span className="spin" aria-hidden="true" />
               <div>
-                <strong>Sherpa is working…</strong>
-                <div className="sub small muted">You can leave; the run continues on the server.</div>
+                <strong>Sherpa is working</strong>
+                <div className="sub small muted">
+                  This run is saved and continues if you leave.
+                </div>
               </div>
             </section>
           )}
@@ -297,7 +352,28 @@ export default function ChatView() {
           {error && <div className="auth-error">{error}</div>}
 
           {bubbles.length === 0 && !error && (
-            <div className="empty small muted">Say hello to start a conversation.</div>
+            <div className="chat-empty">
+              <span className="chat-empty-mark" aria-hidden="true">
+                S
+              </span>
+              <h3>What can I help you move forward?</h3>
+              <p>
+                Sherpa can organize tasks, remember context, work with your
+                connected channels, and ask before external actions.
+              </p>
+              <div className="prompt-grid">
+                {starterPrompts.map((prompt) => (
+                  <button
+                    type="button"
+                    key={prompt}
+                    onClick={() => setDraft(prompt)}
+                  >
+                    <span>{prompt}</span>
+                    <span aria-hidden="true">↗</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           {bubbles.map((m) =>
@@ -313,7 +389,11 @@ export default function ChatView() {
                 <div className="who" aria-hidden="true">
                   S
                 </div>
-                <div className="bubble-agent">{m.text}</div>
+                <div className="bubble-agent markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {m.text}
+                  </ReactMarkdown>
+                </div>
               </article>
             ),
           )}
@@ -340,10 +420,14 @@ export default function ChatView() {
                   {item.resolved ? (
                     <div
                       className={`pill mt-8 ${
-                        item.resolved === "approved" ? "pill-success" : "pill-idle"
+                        item.resolved === "approved"
+                          ? "pill-success"
+                          : "pill-idle"
                       }`}
                     >
-                      {item.resolved === "approved" ? "✓ Approved — running…" : "✕ Rejected"}
+                      {item.resolved === "approved"
+                        ? "✓ Approved — running…"
+                        : "✕ Rejected"}
                     </div>
                   ) : (
                     <div className="cand-actions mt-8">
@@ -353,7 +437,10 @@ export default function ChatView() {
                       >
                         Approve
                       </button>
-                      <button className="btn" onClick={() => void resolveApproval(item, "reject")}>
+                      <button
+                        className="btn"
+                        onClick={() => void resolveApproval(item, "reject")}
+                      >
                         Reject
                       </button>
                     </div>
@@ -364,40 +451,64 @@ export default function ChatView() {
           )}
 
           {activities.length > 0 && (
-            <div className="run-log" aria-label="Run activity">
-              <div className="rl-head">Run activity</div>
-              {activities.map((a) => (
-                <div className="tool-card" key={a.key}>
-                  <div className="row">
-                    <span className={`pill pill-${a.state}`}>
-                      {a.state === "running" ? "Running" : a.state === "error" ? "Error" : "✓"}
-                    </span>
-                    <strong>{a.label}</strong>
+            <details className="run-log" aria-label="Run activity">
+              <summary>
+                <span>
+                  Run activity{" "}
+                  <span className="count">{activities.length}</span>
+                </span>
+                <span className="small muted">Tools and receipts</span>
+              </summary>
+              <div className="run-log-body">
+                {activities.map((a) => (
+                  <div className="tool-card" key={a.key}>
+                    <div className="row">
+                      <span className={`pill pill-${a.state}`}>
+                        {a.state === "running"
+                          ? "Running"
+                          : a.state === "error"
+                            ? "Error"
+                            : "Done"}
+                      </span>
+                      <strong>{a.label}</strong>
+                    </div>
+                    {a.detail && <pre className="code mt-8">{a.detail}</pre>}
                   </div>
-                  {a.detail && <pre className="code mt-8">{a.detail}</pre>}
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </details>
           )}
           <div ref={endRef} />
         </div>
 
         <form className="composer" onSubmit={send}>
-          <textarea
-            value={draft}
-            placeholder="Message Sherpa…"
-            rows={2}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send(e as unknown as FormEvent);
-              }
-            }}
-          />
-          <button className="btn btn-primary" type="submit" disabled={!draft.trim()}>
-            Send
-          </button>
+          <div className="composer-shell">
+            <textarea
+              value={draft}
+              placeholder="Ask Sherpa anything…"
+              rows={2}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send(e as unknown as FormEvent);
+                }
+              }}
+            />
+            <div className="composer-footer">
+              <span className="composer-hint">
+                Enter to send · Shift + Enter for a new line
+              </span>
+              <button
+                className="send-button"
+                type="submit"
+                disabled={!draft.trim()}
+              >
+                <span>Send</span>
+                <span aria-hidden="true">↑</span>
+              </button>
+            </div>
+          </div>
         </form>
       </main>
     </div>

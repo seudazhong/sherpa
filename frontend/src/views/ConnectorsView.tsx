@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import { Link } from "react-router-dom";
 
 import { api, type ChannelsStatus } from "../api";
 import { useAuth } from "../auth";
@@ -19,7 +20,9 @@ export default function ConnectorsView() {
   const [ownerOpenid, setOwnerOpenid] = useState("");
 
   // QR bind
-  const [qr, setQr] = useState<{ task_id: string; qr_url: string } | null>(null);
+  const [qr, setQr] = useState<{ task_id: string; qr_url: string } | null>(
+    null,
+  );
   const [qrState, setQrState] = useState<string>("");
   const pollRef = useRef<number | null>(null);
 
@@ -109,49 +112,92 @@ export default function ConnectorsView() {
   };
 
   const qq = status?.qq;
+  const email = status?.email;
 
   return (
     <div className="app">
       <Sidebar />
       <main className="main">
         <header className="topbar">
-          <div>
+          <div className="page-heading">
+            <span className="page-eyebrow">Connections</span>
             <h2>Connectors</h2>
             <p className="page-sub small">
-              Connect Sherpa to external services. Credentials are encrypted at rest and never
-              shown again.
+              Bring Sherpa closer to where work arrives, without exposing your
+              credentials
             </p>
           </div>
         </header>
 
-        <div className="inbox">
+        <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
 
-          <section>
-            <div className="section-head">
-              QQ official bot
-              {qq?.configured ? (
-                <span className="pill pill-success">Connected</span>
-              ) : (
-                <span className="pill pill-idle">Not connected</span>
-              )}
-            </div>
-
-            <article className="cand-card">
-              <div className="cand-main">
-                <div className="cand-meta small muted">
-                  <div>
-                    AppID: <code>{qq?.app_id || "(none)"}</code> · secret{" "}
-                    {qq?.secret_set ? "set" : "not set"} · owner{" "}
-                    {qq?.owner_openid_set ? "bound" : "not bound"}
-                  </div>
-                  <div>
-                    Connects over the official WebSocket gateway — no public URL needed. Create a
-                    bot at <code>q.qq.com</code>, then bind it below.
-                  </div>
+          <section className="connector-grid">
+            <article className="connector-card featured">
+              <header className="connector-card-head">
+                <span className="connector-icon qq" aria-hidden="true">
+                  QQ
+                </span>
+                <div>
+                  <span className="section-kicker">Messaging</span>
+                  <h3>QQ official bot</h3>
+                  <p>
+                    Talk to Sherpa from QQ through Tencent's official WebSocket
+                    gateway.
+                  </p>
                 </div>
+                <span
+                  className={
+                    qq?.configured ? "pill pill-success" : "pill pill-idle"
+                  }
+                >
+                  {qq?.configured ? "Connected" : "Not connected"}
+                </span>
+              </header>
 
-                <div className="seg" style={{ margin: "0.5rem 0" }}>
+              <div className="connector-summary">
+                <div>
+                  <span>Connection</span>
+                  <strong>
+                    {qq?.configured ? "Ready for messages" : "Setup required"}
+                  </strong>
+                </div>
+                <div>
+                  <span>Owner access</span>
+                  <strong>
+                    {qq?.owner_openid_set ? "Restricted" : "Not restricted"}
+                  </strong>
+                </div>
+                <button
+                  className="btn"
+                  disabled={busy}
+                  onClick={() => void runTest()}
+                >
+                  Test connection
+                </button>
+              </div>
+              {test && <div className="notice">{test}</div>}
+
+              <details className="disclosure">
+                <summary>Connection details</summary>
+                <div className="technical-grid">
+                  <span>
+                    AppID <code>{qq?.app_id || "Not set"}</code>
+                  </span>
+                  <span>
+                    Secret {qq?.secret_set ? "stored securely" : "not set"}
+                  </span>
+                  <span>
+                    Owner {qq?.owner_openid_set ? "bound" : "not bound"}
+                  </span>
+                </div>
+              </details>
+
+              <div className="connector-setup">
+                <div
+                  className="seg segmented-control"
+                  aria-label="QQ setup method"
+                >
                   <button
                     className={"btn" + (mode === "qr" ? " btn-primary" : "")}
                     onClick={() => setMode("qr")}
@@ -159,7 +205,9 @@ export default function ConnectorsView() {
                     Scan QR
                   </button>
                   <button
-                    className={"btn" + (mode === "manual" ? " btn-primary" : "")}
+                    className={
+                      "btn" + (mode === "manual" ? " btn-primary" : "")
+                    }
                     onClick={() => setMode("manual")}
                   >
                     Manual
@@ -167,57 +215,85 @@ export default function ConnectorsView() {
                 </div>
 
                 {mode === "qr" && (
-                  <div>
+                  <div className="setup-panel">
                     {!qr && (
-                      <button
-                        className="btn btn-primary"
-                        disabled={busy}
-                        onClick={() => void startQr()}
-                      >
-                        Start QR bind
-                      </button>
+                      <>
+                        <div>
+                          <h4>Bind in one scan</h4>
+                          <p>
+                            Create a bot at{" "}
+                            <a
+                              href="https://q.qq.com"
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              q.qq.com
+                            </a>
+                            , then scan a secure one-time QR code.
+                          </p>
+                        </div>
+                        <button
+                          className="btn btn-primary"
+                          disabled={busy}
+                          onClick={() => void startQr()}
+                        >
+                          Generate QR code
+                        </button>
+                      </>
                     )}
                     {qr && (
-                      <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-                        <div style={{ background: "#fff", padding: 8, borderRadius: 8 }}>
+                      <div className="qr-panel">
+                        <div className="qr-code">
                           <QRCodeSVG value={qr.qr_url} size={160} />
                         </div>
-                        <div className="small muted">
-                          Scan with mobile QQ, then pick the bot to bind. The AppID/Secret fill in
-                          automatically.
-                          <br />
+                        <div>
+                          <h4>Scan with mobile QQ</h4>
+                          <p>
+                            The AppID and secret are stored automatically after
+                            you choose the bot.
+                          </p>
                           <a href={qr.qr_url} target="_blank" rel="noreferrer">
-                            Open link
+                            Open binding link ↗
                           </a>
                         </div>
                       </div>
                     )}
-                    {qrState && <p className="small muted">{qrState}</p>}
+                    {qrState && <div className="notice">{qrState}</div>}
                   </div>
                 )}
 
                 {mode === "manual" && (
-                  <div className="stack">
-                    <label className="small muted">
-                      AppID
-                      <input value={appId} onChange={(e) => setAppId(e.target.value)} />
-                    </label>
-                    <label className="small muted">
-                      AppSecret {qq?.secret_set && "(leave blank to keep current)"}
-                      <input
-                        type="password"
-                        value={secret}
-                        onChange={(e) => setSecret(e.target.value)}
-                        placeholder={qq?.secret_set ? "•••••• (unchanged)" : ""}
-                      />
-                    </label>
-                    <label className="small muted">
-                      Owner QQ openid (optional — restricts who can drive the agent)
-                      <input
-                        value={ownerOpenid}
-                        onChange={(e) => setOwnerOpenid(e.target.value)}
-                      />
-                    </label>
+                  <div className="setup-panel manual-panel">
+                    <div className="control-grid">
+                      <label className="control">
+                        <span>AppID</span>
+                        <input
+                          value={appId}
+                          onChange={(e) => setAppId(e.target.value)}
+                        />
+                      </label>
+                      <label className="control">
+                        <span>
+                          AppSecret{" "}
+                          {qq?.secret_set && "· leave blank to keep current"}
+                        </span>
+                        <input
+                          type="password"
+                          value={secret}
+                          onChange={(e) => setSecret(e.target.value)}
+                          placeholder={
+                            qq?.secret_set ? "•••••• (unchanged)" : ""
+                          }
+                        />
+                      </label>
+                      <label className="control">
+                        <span>Owner QQ openid · optional</span>
+                        <input
+                          value={ownerOpenid}
+                          onChange={(e) => setOwnerOpenid(e.target.value)}
+                        />
+                      </label>
+                    </div>
                     <button
                       className="btn btn-primary"
                       disabled={busy || !appId.trim()}
@@ -228,26 +304,54 @@ export default function ConnectorsView() {
                   </div>
                 )}
               </div>
+            </article>
 
-              <div className="cand-actions">
-                <button className="btn" disabled={busy} onClick={() => void runTest()}>
-                  Test connection
-                </button>
-                {test && <span className="small muted">{test}</span>}
+            <article className="connector-card">
+              <header className="connector-card-head">
+                <span className="connector-icon email" aria-hidden="true">
+                  @
+                </span>
+                <div>
+                  <span className="section-kicker">Email</span>
+                  <h3>Agentic email</h3>
+                  <p>
+                    Receive requests and send approved messages through a
+                    dedicated inbox.
+                  </p>
+                </div>
+                <span
+                  className={
+                    email?.configured ? "pill pill-success" : "pill pill-idle"
+                  }
+                >
+                  {email?.configured ? "Connected" : "Environment setup"}
+                </span>
+              </header>
+              <div className="connector-summary single">
+                <div>
+                  <span>Inbox</span>
+                  <strong>{email?.inbox_id || "Not configured"}</strong>
+                </div>
               </div>
+              <p className="connector-note">
+                Email credentials are managed by the host environment. Use
+                Messaging to review channel health and test the loop.
+              </p>
+              <Link className="btn" to="/messaging">
+                Open Messaging
+              </Link>
             </article>
           </section>
 
-          <section>
-            <div className="section-head">Agentic email</div>
-            <article className="cand-card">
-              <div className="cand-main">
-                <div className="cand-meta small muted">
-                  Email inbox is configured via environment for now. Runtime editing is planned —
-                  see the Messaging page for status.
-                </div>
-              </div>
-            </article>
+          <section className="trust-note">
+            <span aria-hidden="true">⌁</span>
+            <div>
+              <strong>Credentials stay sealed</strong>
+              <p>
+                Secrets are encrypted at rest and never shown again after they
+                are saved.
+              </p>
+            </div>
           </section>
         </div>
       </main>

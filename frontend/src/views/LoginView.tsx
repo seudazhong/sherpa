@@ -32,13 +32,32 @@ export default function LoginView() {
 
   return (
     <div className="auth-page">
-      <div className="auth-card">
-        <div className="brand-row">
+      <section className="auth-story">
+        <div className="auth-brand">
           <span className="logo">S</span>
           <span className="brand-name">Sherpa</span>
         </div>
-        <h1 className="auth-title">Welcome back</h1>
-        <p className="auth-sub">Sign in to your personal workspace.</p>
+        <div className="auth-story-copy">
+          <span className="page-eyebrow">Your private agent workspace</span>
+          <h1>Move work forward without adding more noise.</h1>
+          <p>
+            Sherpa keeps conversations, tasks, memory, files, and connected
+            channels in one calm, self-hosted space.
+          </p>
+        </div>
+        <div className="auth-trust">
+          <span>Private by default</span>
+          <span>Approval before external actions</span>
+          <span>Durable activity history</span>
+        </div>
+      </section>
+
+      <section className="auth-card">
+        <div>
+          <span className="section-kicker">Welcome back</span>
+          <h2 className="auth-title">Sign in to Sherpa</h2>
+          <p className="auth-sub">Continue to your personal workspace.</p>
+        </div>
         <form onSubmit={submit} className="auth-form">
           <label className="field">
             <span>Email</span>
@@ -61,11 +80,16 @@ export default function LoginView() {
             />
           </label>
           {error && <div className="auth-error">{error}</div>}
-          <button className="btn btn-primary btn-block" type="submit" disabled={busy}>
+          <button
+            className="btn btn-primary btn-block"
+            type="submit"
+            disabled={busy}
+          >
             {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
-      </div>
+        <p className="auth-footnote">Your session stays on this device.</p>
+      </section>
     </div>
   );
 }

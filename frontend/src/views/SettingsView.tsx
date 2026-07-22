@@ -56,7 +56,9 @@ export default function SettingsView() {
       setS(updated);
       setNote("Saved.");
     } catch {
-      setError("Save failed (someone else may have changed settings — reload).");
+      setError(
+        "Save failed (someone else may have changed settings — reload).",
+      );
     } finally {
       setBusy(false);
     }
@@ -64,7 +66,7 @@ export default function SettingsView() {
 
   const toggleRow = (key: keyof Settings, label: string, desc: string) => (
     <div className="setting-row">
-      <div>
+      <div className="setting-copy">
         <strong>{label}</strong>
         <div className="small muted">{desc}</div>
       </div>
@@ -84,11 +86,14 @@ export default function SettingsView() {
       <Sidebar />
       <main className="main">
         <header className="topbar">
-          <div>
+          <div className="page-heading">
+            <span className="page-eyebrow">Preferences</span>
             <h2>Settings</h2>
-            <p className="page-sub small">Notification preferences</p>
+            <p className="page-sub small">
+              Choose how and when Sherpa should get your attention
+            </p>
           </div>
-          <div className="cand-actions">
+          <div className="topbar-actions">
             <button
               className="btn btn-primary"
               disabled={busy || !s || (!!s && !tzValid(s.timezone))}
@@ -99,95 +104,157 @@ export default function SettingsView() {
           </div>
         </header>
 
-        <div className="inbox">
+        <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
-          {note && <div className="empty small muted">{note}</div>}
-          {!s && !error && <div className="empty small muted">Loading…</div>}
+          {note && <div className="notice notice-success">{note}</div>}
+          {!s && !error && (
+            <div className="empty-state compact">Loading preferences…</div>
+          )}
 
           {s && (
-            <section>
-              <div className="section-head">Notifications</div>
-              <div className="settings-card">
-                {toggleRow(
-                  "notifications_enabled",
-                  "Enable notifications",
-                  "Master switch for all reminders and digests.",
-                )}
-                {toggleRow(
-                  "web_enabled",
-                  "Web notifications",
-                  "Show notifications in your web inbox.",
-                )}
-                {toggleRow(
-                  "email_digest_enabled",
-                  "Email digest",
-                  "Deliver the daily digest by email.",
-                )}
-                {toggleRow(
-                  "quiet_hours_enabled",
-                  "Quiet hours",
-                  `Suppress delivery ${s.quiet_hours_start.slice(0, 5)}–${s.quiet_hours_end.slice(0, 5)}.`,
-                )}
-                {s.quiet_hours_enabled && (
-                  <div className="setting-row">
+            <>
+              <section className="settings-grid">
+                <article className="settings-panel">
+                  <div className="settings-panel-head">
+                    <span className="form-card-icon" aria-hidden="true">
+                      ◉
+                    </span>
                     <div>
-                      <strong>Quiet hours window</strong>
-                      <div className="small muted">Start and end must differ.</div>
-                    </div>
-                    <div className="cand-meta small">
-                      <input
-                        type="time"
-                        value={s.quiet_hours_start.slice(0, 5)}
-                        onChange={(e) => set("quiet_hours_start", e.target.value as never)}
-                        aria-label="Quiet hours start"
-                      />
-                      &nbsp;–&nbsp;
-                      <input
-                        type="time"
-                        value={s.quiet_hours_end.slice(0, 5)}
-                        onChange={(e) => set("quiet_hours_end", e.target.value as never)}
-                        aria-label="Quiet hours end"
-                      />
+                      <h3>Delivery</h3>
+                      <p>Decide which notification surfaces are allowed.</p>
                     </div>
                   </div>
-                )}
-                <div className="setting-row">
-                  <div>
-                    <strong>Daily cap</strong>
-                    <div className="small muted">Max notifications per day (0–100).</div>
-                  </div>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={s.daily_cap}
-                    onChange={(e) => set("daily_cap", Number(e.target.value) as never)}
-                    aria-label="Daily cap"
-                    style={{ width: 72 }}
-                  />
-                </div>
-                <div className="setting-row">
-                  <div>
-                    <strong>Timezone</strong>
-                    <div className="small muted">Used for digest and reminder times.</div>
-                    {!tzValid(s.timezone) && (
-                      <div className="small" style={{ color: "var(--accent)" }}>
-                        Unknown timezone — e.g. use “Asia/Shanghai” or “UTC”.
-                      </div>
+                  <div className="settings-card">
+                    {toggleRow(
+                      "notifications_enabled",
+                      "Enable notifications",
+                      "Master switch for reminders and digests.",
+                    )}
+                    {toggleRow(
+                      "web_enabled",
+                      "Web notifications",
+                      "Keep delivery receipts in your Sherpa inbox.",
+                    )}
+                    {toggleRow(
+                      "email_digest_enabled",
+                      "Email digest",
+                      "Send the daily digest to your connected inbox.",
                     )}
                   </div>
-                  <input
-                    value={s.timezone}
-                    onChange={(e) => set("timezone", e.target.value as never)}
-                    placeholder="e.g. Asia/Shanghai"
-                    aria-label="Timezone"
-                  />
-                </div>
+                </article>
+
+                <article className="settings-panel">
+                  <div className="settings-panel-head">
+                    <span className="form-card-icon" aria-hidden="true">
+                      ◷
+                    </span>
+                    <div>
+                      <h3>Timing</h3>
+                      <p>Keep notifications respectful of your day.</p>
+                    </div>
+                  </div>
+                  <div className="settings-card">
+                    {toggleRow(
+                      "quiet_hours_enabled",
+                      "Quiet hours",
+                      `Pause delivery ${s.quiet_hours_start.slice(0, 5)}–${s.quiet_hours_end.slice(0, 5)}.`,
+                    )}
+                    {s.quiet_hours_enabled && (
+                      <div className="setting-row setting-row-stacked">
+                        <div className="setting-copy">
+                          <strong>Quiet hours window</strong>
+                          <div className="small muted">
+                            Start and end must differ.
+                          </div>
+                        </div>
+                        <div className="control-grid two compact-controls">
+                          <label className="control">
+                            <span>Start</span>
+                            <input
+                              type="time"
+                              value={s.quiet_hours_start.slice(0, 5)}
+                              onChange={(e) =>
+                                set(
+                                  "quiet_hours_start",
+                                  e.target.value as never,
+                                )
+                              }
+                              aria-label="Quiet hours start"
+                            />
+                          </label>
+                          <label className="control">
+                            <span>End</span>
+                            <input
+                              type="time"
+                              value={s.quiet_hours_end.slice(0, 5)}
+                              onChange={(e) =>
+                                set("quiet_hours_end", e.target.value as never)
+                              }
+                              aria-label="Quiet hours end"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                    <div className="setting-row">
+                      <div className="setting-copy">
+                        <strong>Daily cap</strong>
+                        <div className="small muted">
+                          Maximum notifications per day.
+                        </div>
+                      </div>
+                      <input
+                        className="number-input"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={s.daily_cap}
+                        onChange={(e) =>
+                          set("daily_cap", Number(e.target.value) as never)
+                        }
+                        aria-label="Daily cap"
+                      />
+                    </div>
+                    <div className="setting-row setting-row-stacked">
+                      <div className="setting-copy">
+                        <strong>Timezone</strong>
+                        <div className="small muted">
+                          Used for digests, reminders, and quiet hours.
+                        </div>
+                        {!tzValid(s.timezone) && (
+                          <div className="field-error">
+                            Unknown timezone. Try “Asia/Shanghai” or “UTC”.
+                          </div>
+                        )}
+                      </div>
+                      <label className="control">
+                        <span className="sr-only">Timezone</span>
+                        <input
+                          value={s.timezone}
+                          onChange={(e) =>
+                            set("timezone", e.target.value as never)
+                          }
+                          placeholder="e.g. Asia/Shanghai"
+                          aria-label="Timezone"
+                          list="settings-timezones"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </article>
+              </section>
+              <datalist id="settings-timezones">
+                <option value="UTC" />
+                <option value="Asia/Shanghai" />
+                <option value="Asia/Tokyo" />
+                <option value="Europe/London" />
+                <option value="America/Los_Angeles" />
+                <option value="America/New_York" />
+              </datalist>
+              <div className="version-note">
+                Preferences version {s.version}
               </div>
-              <div className="small muted" style={{ padding: "10px 2px 0" }}>
-                version {s.version}
-              </div>
-            </section>
+            </>
           )}
         </div>
       </main>

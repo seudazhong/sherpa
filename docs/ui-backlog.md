@@ -4,7 +4,7 @@
 >
 > **How to use:** pick the lowest-priority-number open item; fix it end-to-end (incl. the human-lane UI check + a row update here). This is the living board that catches "backend done, frontend forgotten" and UX rough edges. Each row: gap → suggested fix → refs.
 >
-> **Status (2026-07-21): all P1–P3 items (UX-1…UX-11) ✅ cleared** and browser-verified. Rows kept as history; append new findings below.
+> **Status (2026-07-22): UX-1…UX-16 ✅ cleared** and browser-verified. Rows kept as history; append new findings below.
 
 ## P1 — fix soon (small, high-value)
 
@@ -35,3 +35,13 @@
 ---
 
 **Note:** UX-1 is itself a fresh instance of "backend implemented, UI control missing" — caught by the human-lane review, which is why that pass is now part of the Definition of Done.
+
+## Full-product Playwright review — 2026-07-22
+
+| # | Finding | Resolution | Status |
+|---|---|---|---|
+| UX-12 | **Mobile layout was structurally broken**: the fixed 248 px sidebar left only ~127 px for every page. | Rebuilt the shell with a 232 px desktop sidebar and an accessible mobile top bar + modal drawer; verified at 390×844 with no horizontal overflow. | ✅ |
+| UX-13 | **Chat exposed raw Markdown** (`###`, list markers, tables), making real model replies look unfinished. | Added safe React Markdown + GFM rendering and message typography. | ✅ |
+| UX-14 | **Every page had the same flat title + oversized empty-card rhythm**, so hierarchy and next actions were weak. | Introduced page eyebrows, compact section cards, metrics, task-specific creation cards, and actionable empty states. | ✅ |
+| UX-15 | **Messaging and Connectors led with AppIDs, webhook paths, environment variables, and simulation controls.** | Moved technical detail and development-only test consoles behind progressive disclosures; connection health now leads. | ✅ |
+| UX-16 | **Destructive data deletion was promoted beside routine export in the page header.** | Moved both into a dedicated trust/data card and gave deletion a distinct danger treatment. | ✅ |

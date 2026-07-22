@@ -12,7 +12,9 @@ function statusPill(status: string): string {
 
 function scheduleLabel(s: Schedule): string {
   const kindLabel = s.kind === "daily_digest" ? "Daily digest" : "Reminder";
-  return s.name && s.name !== kindLabel ? `${kindLabel} · ${s.name}` : kindLabel;
+  return s.name && s.name !== kindLabel
+    ? `${kindLabel} · ${s.name}`
+    : kindLabel;
 }
 
 export default function SchedulesView() {
@@ -29,7 +31,10 @@ export default function SchedulesView() {
 
   const load = async () => {
     try {
-      const [page, tp] = await Promise.all([api.listSchedules(), api.listTodos()]);
+      const [page, tp] = await Promise.all([
+        api.listSchedules(),
+        api.listTodos(),
+      ]);
       setItems(page.items);
       setTodos(tp.items.filter((t) => t.status !== "completed"));
     } catch {
@@ -76,7 +81,14 @@ export default function SchedulesView() {
     try {
       const iso = new Date(remTime).toISOString();
       const todo = todos.find((t) => t.id === todoId);
-      await api.createReminder(csrf, todoId, iso, remKind, tz, todo ? todo.title : "Reminder");
+      await api.createReminder(
+        csrf,
+        todoId,
+        iso,
+        remKind,
+        tz,
+        todo ? todo.title : "Reminder",
+      );
       setTodoId("");
       setRemTime("");
       await load();
@@ -92,69 +104,85 @@ export default function SchedulesView() {
       <Sidebar />
       <main className="main">
         <header className="topbar">
-          <div>
+          <div className="page-heading">
+            <span className="page-eyebrow">Follow-through</span>
             <h2>Schedules</h2>
-            <p className="page-sub small">Your reminders and daily digests</p>
+            <p className="page-sub small">
+              Set a rhythm for reminders without losing track of delivery
+            </p>
           </div>
         </header>
 
-        <div className="inbox">
+        <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
 
-          <section>
-            <div className="section-head">New daily digest</div>
-            <article className="cand-card">
-              <div className="cand-main">
-                <div className="cand-meta small">
-                  <label>
-                    Time&nbsp;
-                    <input
-                      type="time"
-                      value={time}
-                      onChange={(e) => setTime(e.target.value)}
-                      aria-label="Digest time"
-                    />
-                  </label>
-                  <label>
-                    &nbsp;Timezone&nbsp;
-                    <input
-                      value={tz}
-                      onChange={(e) => setTz(e.target.value)}
-                      placeholder="e.g. Asia/Shanghai"
-                      aria-label="Timezone"
-                    />
-                  </label>
+          <section className="form-card-grid">
+            <article className="form-card">
+              <div className="form-card-head">
+                <span className="form-card-icon" aria-hidden="true">
+                  ☀
+                </span>
+                <div>
+                  <h3>Daily digest</h3>
+                  <p>A calm summary of open work at the time you choose.</p>
                 </div>
               </div>
-              <div className="cand-actions">
-                <button className="btn btn-primary" disabled={busy === "new"} onClick={() => void addDigest()}>
-                  Add digest
-                </button>
+              <div className="control-grid two">
+                <label className="control">
+                  <span>Delivery time</span>
+                  <input
+                    type="time"
+                    value={time}
+                    onChange={(e) => setTime(e.target.value)}
+                    aria-label="Digest time"
+                  />
+                </label>
+                <label className="control">
+                  <span>Timezone</span>
+                  <input
+                    value={tz}
+                    onChange={(e) => setTz(e.target.value)}
+                    placeholder="e.g. Asia/Shanghai"
+                    aria-label="Timezone"
+                    list="timezone-options"
+                  />
+                </label>
               </div>
+              <button
+                className="btn btn-primary"
+                disabled={busy === "new"}
+                onClick={() => void addDigest()}
+              >
+                Create digest
+              </button>
             </article>
-            <div className="empty small muted">
-              Or set a reminder for a specific to-do below.
-            </div>
-          </section>
 
-          <section>
-            <div className="section-head">New reminder</div>
-            {todos.length === 0 ? (
-              <div className="empty small muted">
-                No open to-dos to remind about. Accept a candidate or add a to-do first.
+            <article className="form-card">
+              <div className="form-card-head">
+                <span className="form-card-icon" aria-hidden="true">
+                  ◷
+                </span>
+                <div>
+                  <h3>Todo reminder</h3>
+                  <p>Attach a one-time reminder to an open todo.</p>
+                </div>
               </div>
-            ) : (
-              <article className="cand-card">
-                <div className="cand-main">
-                  <div className="cand-meta small">
-                    <label>
-                      To-do&nbsp;
+              {todos.length === 0 ? (
+                <div className="empty-state compact embedded">
+                  <strong>No open todos</strong>
+                  <span>Create or accept a todo first, then return here.</span>
+                </div>
+              ) : (
+                <>
+                  <div className="control-grid">
+                    <label className="control">
+                      <span>Todo</span>
                       <select
                         value={todoId}
                         onChange={(e) => setTodoId(e.target.value)}
                         aria-label="Reminder to-do"
                       >
-                        <option value="">Pick a to-do…</option>
+                        <option value="">Choose a todo…</option>
                         {todos.map((t) => (
                           <option key={t.id} value={t.id}>
                             {t.title}
@@ -162,55 +190,83 @@ export default function SchedulesView() {
                         ))}
                       </select>
                     </label>
-                    <label>
-                      &nbsp;When&nbsp;
-                      <input
-                        type="datetime-local"
-                        value={remTime}
-                        onChange={(e) => setRemTime(e.target.value)}
-                        aria-label="Reminder time"
-                      />
-                    </label>
-                    <label>
-                      &nbsp;Kind&nbsp;
-                      <select
-                        value={remKind}
-                        onChange={(e) => setRemKind(e.target.value)}
-                        aria-label="Reminder kind"
-                      >
-                        <option value="due_soon">Due soon</option>
-                        <option value="overdue">Overdue</option>
-                      </select>
-                    </label>
+                    <div className="control-grid two">
+                      <label className="control">
+                        <span>When</span>
+                        <input
+                          type="datetime-local"
+                          value={remTime}
+                          onChange={(e) => setRemTime(e.target.value)}
+                          aria-label="Reminder time"
+                        />
+                      </label>
+                      <label className="control">
+                        <span>Type</span>
+                        <select
+                          value={remKind}
+                          onChange={(e) => setRemKind(e.target.value)}
+                          aria-label="Reminder kind"
+                        >
+                          <option value="due_soon">Due soon</option>
+                          <option value="overdue">Overdue</option>
+                        </select>
+                      </label>
+                    </div>
                   </div>
-                </div>
-                <div className="cand-actions">
                   <button
                     className="btn btn-primary"
                     disabled={busy === "reminder" || !todoId || !remTime}
                     onClick={() => void addReminder()}
                   >
-                    Add reminder
+                    Create reminder
                   </button>
-                </div>
-              </article>
-            )}
+                </>
+              )}
+            </article>
           </section>
 
-          <section>
+          <datalist id="timezone-options">
+            <option value="UTC" />
+            <option value="Asia/Shanghai" />
+            <option value="Asia/Tokyo" />
+            <option value="Europe/London" />
+            <option value="America/Los_Angeles" />
+            <option value="America/New_York" />
+          </datalist>
+
+          <section className="content-section">
             <div className="section-head">
-              Schedules <span className="count">{items.length}</span>
+              <span>Upcoming</span>
+              <span className="count">{items.length}</span>
             </div>
             {items.length === 0 && (
-              <div className="empty small muted">No schedules yet. Add a digest above.</div>
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true">
+                  ◷
+                </span>
+                <strong>No schedules yet</strong>
+                <span>
+                  Create a digest or reminder above. Sherpa will keep an honest
+                  delivery record.
+                </span>
+              </div>
             )}
             {items.map((s) => (
-              <article className="todo-row" key={s.id}>
+              <article className="todo-row schedule-row" key={s.id}>
                 <span className={statusPill(s.status)}>{s.status}</span>
-                <span className="todo-title">{scheduleLabel(s)}</span>
-                <span className="small muted">next {new Date(s.next_fire_at).toLocaleString()}</span>
+                <span className="todo-title">
+                  {scheduleLabel(s)}
+                  <span className="item-subtitle">
+                    {s.timezone} · next{" "}
+                    {new Date(s.next_fire_at).toLocaleString()}
+                  </span>
+                </span>
                 {s.status === "active" && (
-                  <button className="btn" disabled={busy === s.id} onClick={() => void cancel(s)}>
+                  <button
+                    className="btn btn-quiet"
+                    disabled={busy === s.id}
+                    onClick={() => void cancel(s)}
+                  >
                     Cancel
                   </button>
                 )}

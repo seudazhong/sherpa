@@ -37,7 +37,11 @@ export default function ActivityView() {
 
   const doDelete = async () => {
     if (!csrf) return;
-    if (!window.confirm("Delete all imported data (emails, candidates, todos)? This cannot be undone.")) {
+    if (
+      !window.confirm(
+        "Delete all imported data (emails, candidates, todos)? This cannot be undone.",
+      )
+    ) {
       return;
     }
     setBusy(true);
@@ -46,7 +50,9 @@ export default function ActivityView() {
     try {
       const res = await api.deleteImported(csrf);
       const total = Object.values(res.deleted).reduce((a, b) => a + b, 0);
-      setNote(`Deleted ${total} record(s): ${JSON.stringify(res.deleted)}`);
+      setNote(
+        `Imported data deleted. ${total} record${total === 1 ? "" : "s"} removed.`,
+      );
       await load();
     } catch {
       setError("Delete failed.");
@@ -60,39 +66,73 @@ export default function ActivityView() {
       <Sidebar />
       <main className="main">
         <header className="topbar">
-          <div>
+          <div className="page-heading">
+            <span className="page-eyebrow">Trust center</span>
             <h2>Activity &amp; data</h2>
-            <p className="page-sub small">What Sherpa did on your behalf, and controls for your data</p>
-          </div>
-          <div className="cand-actions">
-            <button className="btn" onClick={doExport}>
-              Export my data
-            </button>
-            <button className="btn btn-danger" disabled={busy} onClick={() => void doDelete()}>
-              Delete imported data
-            </button>
+            <p className="page-sub small">
+              A clear record of what Sherpa read, inferred, and changed
+            </p>
           </div>
         </header>
 
-        <div className="inbox">
+        <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
-          {note && <div className="empty small muted">{note}</div>}
+          {note && <div className="notice notice-success">{note}</div>}
 
-          <section>
+          <section className="data-control-card">
+            <div>
+              <span className="section-kicker">Your data</span>
+              <h3>Portable by default</h3>
+              <p>
+                Download a copy anytime. Deleting imported data removes
+                connected content and its derived candidates and todos.
+              </p>
+            </div>
+            <div className="data-control-actions">
+              <button className="btn" onClick={doExport}>
+                Export data
+              </button>
+              <button
+                className="btn btn-danger"
+                disabled={busy}
+                onClick={() => void doDelete()}
+              >
+                Delete imported data
+              </button>
+            </div>
+          </section>
+
+          <section className="content-section">
             <div className="section-head">
-              Activity <span className="count">{receipts.length}</span>
+              <span>Recent activity</span>
+              <span className="count">{receipts.length}</span>
             </div>
             {receipts.length === 0 && (
-              <div className="empty small muted">
-                Reads, inferences, and actions Sherpa performs will appear here.
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true">
+                  ✓
+                </span>
+                <strong>No activity yet</strong>
+                <span>
+                  Reads, inferences, and actions will appear here with a
+                  timestamp.
+                </span>
               </div>
             )}
             {receipts.map((r) => (
-              <article className="todo-row" key={r.id}>
-                <span className={typePill(r.receipt_type)}>{r.receipt_type}</span>
-                <span className="todo-title">{r.action}</span>
-                <span className="small muted">{r.outcome}</span>
-                <span className="small muted">{new Date(r.occurred_at).toLocaleString()}</span>
+              <article className="activity-row" key={r.id}>
+                <span className="activity-marker" aria-hidden="true" />
+                <div className="activity-copy">
+                  <div className="row wrap-row">
+                    <span className={typePill(r.receipt_type)}>
+                      {r.receipt_type}
+                    </span>
+                    <strong>{r.action}</strong>
+                  </div>
+                  <span className="small muted">
+                    {r.outcome} · {new Date(r.occurred_at).toLocaleString()}
+                  </span>
+                </div>
               </article>
             ))}
           </section>

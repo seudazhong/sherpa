@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
-import { api, type Candidate, type Notification, type PendingApproval, type Todo } from "../api";
+import {
+  api,
+  type Candidate,
+  type Notification,
+  type PendingApproval,
+  type Todo,
+} from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
@@ -16,6 +23,12 @@ function outcomePill(outcome: string | null): string {
   return "pill pill-error";
 }
 
+function confidenceLabel(confidence: number): string {
+  if (confidence >= 0.85) return "High confidence";
+  if (confidence >= 0.65) return "Worth a glance";
+  return "Review details";
+}
+
 export default function InboxView() {
   const { csrf } = useAuth();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -24,6 +37,9 @@ export default function InboxView() {
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const openTodoCount = todos.filter(
+    (todo) => todo.status !== "completed",
+  ).length;
 
   const load = async () => {
     try {
@@ -79,7 +95,10 @@ export default function InboxView() {
     setBusy(t.id);
     setError(null);
     try {
-      await api.patchTodo(csrf, t.id, { if_version: t.version, status: "completed" });
+      await api.patchTodo(csrf, t.id, {
+        if_version: t.version,
+        status: "completed",
+      });
       await load();
     } catch {
       setError("Could not complete the todo.");
@@ -93,37 +112,100 @@ export default function InboxView() {
       <Sidebar />
       <main className="main">
         <header className="topbar">
-          <div>
-            <h2>Candidate Inbox</h2>
-            <p className="page-sub small">Actions Sherpa extracted from your connected accounts</p>
+          <div className="page-heading">
+            <span className="page-eyebrow">Today</span>
+            <h2>Inbox</h2>
+            <p className="page-sub small">
+              Review suggestions, approvals, and follow-through in one place
+            </p>
           </div>
         </header>
 
-        <div className="inbox">
+        <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
 
-          <section>
+          <section className="metric-grid" aria-label="Inbox overview">
+            <article className="metric-card">
+              <span className="metric-label">Needs review</span>
+              <strong>{candidates.length}</strong>
+              <span>candidate{candidates.length === 1 ? "" : "s"}</span>
+            </article>
+            <article className="metric-card">
+              <span className="metric-label">Waiting on you</span>
+              <strong>{approvals.length}</strong>
+              <span>approval{approvals.length === 1 ? "" : "s"}</span>
+            </article>
+            <article className="metric-card">
+              <span className="metric-label">Open work</span>
+              <strong>{openTodoCount}</strong>
+              <span>todo{openTodoCount === 1 ? "" : "s"}</span>
+            </article>
+            <article className="metric-card">
+              <span className="metric-label">Updates</span>
+              <strong>{notifications.length}</strong>
+              <span>notification{notifications.length === 1 ? "" : "s"}</span>
+            </article>
+          </section>
+
+          <section className="content-section">
             <div className="section-head">
-              Pending candidates <span className="count">{candidates.length}</span>
+              <span>Suggested actions</span>
+              <span className="count">{candidates.length}</span>
             </div>
             {candidates.length === 0 && (
-              <div className="empty small muted">
-                No pending candidates. Connect Gmail and sync to generate action candidates.
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true">
+                  ↳
+                </span>
+                <strong>Your review queue is clear</strong>
+                <span>
+                  Connect a source and sync it to let Sherpa surface actionable
+                  items.
+                </span>
+                <Link className="btn" to="/integrations">
+                  Manage connectors
+                </Link>
               </div>
             )}
             {candidates.map((c) => (
               <article className="cand-card" key={c.id}>
                 <div className="cand-main">
                   <div className="cand-title">{c.title}</div>
-                  {c.description && <div className="cand-desc small muted">{c.description}</div>}
+                  {c.description && (
+                    <div className="cand-desc small muted">{c.description}</div>
+                  )}
+                  {c.source.excerpt && (
+                    <blockquote className="source-excerpt">
+                      {c.source.excerpt}
+                    </blockquote>
+                  )}
                   <div className="cand-meta small">
-                    <span className={priorityPill(c.priority)}>{c.priority}</span>
-                    <span className="muted">confidence {Math.round(c.confidence * 100)}%</span>
+                    <span className={priorityPill(c.priority)}>
+                      {c.priority}
+                    </span>
+                    <span className="muted">
+                      {confidenceLabel(c.confidence)}
+                    </span>
                     {c.due_at && (
-                      <span className="muted">due {new Date(c.due_at).toLocaleDateString()}</span>
+                      <span className="muted">
+                        due {new Date(c.due_at).toLocaleDateString()}
+                      </span>
                     )}
-                    {c.source.subject && <span className="muted">· {c.source.subject}</span>}
-                    {c.source.sender && <span className="muted">· {c.source.sender}</span>}
+                    {c.source.subject && (
+                      <span className="muted">{c.source.subject}</span>
+                    )}
+                    {c.source.sender && (
+                      <span className="muted">from {c.source.sender}</span>
+                    )}
+                    {c.source.deep_link && (
+                      <a
+                        href={c.source.deep_link}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open source ↗
+                      </a>
+                    )}
                   </div>
                 </div>
                 <div className="cand-actions">
@@ -134,7 +216,11 @@ export default function InboxView() {
                   >
                     Accept
                   </button>
-                  <button className="btn" disabled={busy === c.id} onClick={() => void dismiss(c)}>
+                  <button
+                    className="btn"
+                    disabled={busy === c.id}
+                    onClick={() => void dismiss(c)}
+                  >
                     Dismiss
                   </button>
                 </div>
@@ -142,22 +228,29 @@ export default function InboxView() {
             ))}
           </section>
 
-          <section>
+          <section className="content-section">
             <div className="section-head">
-              Pending approvals <span className="count">{approvals.length}</span>
+              <span>Approvals</span>
+              <span className="count">{approvals.length}</span>
             </div>
             {approvals.length === 0 && (
-              <div className="empty small muted">
-                External actions (like sending email) wait here for your approval.
+              <div className="empty-state compact">
+                <strong>Nothing is waiting for approval</strong>
+                <span>
+                  External actions stay paused until you make the call.
+                </span>
               </div>
             )}
             {approvals.map((a) => (
               <article className="cand-card" key={a.correlation_id}>
                 <div className="cand-main">
                   <div className="cand-title">
-                    <span className="pill pill-error">approval</span> {a.tool_name}
+                    <span className="pill pill-error">Approval needed</span>{" "}
+                    {a.tool_name}
                   </div>
-                  <div className="cand-desc small muted">{a.human_readable_preview.summary}</div>
+                  <div className="cand-desc small muted">
+                    {a.human_readable_preview.summary}
+                  </div>
                   <div className="cand-meta small">
                     {a.human_readable_preview.details.map((d) => (
                       <span className="muted" key={d.label}>
@@ -169,25 +262,42 @@ export default function InboxView() {
                     </span>
                   </div>
                 </div>
+                <div className="cand-actions">
+                  <Link className="btn btn-primary" to="/">
+                    Review in chat
+                  </Link>
+                </div>
               </article>
             ))}
           </section>
 
-          <section>
+          <section className="content-section">
             <div className="section-head">
-              Todos <span className="count">{todos.length}</span>
+              <span>Todos</span>
+              <span className="count">{todos.length}</span>
             </div>
             {todos.length === 0 && (
-              <div className="empty small muted">Accepted candidates become todos here.</div>
+              <div className="empty-state compact">
+                <strong>No todos yet</strong>
+                <span>Accept a suggestion or ask Sherpa to create one.</span>
+              </div>
             )}
             {todos.map((t) => (
               <article className="todo-row" key={t.id}>
-                <span className={t.status === "completed" ? "pill pill-success" : "pill pill-idle"}>
+                <span
+                  className={
+                    t.status === "completed"
+                      ? "pill pill-success"
+                      : "pill pill-idle"
+                  }
+                >
                   {t.status}
                 </span>
                 <span className="todo-title">{t.title}</span>
                 {t.due_at && (
-                  <span className="small muted">due {new Date(t.due_at).toLocaleDateString()}</span>
+                  <span className="small muted">
+                    due {new Date(t.due_at).toLocaleDateString()}
+                  </span>
                 )}
                 {t.status !== "completed" && (
                   <button
@@ -202,13 +312,17 @@ export default function InboxView() {
             ))}
           </section>
 
-          <section>
+          <section className="content-section">
             <div className="section-head">
-              Notifications <span className="count">{notifications.length}</span>
+              <span>Notifications</span>
+              <span className="count">{notifications.length}</span>
             </div>
             {notifications.length === 0 && (
-              <div className="empty small muted">
-                Reminders and digests appear here once schedules fire.
+              <div className="empty-state compact">
+                <strong>No updates yet</strong>
+                <span>
+                  Reminder and digest delivery receipts will appear here.
+                </span>
               </div>
             )}
             {notifications.map((n) => (

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { api, type ChannelsStatus, type ThreadTranscript } from "../api";
 import { useAuth } from "../auth";
@@ -87,140 +88,219 @@ export default function MessagingView() {
 
   const qq = status?.qq;
   const email = status?.email;
-  const threadChannel = (thread?.channel === "email" ? "email" : "qq") as "qq" | "email";
+  const threadChannel = (thread?.channel === "email" ? "email" : "qq") as
+    "qq" | "email";
 
   return (
     <div className="app">
       <Sidebar />
       <main className="main">
         <header className="topbar">
-          <div>
+          <div className="page-heading">
+            <span className="page-eyebrow">Channels</span>
             <h2>Messaging</h2>
             <p className="page-sub small">
-              Reach Sherpa over QQ / IM and email — inbound messages run the same agent loop, and
-              you can approve actions right from the conversation.
+              Reach the same Sherpa from QQ or email, with approvals kept in
+              context
             </p>
           </div>
         </header>
 
-        <div className="inbox">
+        <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
 
-          <section>
-            <div className="section-head">QQ / IM</div>
-            <article className="cand-card">
-              <div className="cand-main">
-                <div className="cand-title">
-                  {qq?.configured ? (
-                    <span className="pill pill-success">Connected</span>
-                  ) : (
-                    <span className="pill pill-idle">Not connected</span>
-                  )}
+          <section className="channel-grid">
+            <article className="channel-card">
+              <header>
+                <span className="channel-icon qq" aria-hidden="true">
+                  QQ
+                </span>
+                <div>
+                  <span className="section-kicker">Instant messaging</span>
+                  <h3>QQ</h3>
+                  <p>Message Sherpa through your official QQ bot.</p>
                 </div>
-                <div className="cand-meta small muted">
-                  <div>
-                    Official QQ bot (WebSocket) · AppID <code>{qq?.app_id || "(none)"}</code>
+                <span
+                  className={
+                    qq?.configured ? "pill pill-success" : "pill pill-idle"
+                  }
+                >
+                  {qq?.configured ? "Connected" : "Not connected"}
+                </span>
+              </header>
+              <div className="channel-card-body">
+                <div className="channel-fact">
+                  <span>Status</span>
+                  <strong>
+                    {qq?.configured
+                      ? "Ready for inbound messages"
+                      : "Connect a bot to begin"}
+                  </strong>
+                </div>
+                <details className="disclosure">
+                  <summary>Technical details</summary>
+                  <div className="technical-grid">
+                    <span>
+                      AppID <code>{qq?.app_id || "Not set"}</code>
+                    </span>
+                    <span>Transport · official WebSocket gateway</span>
                   </div>
-                  {!qq?.configured && (
-                    <div>
-                      Connect a bot on the <a href="/integrations">Connectors</a> page (scan QR or
-                      paste AppID/Secret). You can try the flow below without a bot.
-                    </div>
-                  )}
-                </div>
+                </details>
+                <Link className="btn" to="/integrations">
+                  Manage connection
+                </Link>
               </div>
             </article>
-            <div className="composer">
-              <textarea
-                rows={2}
-                value={qqText}
-                onChange={(e) => setQqText(e.target.value)}
-                placeholder="Simulate an inbound QQ message, e.g. what can you do?"
-                aria-label="Simulated inbound QQ message"
-              />
-              <button
-                className="btn btn-primary"
-                disabled={busy || !qqText.trim()}
-                onClick={() => void sendInbound("qq", qqText)}
-              >
-                Send as QQ
-              </button>
-            </div>
-          </section>
 
-          <section>
-            <div className="section-head">Agentic email</div>
-            <article className="cand-card">
-              <div className="cand-main">
-                <div className="cand-title">
-                  {email?.configured ? (
-                    <span className="pill pill-success">Connected</span>
-                  ) : email?.enabled ? (
-                    <span className="pill pill-running">Enabled · needs inbox</span>
-                  ) : (
-                    <span className="pill pill-idle">Not configured</span>
-                  )}
+            <article className="channel-card">
+              <header>
+                <span className="channel-icon email" aria-hidden="true">
+                  @
+                </span>
+                <div>
+                  <span className="section-kicker">Agentic inbox</span>
+                  <h3>Email</h3>
+                  <p>
+                    Send and receive agent requests through a dedicated inbox.
+                  </p>
                 </div>
-                <div className="cand-meta small muted">
-                  <div>
-                    Inbox: <code>{email?.inbox_id || "(none — set AGENTMAIL_INBOX_ID)"}</code> ·
-                    backend <code>{email?.kind ?? "…"}</code> (AgentMail)
-                  </div>
-                  <div>
-                    Webhook: <code>{email?.webhook_path ?? "/channels/email/webhook"}</code> ·
-                    signature {email?.webhook_secret_set ? "set" : "not set"} · owner allowlist{" "}
-                    {email?.owner_email ? <code>{email.owner_email}</code> : "any"}
-                  </div>
-                  {!email?.configured && (
-                    <div>
-                      Set <code>EMAIL_KIND=agentmail</code>, <code>AGENTMAIL_API_KEY</code>,{" "}
-                      <code>AGENTMAIL_INBOX_ID</code> (and <code>AGENTMAIL_WEBHOOK_SECRET</code> for
-                      inbound). Try it below without a live mailbox.
-                    </div>
-                  )}
+                <span
+                  className={
+                    email?.configured
+                      ? "pill pill-success"
+                      : email?.enabled
+                        ? "pill pill-running"
+                        : "pill pill-idle"
+                  }
+                >
+                  {email?.configured
+                    ? "Connected"
+                    : email?.enabled
+                      ? "Needs inbox"
+                      : "Not configured"}
+                </span>
+              </header>
+              <div className="channel-card-body">
+                <div className="channel-fact">
+                  <span>Inbox</span>
+                  <strong>{email?.inbox_id || "Not configured"}</strong>
                 </div>
+                <details className="disclosure">
+                  <summary>Technical details</summary>
+                  <div className="technical-grid">
+                    <span>
+                      Provider <code>{email?.kind ?? "…"}</code>
+                    </span>
+                    <span>
+                      Webhook{" "}
+                      <code>
+                        {email?.webhook_path ?? "/channels/email/webhook"}
+                      </code>
+                    </span>
+                    <span>
+                      Signature{" "}
+                      {email?.webhook_secret_set
+                        ? "configured"
+                        : "not configured"}
+                    </span>
+                    <span>
+                      Owner allowlist {email?.owner_email || "any sender"}
+                    </span>
+                  </div>
+                </details>
               </div>
             </article>
-            <div className="composer">
-              <textarea
-                rows={2}
-                value={emailText}
-                onChange={(e) => setEmailText(e.target.value)}
-                placeholder="Simulate an inbound email, e.g. summarize my open tasks"
-                aria-label="Simulated inbound email"
-              />
-              <button
-                className="btn btn-primary"
-                disabled={busy || !emailText.trim()}
-                onClick={() => void sendInbound("email", emailText)}
-              >
-                Send as email
-              </button>
-            </div>
-            <p className="small muted">
-              Injecting a message runs the agent and shows the reply below. Approvals appear as an{" "}
-              <code>approve &lt;id&gt;</code> prompt — reply (or click the button) to authorize.
-            </p>
           </section>
 
-          <section>
+          <section className="content-section">
             <div className="section-head">
-              Threads <span className="count">{status?.threads.length ?? 0}</span>
+              <span>Channel test</span>
+              <span className="section-hint">Development-only simulation</span>
+            </div>
+            <div className="test-grid">
+              <details className="test-panel">
+                <summary>
+                  <span>Simulate QQ inbound</span>
+                  <span aria-hidden="true">＋</span>
+                </summary>
+                <div className="channel-composer">
+                  <textarea
+                    rows={3}
+                    value={qqText}
+                    onChange={(e) => setQqText(e.target.value)}
+                    placeholder="e.g. What can you help me with?"
+                    aria-label="Simulated inbound QQ message"
+                  />
+                  <button
+                    className="btn btn-primary"
+                    disabled={busy || !qqText.trim()}
+                    onClick={() => void sendInbound("qq", qqText)}
+                  >
+                    Send test
+                  </button>
+                </div>
+              </details>
+              <details className="test-panel">
+                <summary>
+                  <span>Simulate email inbound</span>
+                  <span aria-hidden="true">＋</span>
+                </summary>
+                <div className="channel-composer">
+                  <textarea
+                    rows={3}
+                    value={emailText}
+                    onChange={(e) => setEmailText(e.target.value)}
+                    placeholder="e.g. Summarize my open tasks"
+                    aria-label="Simulated inbound email"
+                  />
+                  <button
+                    className="btn btn-primary"
+                    disabled={busy || !emailText.trim()}
+                    onClick={() => void sendInbound("email", emailText)}
+                  >
+                    Send test
+                  </button>
+                </div>
+              </details>
+            </div>
+          </section>
+
+          <section className="content-section">
+            <div className="section-head">
+              <span>Threads</span>
+              <span className="count">{status?.threads.length ?? 0}</span>
             </div>
             {(status?.threads.length ?? 0) === 0 && (
-              <div className="empty small muted">No threads yet. Send a message above.</div>
+              <div className="empty-state compact">
+                <strong>No channel conversations yet</strong>
+                <span>New QQ and email conversations will appear here.</span>
+              </div>
             )}
             {status?.threads.map((t) => (
               <article
-                className={"todo-row" + (active === t.session_id ? " active" : "")}
+                className={
+                  "todo-row thread-row" +
+                  (active === t.session_id ? " active" : "")
+                }
                 key={t.session_id}
               >
-                <span className="todo-title">
-                  <span className="pill pill-idle">{t.channel === "email" ? "email" : "QQ"}</span>{" "}
-                  {t.external_id}
+                <span
+                  className={`channel-mini-icon ${t.channel === "email" ? "email" : "qq"}`}
+                >
+                  {t.channel === "email" ? "@" : "QQ"}
                 </span>
-                <span className="small muted">{new Date(t.created_at).toLocaleString()}</span>
-                <button className="btn todo-action" onClick={() => void openThread(t.session_id)}>
+                <span className="todo-title">
+                  {t.channel === "email"
+                    ? "Email conversation"
+                    : "QQ conversation"}
+                  <span className="item-subtitle">
+                    {t.external_id} · {new Date(t.created_at).toLocaleString()}
+                  </span>
+                </span>
+                <button
+                  className="btn btn-quiet todo-action"
+                  onClick={() => void openThread(t.session_id)}
+                >
                   Open
                 </button>
               </article>
@@ -228,36 +308,53 @@ export default function MessagingView() {
           </section>
 
           {thread && (
-            <section>
+            <section className="transcript-card">
               <div className="section-head">
-                Transcript · {thread.channel === "email" ? "email" : "QQ"} {thread.external_id}
+                <span>
+                  Conversation · {thread.channel === "email" ? "Email" : "QQ"}
+                  <span className="thread-identity">{thread.external_id}</span>
+                </span>
                 <button
-                  className="btn todo-action"
-                  style={{ marginLeft: "auto" }}
+                  className="btn btn-quiet todo-action"
                   onClick={() => void openThread(thread.session_id)}
                 >
                   Refresh
                 </button>
               </div>
               {thread.messages.length === 0 && (
-                <div className="empty small muted">No messages yet.</div>
+                <div className="empty-state compact">No messages yet.</div>
               )}
-              {thread.messages.map((m, i) => (
-                <article className={"msg" + (m.role === "user" ? " me" : "")} key={i}>
-                  <div className={m.role === "user" ? "bubble-user" : "bubble-agent"}>{m.text}</div>
-                </article>
-              ))}
+              <div className="transcript-messages">
+                {thread.messages.map((m, i) => (
+                  <article
+                    className={"msg" + (m.role === "user" ? " me" : "")}
+                    key={i}
+                  >
+                    <div
+                      className={
+                        m.role === "user" ? "bubble-user" : "bubble-agent"
+                      }
+                    >
+                      {m.text}
+                    </div>
+                  </article>
+                ))}
+              </div>
 
               {thread.pending_approvals.length > 0 && (
-                <div className="section-head" style={{ marginTop: "1rem" }}>
-                  Pending approvals <span className="count">{thread.pending_approvals.length}</span>
+                <div className="section-head approval-head">
+                  <span>Pending approvals</span>
+                  <span className="count">
+                    {thread.pending_approvals.length}
+                  </span>
                 </div>
               )}
               {thread.pending_approvals.map((a) => (
                 <article className="cand-card" key={a.correlation_id}>
                   <div className="cand-main">
                     <div className="cand-title">
-                      <span className="pill pill-running">approval</span> {a.tool_name}
+                      <span className="pill pill-running">Approval needed</span>{" "}
+                      {a.tool_name}
                     </div>
                     <div className="cand-meta small muted">
                       {a.summary} · reply <code>approve {a.short_id}</code>
@@ -267,14 +364,18 @@ export default function MessagingView() {
                     <button
                       className="btn btn-primary"
                       disabled={busy}
-                      onClick={() => void sendInbound(threadChannel, `approve ${a.short_id}`)}
+                      onClick={() =>
+                        void sendInbound(threadChannel, `approve ${a.short_id}`)
+                      }
                     >
                       Approve
                     </button>
                     <button
                       className="btn"
                       disabled={busy}
-                      onClick={() => void sendInbound(threadChannel, `reject ${a.short_id}`)}
+                      onClick={() =>
+                        void sendInbound(threadChannel, `reject ${a.short_id}`)
+                      }
                     >
                       Reject
                     </button>

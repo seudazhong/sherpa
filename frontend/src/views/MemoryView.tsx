@@ -38,7 +38,9 @@ export default function MemoryView() {
       setValue("");
       await load();
     } catch {
-      setError("Could not save (key must be lowercase letters/digits/._- , ≤64 chars).");
+      setError(
+        "Could not save (key must be lowercase letters/digits/._- , ≤64 chars).",
+      );
     } finally {
       setBusy(null);
     }
@@ -92,70 +94,110 @@ export default function MemoryView() {
       <Sidebar />
       <main className="main">
         <header className="topbar">
-          <div>
+          <div className="page-heading">
+            <span className="page-eyebrow">Personal context</span>
             <h2>Memory</h2>
             <p className="page-sub small">
-              Durable facts Sherpa remembers about you — injected into every chat.
+              Keep durable facts and notes Sherpa can recall across
+              conversations
             </p>
           </div>
         </header>
 
-        <div className="inbox">
+        <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
 
-          <section>
-            <div className="section-head">New memory</div>
-            <article className="cand-card">
-              <div className="cand-main">
-                <div className="cand-meta small">
-                  <label>
-                    Key&nbsp;
-                    <input
-                      value={key}
-                      onChange={(e) => setKey(e.target.value)}
-                      placeholder="e.g. timezone"
-                      aria-label="Memory key"
-                    />
-                  </label>
-                  <label>
-                    &nbsp;Value&nbsp;
-                    <input
-                      value={value}
-                      onChange={(e) => setValue(e.target.value)}
-                      placeholder="e.g. Asia/Shanghai"
-                      aria-label="Memory value"
-                    />
-                  </label>
+          <section className="form-card-grid">
+            <article className="form-card">
+              <div className="form-card-head">
+                <span className="form-card-icon" aria-hidden="true">
+                  Aa
+                </span>
+                <div>
+                  <h3>Quick fact</h3>
+                  <p>
+                    A concise preference or detail injected into every chat.
+                  </p>
                 </div>
               </div>
-              <div className="cand-actions">
-                <button
-                  className="btn btn-primary"
-                  disabled={busy === "new" || !key.trim() || !value.trim()}
-                  onClick={() => void save()}
-                >
-                  Save
-                </button>
+              <div className="control-grid two">
+                <label className="control">
+                  <span>Key</span>
+                  <input
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                    placeholder="timezone"
+                    aria-label="Memory key"
+                  />
+                </label>
+                <label className="control">
+                  <span>Value</span>
+                  <input
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    placeholder="Asia/Shanghai"
+                    aria-label="Memory value"
+                  />
+                </label>
               </div>
+              <button
+                className="btn btn-primary"
+                disabled={busy === "new" || !key.trim() || !value.trim()}
+                onClick={() => void save()}
+              >
+                Save fact
+              </button>
+            </article>
+
+            <article className="form-card">
+              <div className="form-card-head">
+                <span className="form-card-icon" aria-hidden="true">
+                  ≋
+                </span>
+                <div>
+                  <h3>Context note</h3>
+                  <p>Longer project context that can be recalled by meaning.</p>
+                </div>
+              </div>
+              <label className="control">
+                <span>Note</span>
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="A decision, project context, or working preference…"
+                  rows={4}
+                  aria-label="New note"
+                />
+              </label>
+              <button
+                className="btn btn-primary"
+                disabled={busy === "note" || !note.trim()}
+                onClick={() => void addNote()}
+              >
+                Save note
+              </button>
             </article>
           </section>
 
-          <section>
+          <section className="content-section">
             <div className="section-head">
-              Stored memories <span className="count">{items.length}</span>
+              <span>Saved facts</span>
+              <span className="count">{items.length}</span>
             </div>
             {items.length === 0 && (
-              <div className="empty small muted">
-                Nothing stored yet. Add a fact above, or just tell Sherpa in chat ("remember
-                that …").
+              <div className="empty-state compact">
+                <strong>No saved facts yet</strong>
+                <span>
+                  Add one above, or simply tell Sherpa “remember that…” in chat.
+                </span>
               </div>
             )}
             {items.map((m) => (
-              <article className="todo-row" key={m.key}>
+              <article className="todo-row memory-row" key={m.key}>
                 <span className="pill pill-idle">{m.key}</span>
                 <span className="todo-title">{m.value}</span>
                 <button
-                  className="btn todo-action"
+                  className="btn btn-quiet todo-action"
                   disabled={busy === m.key}
                   onClick={() => void remove(m.key)}
                 >
@@ -165,41 +207,27 @@ export default function MemoryView() {
             ))}
           </section>
 
-          <section>
+          <section className="content-section">
             <div className="section-head">
-              Notes (semantic memory) <span className="count">{passages.length}</span>
+              <span>Semantic notes</span>
+              <span className="count">{passages.length}</span>
             </div>
-            <article className="cand-card">
-              <div className="cand-main" style={{ flex: 1 }}>
-                <textarea
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="A longer note Sherpa can recall by meaning (e.g. project context, a decision)…"
-                  rows={2}
-                  aria-label="New note"
-                  style={{ width: "100%" }}
-                />
-              </div>
-              <div className="cand-actions">
-                <button
-                  className="btn btn-primary"
-                  disabled={busy === "note" || !note.trim()}
-                  onClick={() => void addNote()}
-                >
-                  Save note
-                </button>
-              </div>
-            </article>
             {passages.length === 0 && (
-              <div className="empty small muted">
-                No notes yet. Add one above, or ask Sherpa to note something in chat.
+              <div className="empty-state compact">
+                <strong>No context notes yet</strong>
+                <span>Save a longer note above when a fact needs nuance.</span>
               </div>
             )}
             {passages.map((p) => (
-              <article className="todo-row" key={p.id}>
-                <span className="todo-title">{p.text}</span>
+              <article className="todo-row note-row" key={p.id}>
+                <span className="todo-title">
+                  {p.text}
+                  <span className="item-subtitle">
+                    {p.source} · {new Date(p.created_at).toLocaleDateString()}
+                  </span>
+                </span>
                 <button
-                  className="btn todo-action"
+                  className="btn btn-quiet todo-action"
                   disabled={busy === p.id}
                   onClick={() => void removePassage(p.id)}
                 >

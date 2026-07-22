@@ -10,6 +10,11 @@ function fmtSize(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function fileLabel(path: string): string {
+  if (!path.includes(".")) return "FILE";
+  return path.split(".").pop()?.slice(0, 3).toUpperCase() ?? "FILE";
+}
+
 export default function FilesView() {
   const { csrf } = useAuth();
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -68,73 +73,105 @@ export default function FilesView() {
       <Sidebar />
       <main className="main">
         <header className="topbar">
-          <div>
+          <div className="page-heading">
+            <span className="page-eyebrow">Private workspace</span>
             <h2>Files</h2>
             <p className="page-sub small">
-              Your private file workspace — the agent can read and write here.
+              Durable files Sherpa can read and write on your behalf
             </p>
           </div>
         </header>
 
-        <div className="inbox">
+        <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
 
-          <section>
-            <div className="section-head">Upload</div>
-            <article className="cand-card">
-              <div className="cand-main">
-                <div className="cand-meta small">
+          <section className="upload-card">
+            <div className="upload-illustration" aria-hidden="true">
+              ↑
+            </div>
+            <div className="upload-copy">
+              <span className="section-kicker">Add a file</span>
+              <h3>Upload to your private workspace</h3>
+              <p>
+                Files stay private and available to Sherpa across conversations.
+                Maximum 10 MB.
+              </p>
+              <div className="control-grid two">
+                <label className="control file-control">
+                  <span>Choose file</span>
                   <input
                     ref={inputRef}
                     type="file"
                     aria-label="File"
-                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                    onChange={(event) =>
+                      setFile(event.target.files?.[0] ?? null)
+                    }
                   />
-                  <label>
-                    &nbsp;Save as&nbsp;
-                    <input
-                      value={path}
-                      onChange={(e) => setPath(e.target.value)}
-                      placeholder={file ? file.name : "notes/todo.md"}
-                      aria-label="File path"
-                    />
-                  </label>
-                </div>
+                </label>
+                <label className="control">
+                  <span>Save as</span>
+                  <input
+                    value={path}
+                    onChange={(event) => setPath(event.target.value)}
+                    placeholder={file ? file.name : "notes/todo.md"}
+                    aria-label="File path"
+                  />
+                </label>
               </div>
-              <div className="cand-actions">
-                <button
-                  className="btn btn-primary"
-                  disabled={busy === "upload" || !file}
-                  onClick={() => void upload()}
-                >
-                  Upload
-                </button>
-              </div>
-            </article>
+              {file && (
+                <span className="selected-file">
+                  {file.name} · {fmtSize(file.size)}
+                </span>
+              )}
+            </div>
+            <button
+              className="btn btn-primary"
+              disabled={busy === "upload" || !file}
+              onClick={() => void upload()}
+            >
+              Upload file
+            </button>
           </section>
 
-          <section>
+          <section className="content-section">
             <div className="section-head">
-              Files <span className="count">{files.length}</span>
+              <span>Workspace files</span>
+              <span className="count">{files.length}</span>
             </div>
             {files.length === 0 && (
-              <div className="empty small muted">
-                No files yet. Upload one above, or ask Sherpa to write a file.
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true">
+                  □
+                </span>
+                <strong>No files yet</strong>
+                <span>
+                  Upload one above, or ask Sherpa to write a file into this
+                  workspace.
+                </span>
               </div>
             )}
-            {files.map((f) => (
-              <article className="todo-row" key={f.id}>
-                <span className="todo-title">{f.path}</span>
-                <span className="small muted">
-                  {fmtSize(f.size_bytes)} · v{f.version}
+            {files.map((item) => (
+              <article className="todo-row file-row" key={item.id}>
+                <span className="file-type-icon" aria-hidden="true">
+                  {fileLabel(item.path)}
                 </span>
-                <a className="btn todo-action" href={fileDownloadUrl(f.id)}>
+                <span className="todo-title">
+                  {item.path}
+                  <span className="item-subtitle">
+                    {fmtSize(item.size_bytes)} · {item.content_type} · updated{" "}
+                    {new Date(item.updated_at).toLocaleDateString()}
+                  </span>
+                </span>
+                <a
+                  className="btn btn-quiet todo-action"
+                  href={fileDownloadUrl(item.id)}
+                >
                   Download
                 </a>
                 <button
-                  className="btn todo-action"
-                  disabled={busy === f.id}
-                  onClick={() => void remove(f.id)}
+                  className="btn btn-quiet todo-action"
+                  disabled={busy === item.id}
+                  onClick={() => void remove(item.id)}
                 >
                   Delete
                 </button>
