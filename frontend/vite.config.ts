@@ -24,6 +24,7 @@ export default defineConfig({
       "/permissions": target,
       "/activity": target,
       "/files": target,
+      "/drive": target,
       "/memory": target,
       "/channels": target,
       "/meta": target,

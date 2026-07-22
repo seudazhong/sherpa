@@ -324,6 +324,38 @@ export interface FilePage {
   items: FileItem[];
 }
 
+export interface DriveNode {
+  id: string;
+  parent_id: string | null;
+  node_type: "folder" | "file";
+  name: string;
+  size_bytes: number;
+  content_type: string;
+  version: number;
+  trashed: boolean;
+  updated_at: string;
+}
+
+export interface DriveNodePage {
+  items: DriveNode[];
+  next_cursor: string | null;
+}
+
+export interface DriveVersion {
+  version: number;
+  size_bytes: number;
+  content_type: string;
+  created_at: string;
+}
+
+export interface StorageAccount {
+  quota_bytes: number;
+  used_bytes: number;
+  reserved_bytes: number;
+  trashed_bytes: number;
+  available_bytes: number;
+}
+
 export interface QQStatus {
   enabled: boolean;
   configured: boolean;
@@ -632,6 +664,76 @@ export const api = {
   },
   deleteFile: (csrf: string, id: string) =>
     req<void>(`/files/${id}`, jsonInit("DELETE", csrf)),
+  driveList: (params: {
+    parent?: string | null;
+    query?: string;
+    sort?: string;
+    cursor?: string;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params.parent) qs.set("parent", params.parent);
+    if (params.query) qs.set("query", params.query);
+    if (params.sort) qs.set("sort", params.sort);
+    if (params.cursor) qs.set("cursor", params.cursor);
+    if (params.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return req<DriveNodePage>(`/drive/nodes${q ? `?${q}` : ""}`);
+  },
+  driveStorage: () => req<StorageAccount>("/drive/storage"),
+  driveCreateFolder: (csrf: string, parentId: string | null, name: string) =>
+    req<DriveNode>(
+      "/drive/folders",
+      jsonInit("POST", csrf, { parent_id: parentId, name }),
+    ),
+  driveUpload: async (
+    csrf: string,
+    parentId: string | null,
+    file: File,
+    name?: string,
+  ): Promise<DriveNode> => {
+    const fd = new FormData();
+    if (name) fd.append("name", name);
+    if (parentId) fd.append("parent_id", parentId);
+    fd.append("upload", file);
+    const res = await fetch("/drive/files", {
+      method: "POST",
+      credentials: "include",
+      headers: { "X-CSRF-Token": csrf },
+      body: fd,
+    });
+    if (!res.ok)
+      throw new ApiError(res.status, `POST /drive/files -> ${res.status}`);
+    return (await res.json()) as DriveNode;
+  },
+  driveRename: (csrf: string, id: string, ifVersion: number, name: string) =>
+    req<DriveNode>(
+      `/drive/nodes/${id}`,
+      jsonInit("PATCH", csrf, { if_version: ifVersion, name }),
+    ),
+  driveMove: (
+    csrf: string,
+    id: string,
+    ifVersion: number,
+    parentId: string | null,
+  ) =>
+    req<DriveNode>(
+      `/drive/nodes/${id}`,
+      jsonInit("PATCH", csrf, { if_version: ifVersion, parent_id: parentId }),
+    ),
+  driveVersions: (id: string) =>
+    req<DriveVersion[]>(`/drive/nodes/${id}/versions`),
+  driveRestoreVersion: (csrf: string, id: string, version: number) =>
+    req<DriveNode>(
+      `/drive/nodes/${id}/restore-version`,
+      jsonInit("POST", csrf, { version }),
+    ),
+  driveTrash: (csrf: string, id: string) =>
+    req<DriveNode>(`/drive/nodes/${id}/trash`, jsonInit("POST", csrf)),
+  driveRestore: (csrf: string, id: string) =>
+    req<DriveNode>(`/drive/nodes/${id}/restore`, jsonInit("POST", csrf)),
+  drivePurge: (csrf: string, id: string) =>
+    req<void>(`/drive/nodes/${id}`, jsonInit("DELETE", csrf)),
   channelsStatus: () => req<ChannelsStatus>("/channels"),
   simulateQQ: (csrf: string, text: string, fromId?: string) =>
     req<SimulateResult>(
@@ -671,6 +773,10 @@ export function exportUrl(): string {
 
 export function fileDownloadUrl(id: string): string {
   return `/files/${id}/content`;
+}
+
+export function driveDownloadUrl(id: string): string {
+  return `/drive/nodes/${id}/content`;
 }
 
 export function eventsUrl(sid: string, cursor: string | number): string {

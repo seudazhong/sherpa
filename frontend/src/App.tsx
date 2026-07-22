@@ -4,7 +4,6 @@ import { useAuth } from "./auth";
 import ActivityView from "./views/ActivityView";
 import ChatView from "./views/ChatView";
 import ConnectorsView from "./views/ConnectorsView";
-import FilesView from "./views/FilesView";
 import InboxView from "./views/InboxView";
 import LoginView from "./views/LoginView";
 import MemoryView from "./views/MemoryView";
@@ -12,6 +11,7 @@ import MessagingView from "./views/MessagingView";
 import SchedulesView from "./views/SchedulesView";
 import SessionsView from "./views/SessionsView";
 import SettingsView from "./views/SettingsView";
+import WorkspaceView from "./views/WorkspaceView";
 
 function Protected({ children }: { children: JSX.Element }) {
   const { ready, authed } = useAuth();
@@ -87,7 +87,7 @@ export default function App() {
         path="/workspace"
         element={
           <Protected>
-            <FilesView />
+            <WorkspaceView />
           </Protected>
         }
       />
