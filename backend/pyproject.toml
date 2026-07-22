@@ -19,6 +19,7 @@ dependencies = [
     "arq>=0.26",
     "redis>=5.0",
     "cryptography>=42.0",
+    "qq-botpy>=1.2.1",
     "tzdata>=2024.1",
 ]
 
