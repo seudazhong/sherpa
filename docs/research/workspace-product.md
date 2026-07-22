@@ -1,6 +1,8 @@
 # R-WORKSPACE-PRODUCT — Personal drive and project workspaces
 
-**Status:** queued for product/architecture research; no implementation approved.
+**Status:** research/design complete; awaiting owner decision. No implementation approved.
+
+**Outcome:** [`workspace-product-report.md`](workspace-product-report.md) recommends Personal workspace as the umbrella, Projects + Drive as distinct sibling products, Postgres metadata + immutable tenant-scoped MinIO blobs, configurable 5 GiB personal quota with tenant/deployment ceilings, and snapshot-in/change-set-out sandbox durability. Static flows: [`workspace-product-prototype/index.html`](workspace-product-prototype/index.html).
 
 ## Product thesis
 

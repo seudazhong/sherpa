@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa Workspace product prototype</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="prototype-note">
+    Research prototype only. No production navigation or behavior is changed.
+  </div>
+
+  <header class="mobile-bar">
+    <button class="icon-button" type="button" data-menu-toggle aria-label="Open navigation" aria-expanded="false">
+      <span class="menu-lines" aria-hidden="true"></span>
+    </button>
+    <a class="mobile-brand" href="#overview" data-screen-target="overview">
+      <span class="logo">S</span>
+      <span>Sherpa Workspace</span>
+    </a>
+    <span class="avatar">D</span>
+  </header>
+
+  <button class="backdrop" type="button" data-menu-close aria-label="Close navigation"></button>
+
+  <aside class="sidebar" aria-label="Prototype navigation">
+    <div class="brand">
+      <span class="logo">S</span>
+      <span>
+        <strong>Sherpa</strong>
+        <small>Personal agent</small>
+      </span>
+    </div>
+
+    <div class="workspace-card">
+      <span class="workspace-dot" aria-hidden="true"></span>
+      <span>
+        <strong>Personal workspace</strong>
+        <small>Private - self-hosted</small>
+      </span>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-group">
+        <span class="nav-label">Agent</span>
+        <button type="button" class="nav-item muted-item">
+          <span class="nav-icon">C</span>
+          Chat
+        </button>
+        <button type="button" class="nav-item muted-item">
+          <span class="nav-icon">I</span>
+          Inbox
+        </button>
+        <button type="button" class="nav-item muted-item">
+          <span class="nav-icon">A</span>
+          Activity
+        </button>
+      </div>
+
+      <div class="nav-group">
+        <span class="nav-label">Workspace</span>
+        <button type="button" class="nav-item" data-screen-target="overview">
+          <span class="nav-icon">O</span>
+          Overview
+        </button>
+        <button type="button" class="nav-item" data-screen-target="projects">
+          <span class="nav-icon">P</span>
+          Projects
+        </button>
+        <button type="button" class="nav-item" data-screen-target="drive">
+          <span class="nav-icon">D</span>
+          Drive
+        </button>
+      </div>
+
+      <div class="nav-group">
+        <span class="nav-label">Prototype flows</span>
+        <button type="button" class="nav-item" data-screen-target="new-project">
+          <span class="nav-icon">+</span>
+          New / import
+        </button>
+        <button type="button" class="nav-item" data-screen-target="project-detail">
+          <span class="nav-icon">F</span>
+          Project detail
+        </button>
+        <button type="button" class="nav-item" data-screen-target="storage">
+          <span class="nav-icon">Q</span>
+          Quota states
+        </button>
+        <button type="button" class="nav-item" data-screen-target="conflict">
+          <span class="nav-icon">G</span>
+          Git conflict
+        </button>
+        <button type="button" class="nav-item" data-screen-target="changes">
+          <span class="nav-icon">R</span>
+          Change review
+        </button>
+      </div>
+    </nav>
+
+    <div class="sidebar-spacer"></div>
+    <div class="user-card">
+      <span class="avatar">D</span>
+      <span>
+        <strong>Owner</strong>
+        <small>Workspace owner</small>
+      </span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="flow-picker">
+      <label>
+        <span>Prototype screen</span>
+        <select data-prototype-select>
+          <option value="overview">Workspace overview</option>
+          <option value="projects">Projects library</option>
+          <option value="new-project">New / import project</option>
+          <option value="project-detail">Project detail</option>
+          <option value="drive">Drive</option>
+          <option value="storage">Quota states</option>
+          <option value="conflict">Git conflict</option>
+          <option value="changes">Sandbox change review</option>
+        </select>
+      </label>
+    </div>
+
+    <section class="screen" data-screen="overview">
+      <header class="page-header">
+        <div>
+          <span class="eyebrow">Personal workspace</span>
+          <h1>Everything you are building and keeping</h1>
+          <p>Projects stay development-ready. Drive keeps documents, exports, and reusable assets.</p>
+        </div>
+        <div class="header-actions">
+          <button class="button" type="button" data-screen-target="drive">Upload to Drive</button>
+          <button class="button primary" type="button" data-screen-target="new-project">New project</button>
+        </div>
+      </header>
+
+      <div class="overview-grid">
+        <article class="card storage-summary">
+          <div class="card-head">
+            <div>
+              <span class="section-label">Storage</span>
+              <h2>3.10 GiB of 5 GiB used</h2>
+            </div>
+            <button class="text-button" type="button" data-screen-target="storage">Manage storage</button>
+          </div>
+          <div class="storage-bar" aria-label="Storage usage">
+            <span class="bar-active" style="width: 48%"></span>
+            <span class="bar-history" style="width: 10%"></span>
+            <span class="bar-trash" style="width: 4%"></span>
+            <span class="bar-reserved" style="width: 2%"></span>
+          </div>
+          <div class="legend">
+            <span><i class="dot active"></i>Active 2.40 GiB</span>
+            <span><i class="dot history"></i>History 510 MiB</span>
+            <span><i class="dot trash"></i>Trash 190 MiB</span>
+            <span><i class="dot reserved"></i>Reserved 80 MiB</span>
+          </div>
+          <p class="hint">Quota is managed by this deployment. Unchanged checkpoints do not consume duplicate space.</p>
+        </article>
+
+        <article class="card attention-card">
+          <span class="status warning">Action recommended</span>
+          <h2>Keep 1 GiB free for project work</h2>
+          <p>Large imports and sandbox saves reserve capacity before they start. Clear old artifacts or trash before the next repository import.</p>
+          <button class="button" type="button" data-screen-target="storage">Review large items</button>
+        </article>
+      </div>
+
+      <div class="section-title">
+        <div>
+          <span class="section-label">Recent projects</span>
+          <h2>Continue where you left off</h2>
+        </div>
+        <button class="text-button" type="button" data-screen-target="projects">View all projects</button>
+      </div>
+
+      <div class="project-grid">
+        <article class="project-card">
+          <div class="project-icon green">S</div>
+          <div class="project-copy">
+            <div class="row-between">
+              <h3>Sherpa web</h3>
+              <span class="status warning">8 changes</span>
+            </div>
+            <p>GitHub source - main - last opened 18 min ago</p>
+            <div class="project-meta">
+              <span>124 MiB</span>
+              <span>Checkpoint today</span>
+            </div>
+          </div>
+          <button class="button quiet" type="button" data-screen-target="project-detail">Open</button>
+        </article>
+
+        <article class="project-card">
+          <div class="project-icon blue">P</div>
+          <div class="project-copy">
+            <div class="row-between">
+              <h3>Pricing calculator</h3>
+              <span class="status success">Clean</span>
+            </div>
+            <p>Blank project - no remote source</p>
+            <div class="project-meta">
+              <span>42 MiB</span>
+              <span>Saved yesterday</span>
+            </div>
+          </div>
+          <button class="button quiet" type="button">Open</button>
+        </article>
+
+        <article class="project-card">
+          <div class="project-icon amber">R</div>
+          <div class="project-copy">
+            <div class="row-between">
+              <h3>Research tools</h3>
+              <span class="status neutral">Remote ahead</span>
+            </div>
+            <p>GitHub source - develop - fetched 2 hr ago</p>
+            <div class="project-meta">
+              <span>316 MiB</span>
+              <span>3 remote commits</span>
+            </div>
+          </div>
+          <button class="button quiet" type="button" data-screen-target="conflict">Review</button>
+        </article>
+      </div>
+
+      <div class="section-title compact">
+        <div>
+          <span class="section-label">Recent Drive items</span>
+          <h2>Files you used recently</h2>
+        </div>
+        <button class="text-button" type="button" data-screen-target="drive">Open Drive</button>
+      </div>
+
+      <div class="card item-list">
+        <div class="item-row">
+          <span class="file-icon">PDF</span>
+          <span class="item-main"><strong>launch-plan.pdf</strong><small>Drive / Planning</small></span>
+          <span class="item-meta">8.4 MiB</span>
+          <span class="item-meta">10 min ago</span>
+          <button class="icon-button" type="button" aria-label="More actions">...</button>
+        </div>
+        <div class="item-row">
+          <span class="file-icon">CSV</span>
+          <span class="item-main"><strong>forecast-q3.csv</strong><small>Drive / Finance</small></span>
+          <span class="item-meta">2.1 MiB</span>
+          <span class="item-meta">Yesterday</span>
+          <button class="icon-button" type="button" aria-label="More actions">...</button>
+        </div>
+        <div class="item-row">
+          <span class="file-icon">ZIP</span>
+          <span class="item-main"><strong>brand-assets.zip</strong><small>Drive / Assets</small></span>
+          <span class="item-meta">148 MiB</span>
+          <span class="item-meta">Jul 20</span>
+          <button class="icon-button" type="button" aria-label="More actions">...</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="projects" hidden>
+      <header class="page-header">
+        <div>
+          <span class="eyebrow">Workspace</span>
+          <h1>Projects</h1>
+          <p>Durable development spaces with source status, snapshots, activity, and sandbox actions.</p>
+        </div>
+        <button class="button primary" type="button" data-screen-target="new-project">New project</button>
+      </header>
+
+      <div class="toolbar">
+        <label class="search">
+          <span class="sr-only">Search projects</span>
+          <input type="search" placeholder="Search projects">
+        </label>
+        <select aria-label="Project status filter">
+          <option>All statuses</option>
+          <option>Local changes</option>
+          <option>Remote ahead</option>
+          <option>Conflicted</option>
+        </select>
+        <select aria-label="Project sort">
+          <option>Recently opened</option>
+          <option>Name</option>
+          <option>Storage used</option>
+        </select>
+      </div>
+
+      <div class="metric-grid">
+        <article class="metric"><strong>6</strong><span>Projects</span></article>
+        <article class="metric"><strong>2</strong><span>Need review</span></article>
+        <article class="metric"><strong>1</strong><span>Remote ahead</span></article>
+        <article class="metric"><strong>1.04 GiB</strong><span>Project storage</span></article>
+      </div>
+
+      <div class="card project-table">
+        <div class="table-head project-columns">
+          <span>Project</span>
+          <span>Source</span>
+          <span>Status</span>
+          <span>Storage</span>
+          <span>Updated</span>
+          <span></span>
+        </div>
+        <div class="table-row project-columns">
+          <span class="project-cell"><i class="project-icon green">S</i><span><strong>Sherpa web</strong><small>Customer workspace redesign</small></span></span>
+          <span><strong>github/sherpa</strong><small>main</small></span>
+          <span><i class="status warning">8 changes</i></span>
+          <span>124 MiB</span>
+          <span>18 min ago</span>
+          <button class="button quiet" type="button" data-screen-target="project-detail">Open</button>
+        </div>
+        <div class="table-row project-columns">
+          <span class="project-cell"><i class="project-icon blue">P</i><span><strong>Pricing calculator</strong><small>Internal planning tool</small></span></span>
+          <span><strong>No source</strong><small>Blank project</small></span>
+          <span><i class="status success">Clean</i></span>
+          <span>42 MiB</span>
+          <span>Yesterday</span>
+          <button class="button quiet" type="button">Open</button>
+        </div>
+        <div class="table-row project-columns">
+          <span class="project-cell"><i class="project-icon amber">R</i><span><strong>Research tools</strong><small>Analysis utilities</small></span></span>
+          <span><strong>github/research-tools</strong><small>develop</small></span>
+          <span><i class="status neutral">Remote ahead</i></span>
+          <span>316 MiB</span>
+          <span>2 hr ago</span>
+          <button class="button quiet" type="button" data-screen-target="conflict">Review</button>
+        </div>
+        <div class="table-row project-columns">
+          <span class="project-cell"><i class="project-icon rose">M</i><span><strong>Mobile prototype</strong><small>Imported archive</small></span></span>
+          <span><strong>No source</strong><small>Archive import</small></span>
+          <span><i class="status success">Clean</i></span>
+          <span>88 MiB</span>
+          <span>Jul 20</span>
+          <button class="button quiet" type="button">Open</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="new-project" hidden>
+      <header class="page-header narrow">
+        <div>
+          <button class="back-link" type="button" data-screen-target="projects">Back to Projects</button>
+          <span class="eyebrow">New project</span>
+          <h1>Choose a starting point</h1>
+          <p>A Project is durable Sherpa state. A GitHub repository can be attached as its source.</p>
+        </div>
+      </header>
+
+      <div class="choice-grid">
+        <article class="choice-card selected">
+          <span class="choice-icon">G</span>
+          <span class="status success">Recommended</span>
+          <h2>Import from GitHub</h2>
+          <p>Materialize one branch as the initial Project snapshot and keep a source binding for later fetch and push.</p>
+        </article>
+        <article class="choice-card">
+          <span class="choice-icon">B</span>
+          <h2>Blank project</h2>
+          <p>Start with an empty durable tree and attach or publish a source later.</p>
+        </article>
+        <article class="choice-card">
+          <span class="choice-icon">T</span>
+          <h2>Use a template</h2>
+          <p>Copy template content without retaining the template repository history.</p>
+        </article>
+        <article class="choice-card">
+          <span class="choice-icon">Z</span>
+          <h2>Upload archive</h2>
+          <p>Safely inspect and extract a ZIP or TAR into a new, unbound Project.</p>
+        </article>
+      </div>
+
+      <div class="card form-card">
+        <div class="form-heading">
+          <div>
+            <span class="section-label">GitHub import</span>
+            <h2>Import a repository branch</h2>
+          </div>
+          <span class="status success">GitHub connected</span>
+        </div>
+        <div class="form-grid">
+          <label>
+            <span>Repository</span>
+            <select>
+              <option>dazhongguo/sherpa</option>
+              <option>dazhongguo/research-tools</option>
+            </select>
+          </label>
+          <label>
+            <span>Branch</span>
+            <select>
+              <option>main</option>
+              <option>develop</option>
+            </select>
+          </label>
+          <label class="full">
+            <span>Project name</span>
+            <input type="text" value="Sherpa web">
+          </label>
+        </div>
+        <div class="estimate">
+          <span><strong>Estimated durable size</strong><small>Selected branch head only; remote history stays in the source.</small></span>
+          <strong>124 MiB</strong>
+        </div>
+        <div class="notice">
+          <strong>Capacity reserved before import</strong>
+          <span>124 MiB will be reserved from your 1.82 GiB available capacity. Credentials are used by the import service and never copied into the Project.</span>
+        </div>
+        <div class="form-actions">
+          <button class="button" type="button" data-screen-target="projects">Cancel</button>
+          <button class="button primary" type="button" data-screen-target="project-detail">Import project</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="project-detail" hidden>
+      <header class="page-header">
+        <div>
+          <button class="back-link" type="button" data-screen-target="projects">Projects</button>
+          <span class="eyebrow">Project</span>
+          <h1>Sherpa web</h1>
+          <p>Durable head at checkpoint "Workspace shell" - source github/sherpa on main.</p>
+        </div>
+        <div class="header-actions">
+          <button class="button" type="button">Fetch source</button>
+          <button class="button" type="button" data-screen-target="changes">Review 8 changes</button>
+          <button class="button primary" type="button">Open sandbox</button>
+        </div>
+      </header>
+
+      <div class="source-strip">
+        <span><strong>Source</strong><small>github.com/dazhongguo/sherpa</small></span>
+        <span><strong>Branch</strong><small>main</small></span>
+        <span><strong>Remote</strong><small>Up to date</small></span>
+        <span><strong>Project head</strong><small>8 staged changes</small></span>
+        <span><strong>Storage</strong><small>124 MiB</small></span>
+      </div>
+
+      <div class="project-layout">
+        <aside class="card file-tree">
+          <div class="tree-head">
+            <span class="section-label">Files</span>
+            <button class="icon-button" type="button" aria-label="Add file">+</button>
+          </div>
+          <label class="search compact-search">
+            <span class="sr-only">Filter project files</span>
+            <input type="search" placeholder="Filter files">
+          </label>
+          <div class="tree">
+            <button type="button" class="tree-row folder open"><span>v</span><strong>backend</strong></button>
+            <button type="button" class="tree-row nested folder"><span>></span><strong>app</strong></button>
+            <button type="button" class="tree-row nested file active"><span>PY</span><strong>worker.py</strong><i>M</i></button>
+            <button type="button" class="tree-row nested file"><span>PY</span><strong>main.py</strong></button>
+            <button type="button" class="tree-row folder"><span>></span><strong>frontend</strong></button>
+            <button type="button" class="tree-row folder"><span>></span><strong>docs</strong></button>
+            <button type="button" class="tree-row file"><span>MD</span><strong>README.md</strong></button>
+            <button type="button" class="tree-row file"><span>YML</span><strong>docker-compose.yml</strong><i>M</i></button>
+          </div>
+        </aside>
+
+        <article class="card file-preview">
+          <div class="preview-head">
+            <span><strong>backend/app/worker.py</strong><small>Modified in pending change set</small></span>
+            <div>
+              <button class="button quiet" type="button">History</button>
+              <button class="button quiet" type="button">Download</button>
+            </div>
+          </div>
+          <pre class="code"><code>from __future__ import annotations
+
+from app.core.loop import run_loop
+from app.persistence.outbox import relay_outbox
+
+
+async def run_agent_job(ctx: dict[str, object], run_id: str) -> None:
+    await run_loop(run_id)
+    await relay_outbox()</code></pre>
+          <div class="preview-footer">
+            <span>Saved snapshot: 18 min ago</span>
+            <span>Pending sandbox edit: +6 -2</span>
+          </div>
+        </article>
+
+        <aside class="card project-activity">
+          <div class="card-head">
+            <div>
+              <span class="section-label">Recent activity</span>
+              <h2>Project timeline</h2>
+            </div>
+          </div>
+          <div class="timeline">
+            <div class="timeline-item current">
+              <i></i>
+              <span><strong>Sandbox completed</strong><small>8 files changed - 18 min ago</small></span>
+            </div>
+            <div class="timeline-item">
+              <i></i>
+              <span><strong>Checkpoint saved</strong><small>Workspace shell - today</small></span>
+            </div>
+            <div class="timeline-item">
+              <i></i>
+              <span><strong>Source fetched</strong><small>Remote main unchanged</small></span>
+            </div>
+            <div class="timeline-item">
+              <i></i>
+              <span><strong>Imported from GitHub</strong><small>Commit 5bf1189 - Jul 22</small></span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="drive" hidden>
+      <header class="page-header">
+        <div>
+          <span class="eyebrow">Workspace</span>
+          <h1>Drive</h1>
+          <p>Private documents, uploads, exports, and reusable assets available across conversations.</p>
+        </div>
+        <div class="header-actions">
+          <button class="button" type="button">New folder</button>
+          <button class="button primary" type="button">Upload</button>
+        </div>
+      </header>
+
+      <div class="drive-summary">
+        <nav class="subnav" aria-label="Drive views">
+          <button class="active" type="button">My Drive</button>
+          <button type="button">Recent</button>
+          <button type="button">Starred</button>
+          <button type="button">Trash</button>
+        </nav>
+        <button class="storage-pill" type="button" data-screen-target="storage">
+          <span>3.10 GiB used - 80 MiB reserved</span>
+          <i><b style="width: 64%"></b></i>
+        </button>
+      </div>
+
+      <div class="toolbar">
+        <label class="search">
+          <span class="sr-only">Search Drive</span>
+          <input type="search" placeholder="Search Drive">
+        </label>
+        <select aria-label="Type filter">
+          <option>All types</option>
+          <option>Documents</option>
+          <option>Images</option>
+          <option>Archives</option>
+        </select>
+        <select aria-label="Drive sort">
+          <option>Last modified</option>
+          <option>Name</option>
+          <option>Size</option>
+        </select>
+      </div>
+
+      <div class="breadcrumbs">
+        <button type="button">My Drive</button>
+        <span>/</span>
+        <strong>Planning</strong>
+      </div>
+
+      <div class="card drive-table">
+        <div class="table-head drive-columns">
+          <span>Name</span>
+          <span>Owner/source</span>
+          <span>Size</span>
+          <span>Modified</span>
+          <span></span>
+        </div>
+        <div class="table-row drive-columns">
+          <span class="file-cell"><i class="folder-icon">F</i><span><strong>Launch</strong><small>12 items</small></span></span>
+          <span>Owner</span>
+          <span>-</span>
+          <span>Today, 09:24</span>
+          <button class="icon-button" type="button" aria-label="More folder actions">...</button>
+        </div>
+        <div class="table-row drive-columns selected-row">
+          <span class="file-cell"><i class="file-icon">PDF</i><span><strong>launch-plan.pdf</strong><small>Version 4 - starred</small></span></span>
+          <span>Manual upload</span>
+          <span>8.4 MiB</span>
+          <span>10 min ago</span>
+          <button class="icon-button" type="button" aria-label="More file actions">...</button>
+        </div>
+        <div class="table-row drive-columns">
+          <span class="file-cell"><i class="file-icon">DOC</i><span><strong>brief.docx</strong><small>Version 7</small></span></span>
+          <span>Owner</span>
+          <span>1.8 MiB</span>
+          <span>Today, 08:15</span>
+          <button class="icon-button" type="button" aria-label="More file actions">...</button>
+        </div>
+        <div class="table-row drive-columns">
+          <span class="file-cell"><i class="file-icon">ZIP</i><span><strong>brand-assets.zip</strong><small>Version 2</small></span></span>
+          <span>Exported from Project</span>
+          <span>148 MiB</span>
+          <span>Jul 20</span>
+          <button class="icon-button" type="button" aria-label="More file actions">...</button>
+        </div>
+      </div>
+
+      <div class="selection-bar">
+        <span><strong>1 item selected</strong><small>launch-plan.pdf - 8.4 MiB</small></span>
+        <div>
+          <button class="button quiet" type="button">Preview</button>
+          <button class="button quiet" type="button">Move</button>
+          <button class="button quiet" type="button">Versions</button>
+          <button class="button quiet danger-text" type="button">Move to trash</button>
+        </div>
+      </div>
+
+      <article class="card drive-preview-card">
+        <div class="document-preview">
+          <span class="preview-badge">PDF preview</span>
+          <strong>Launch plan</strong>
+          <p>Product goals, launch phases, owner checklist, and open risks.</p>
+          <div class="preview-lines" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i>
+          </div>
+        </div>
+        <div class="preview-details">
+          <span class="section-label">Selected file</span>
+          <h2>launch-plan.pdf</h2>
+          <dl>
+            <div><dt>Location</dt><dd>Drive / Planning</dd></div>
+            <div><dt>Version</dt><dd>4</dd></div>
+            <div><dt>Size</dt><dd>8.4 MiB</dd></div>
+            <div><dt>Updated</dt><dd>10 min ago</dd></div>
+          </dl>
+          <button class="button" type="button">Open full preview</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="screen" data-screen="storage" hidden>
+      <header class="page-header">
+        <div>
+          <button class="back-link" type="button" data-screen-target="overview">Workspace overview</button>
+          <span class="eyebrow">Storage management</span>
+          <h1>4.52 GiB of 5 GiB used</h1>
+          <p>200 MiB is reserved, leaving 280 MiB available. Clear history, artifacts, or trash before another large import.</p>
+        </div>
+        <button class="button primary" type="button">Empty trash</button>
+      </header>
+
+      <div class="quota-alert">
+        <span class="alert-icon">!</span>
+        <span><strong>Large writes are temporarily blocked</strong><small>A 420 MiB GitHub import cannot reserve capacity until at least 140 MiB is freed.</small></span>
+      </div>
+
+      <article class="card storage-detail">
+        <div class="storage-bar large" aria-label="Storage usage near limit">
+          <span class="bar-active" style="width: 62%"></span>
+          <span class="bar-history" style="width: 19%"></span>
+          <span class="bar-trash" style="width: 9%"></span>
+          <span class="bar-reserved" style="width: 4%"></span>
+        </div>
+        <div class="storage-categories">
+          <button type="button" class="category active">
+            <i class="dot active"></i>
+            <span><strong>Active</strong><small>Current Drive files, Project heads, retained artifacts</small></span>
+            <b>3.10 GiB</b>
+          </button>
+          <button type="button" class="category">
+            <i class="dot history"></i>
+            <span><strong>History</strong><small>Drive versions and Project checkpoints</small></span>
+            <b>950 MiB</b>
+          </button>
+          <button type="button" class="category">
+            <i class="dot trash"></i>
+            <span><strong>Trash</strong><small>Recoverable for 30 days</small></span>
+            <b>470 MiB</b>
+          </button>
+          <button type="button" class="category">
+            <i class="dot reserved"></i>
+            <span><strong>Reserved</strong><small>Two uploads in progress</small></span>
+            <b>200 MiB</b>
+          </button>
+        </div>
+        <p class="hint">Identical bytes are charged once within your personal workspace, even when multiple checkpoints reference them.</p>
+      </article>
+
+      <div class="section-title">
+        <div>
+          <span class="section-label">Largest reclaimable items</span>
+          <h2>Free space without losing current work</h2>
+        </div>
+      </div>
+
+      <div class="card cleanup-list">
+        <div class="cleanup-row">
+          <span class="file-icon">ART</span>
+          <span class="item-main"><strong>mobile-preview-build</strong><small>Project artifact - Mobile prototype</small></span>
+          <span class="item-meta">310 MiB</span>
+          <button class="button quiet danger-text" type="button">Delete</button>
+        </div>
+        <div class="cleanup-row">
+          <span class="file-icon">HIS</span>
+          <span class="item-main"><strong>Research tools checkpoints</strong><small>14 retained snapshots - 5 unique versions</small></span>
+          <span class="item-meta">260 MiB</span>
+          <button class="button quiet" type="button">Review</button>
+        </div>
+        <div class="cleanup-row">
+          <span class="file-icon">BIN</span>
+          <span class="item-main"><strong>Trash older than 20 days</strong><small>38 files and 4 folders</small></span>
+          <span class="item-meta">220 MiB</span>
+          <button class="button quiet danger-text" type="button">Purge</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="conflict" hidden>
+      <header class="page-header narrow">
+        <div>
+          <button class="back-link" type="button" data-screen-target="project-detail">Sherpa web</button>
+          <span class="eyebrow">Source synchronization</span>
+          <h1>Local and remote changes diverged</h1>
+          <p>Fetch did not change your Project. Review the two histories and prepare a merge change set.</p>
+        </div>
+      </header>
+
+      <div class="conflict-summary">
+        <article class="card branch-card">
+          <span class="section-label">Project head</span>
+          <h2>2 local snapshots ahead</h2>
+          <p>8 files changed since source commit <code>5bf1189</code>.</p>
+          <div class="commit">
+            <i></i>
+            <span><strong>Workspace shell</strong><small>Checkpoint - 18 min ago</small></span>
+          </div>
+          <div class="commit">
+            <i></i>
+            <span><strong>Drive route cleanup</strong><small>Saved yesterday</small></span>
+          </div>
+        </article>
+
+        <div class="diverge-mark" aria-hidden="true">vs</div>
+
+        <article class="card branch-card">
+          <span class="section-label">Remote main</span>
+          <h2>3 commits ahead</h2>
+          <p>Fetched from GitHub 2 min ago. No local files were overwritten.</p>
+          <div class="commit remote">
+            <i></i>
+            <span><strong>Update deployment notes</strong><small>c193e72 - Alex</small></span>
+          </div>
+          <div class="commit remote">
+            <i></i>
+            <span><strong>Fix mobile menu focus</strong><small>ab41f08 - Mia</small></span>
+          </div>
+        </article>
+      </div>
+
+      <article class="card conflict-files">
+        <div class="card-head">
+          <div>
+            <span class="section-label">Merge preview</span>
+            <h2>2 files need a decision</h2>
+          </div>
+          <span class="status warning">Not applied</span>
+        </div>
+        <div class="conflict-file">
+          <span class="file-icon">TSX</span>
+          <span class="item-main"><strong>frontend/src/components/Sidebar.tsx</strong><small>Both sides changed the navigation groups</small></span>
+          <button class="button" type="button">Resolve</button>
+        </div>
+        <div class="conflict-file">
+          <span class="file-icon">MD</span>
+          <span class="item-main"><strong>docs/STATUS.md</strong><small>Both sides changed the current phase summary</small></span>
+          <button class="button" type="button">Resolve</button>
+        </div>
+        <div class="notice neutral-notice">
+          <strong>Safe default</strong>
+          <span>Nothing changes until every conflict is resolved and you apply the reviewed merge. Replacing local state from remote is a separate destructive action.</span>
+        </div>
+        <div class="form-actions">
+          <button class="button" type="button" data-screen-target="project-detail">Keep local state</button>
+          <button class="button primary" type="button">Resolve conflicts</button>
+        </div>
+      </article>
+
+      <article class="card approval-preview">
+        <div>
+          <span class="section-label">External write boundary</span>
+          <h2>Push requires approval after the merge is reviewed</h2>
+          <p>GitHub credentials stay in the source connector. The approval binds the exact repository, branch, expected remote commit, and diff summary.</p>
+        </div>
+        <div class="approval-facts">
+          <span><strong>Repository</strong><small>dazhongguo/sherpa</small></span>
+          <span><strong>Branch</strong><small>main</small></span>
+          <span><strong>Expected remote</strong><small>c193e72</small></span>
+          <span><strong>Force push</strong><small>Disabled</small></span>
+        </div>
+        <div class="approval-action">
+          <span class="status warning">Approval required</span>
+          <button class="button" type="button">Request push approval</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="screen" data-screen="changes" hidden>
+      <header class="page-header">
+        <div>
+          <button class="back-link" type="button" data-screen-target="project-detail">Sherpa web</button>
+          <span class="eyebrow">Sandbox change review</span>
+          <h1>Review what the sandbox produced</h1>
+          <p>The Project is still on checkpoint "Workspace shell." These changes exist only in a staged change set.</p>
+        </div>
+        <span class="status success">Sandbox exited 0</span>
+      </header>
+
+      <div class="change-summary">
+        <article class="metric"><strong>8</strong><span>Files changed</span></article>
+        <article class="metric"><strong>+284 -61</strong><span>Line changes</span></article>
+        <article class="metric"><strong>18.4 MiB</strong><span>New durable bytes</span></article>
+        <article class="metric"><strong>2</strong><span>Candidate artifacts</span></article>
+      </div>
+
+      <div class="review-layout">
+        <aside class="card changed-files">
+          <div class="tree-head">
+            <span class="section-label">Changed files</span>
+            <span>8 selected</span>
+          </div>
+          <label class="change-file active">
+            <input type="checkbox" checked>
+            <span class="change-kind modified">M</span>
+            <span><strong>Sidebar.tsx</strong><small>+42 -18</small></span>
+          </label>
+          <label class="change-file">
+            <input type="checkbox" checked>
+            <span class="change-kind added">A</span>
+            <span><strong>WorkspaceView.tsx</strong><small>+188</small></span>
+          </label>
+          <label class="change-file">
+            <input type="checkbox" checked>
+            <span class="change-kind modified">M</span>
+            <span><strong>styles.css</strong><small>+54 -31</small></span>
+          </label>
+          <label class="change-file">
+            <input type="checkbox" checked>
+            <span class="change-kind deleted">D</span>
+            <span><strong>FilesView.tsx</strong><small>-12</small></span>
+          </label>
+          <label class="change-file">
+            <input type="checkbox">
+            <span class="change-kind artifact">O</span>
+            <span><strong>dist/preview.zip</strong><small>18.1 MiB artifact</small></span>
+          </label>
+        </aside>
+
+        <article class="card diff-panel">
+          <div class="preview-head">
+            <span><strong>frontend/src/components/Sidebar.tsx</strong><small>Modified - selected for Save</small></span>
+            <div class="diff-tabs">
+              <button class="active" type="button">Unified</button>
+              <button type="button">Side by side</button>
+            </div>
+          </div>
+          <pre class="diff"><code><span class="line context">  const navGroups = [</span>
+<span class="line removed">-   { label: "Organize", items: [files, memory] },</span>
+<span class="line added">+   { label: "Workspace", items: [overview, projects, drive] },</span>
+<span class="line added">+   { label: "Organize", items: [schedules, memory] },</span>
+<span class="line context">  ];</span>
+<span class="line context"></span>
+<span class="line added">+ const workspaceRoute = "/work";</span></code></pre>
+          <div class="diff-footer">
+            <span>No unsafe paths, symlinks, or credential files detected.</span>
+            <button class="text-button" type="button">View sandbox log</button>
+          </div>
+        </article>
+      </div>
+
+      <article class="card save-panel">
+        <div>
+          <span class="section-label">Save boundary</span>
+          <h2>Apply 7 selected files to the Project</h2>
+          <p>This creates a new immutable snapshot. The base snapshot has not changed since the sandbox started.</p>
+        </div>
+        <label class="checkpoint-option">
+          <input type="checkbox" checked>
+          <span><strong>Create checkpoint</strong><small>Name this restore point "Workspace navigation"</small></span>
+        </label>
+        <div class="save-actions">
+          <button class="button danger-outline" type="button">Discard all</button>
+          <button class="button" type="button">Keep selected artifacts</button>
+          <button class="button primary" type="button" data-screen-target="project-detail">Save 7 files</button>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script src="prototype.js"></script>
+</body>
+</html>

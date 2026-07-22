@@ -36,7 +36,7 @@
 
 - **R-KNOWLEDGE-BASE · 来源型个人知识库** — ✅ 调研/设计完成：当前 `memory_passages` 是手工语义笔记，不是文档知识库。建议另建 file-backed Knowledge 垂直切片（来源/版本/异步解析切块/混合检索/引用/UI+工具），继续用 Postgres FTS + pgvector，不上独立向量库；实现尚未批准，先审 ADR/契约、embedding 隐私选择、中文检索方案和小 golden 集。完整报告：[`research/knowledge-base.md`](research/knowledge-base.md)。
 - **R-SESSION-SEARCH · 云端 session 持久化 / 搜索 / 恢复** — ✅ **调研完成，待 owner 决策**。结论：保留“可重放 canonical history + 可重建 search projection”的架构分层，但云端不引入 JSONL/SQLite；推荐 Postgres `session_search_entries`、lexical + CJK bigram + trigram first、typed deep-link anchor、状态化 Resume/Reconnect/Recover，semantic/branch 后置。报告：[`research/session-search-report.md`](research/session-search-report.md)；静态稿：[`design-session-library/index.html`](design-session-library/index.html)。
-- **R-WORKSPACE-PRODUCT · 个人网盘 + 项目工作空间** — 将现有 `Files` 视为后台对象存储能力，调研面向用户的 Workspace / Projects / Drive 产品形态；覆盖每用户配额（5 GB 为待验证假设）、GitHub 导入/同步、持久开发空间、sandbox 挂载与保存、版本/回收站、容量核算和未来共享边界。先产出竞品证据、产品 IA、静态 HTML、架构比较及 ADR/contract 建议。完整任务书：[`research/workspace-product.md`](research/workspace-product.md)。
+- **R-WORKSPACE-PRODUCT · 个人网盘 + 项目工作空间** — ✅ **调研完成，待 owner 决策**。建议 Personal workspace 作为总容器，Projects + Drive 并列；Postgres 管规范元数据/配额/快照，MinIO 存租户隔离的不可变 blob；5 GiB 为部署可配置的个人默认值，另有 tenant/deployment 上限；sandbox 采用 snapshot-in、scratch/COW、reviewed change-set-out，Git remote 仅为可选 source，外部写继续审批。报告：[`research/workspace-product-report.md`](research/workspace-product-report.md)；静态稿：[`research/workspace-product-prototype/index.html`](research/workspace-product-prototype/index.html)。
 
 > **审批/对外写动作的归属（已下沉，不再是独立后置里程碑）**：通道无关基座（web 渲染器 + run 恢复 + 权限门）在 **v1 收尾**；各渠道审批渲染器随其渠道交付（QQ→里程碑4、邮件→里程碑5）；各类对外写动作随其系统落地（`send_email` 已在 v1；GitHub repo 写 → 里程碑7；等等），均复用同一审批基座。
 
