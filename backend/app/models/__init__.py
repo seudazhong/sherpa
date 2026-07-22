@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.models.analysis import Candidate, Extraction, Generation, Todo
 from app.models.audit import AuditReceipt
 from app.models.base import Base
+from app.models.channels import ChannelConfig, ChannelThreadState
 from app.models.connectors import Connector, ConnectorItem
 from app.models.core import (
     Identity,
@@ -50,4 +51,6 @@ __all__ = [
     "UserMemory",
     "MemoryPassage",
     "File",
+    "ChannelConfig",
+    "ChannelThreadState",
 ]
