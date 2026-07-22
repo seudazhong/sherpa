@@ -14,6 +14,17 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 RunState = Literal["queued", "running", "needs_attention", "completed", "failed", "interrupted"]
+ResumeState = Literal[
+    "ready",
+    "running",
+    "stale",
+    "approval",
+    "approval_expired",
+    "interrupted",
+    "effect_unknown",
+    "failed",
+    "archived",
+]
 
 
 class StrictModel(BaseModel):
@@ -34,21 +45,50 @@ class AuthSession(StrictModel):
     expires_at: datetime.datetime
 
 
-# --- Sessions, admissions, messages (api.md §3.2) ---
+# --- Sessions, admissions, messages (api.md §3.2, §10.1) ---
 class SessionCreate(StrictModel):
     title: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+
+
+class SessionMatch(StrictModel):
+    kind: Literal["title", "user_message", "assistant_message", "tool", "action"]
+    snippet: str
+    anchor_kind: Literal["message", "event", "audit", "session"]
+    anchor_id: str
+    additional_matches: int
 
 
 class SessionSummary(StrictModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
-    channel: Literal["web"]
+    channel: str
     umo_key: str
     title: str | None
+    resume_state: ResumeState
     latest_run_state: RunState | None
     last_message_preview: str | None
+    last_activity_at: datetime.datetime | None
     created_at: datetime.datetime
     updated_at: datetime.datetime
+    match: SessionMatch | None = None
+
+
+class SessionTitleUpdate(StrictModel):
+    title: Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class ResumeStateResponse(StrictModel):
+    session_id: uuid.UUID
+    resume_state: ResumeState
+    latest_run_state: RunState | None
+    live: bool
+    pending_approval_id: str | None
+    unresolved_effect_id: str | None
+    events_url: str
+
+
+class RecoverRequest(StrictModel):
+    action: Literal["recheck", "verified", "new_run"]
 
 
 class SessionPage(StrictModel):

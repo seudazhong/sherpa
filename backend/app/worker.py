@@ -26,6 +26,7 @@ from app.config import settings
 from app.connectors.gmail import build_gmail_sync_client
 from app.connectors.sync import sync_gmail
 from app.core import execute_run, resume_approval
+from app.core.lease import claim_run_lease, run_heartbeat, worker_identity
 from app.db import SessionLocal
 from app.events import append_event, relay_once
 from app.models import ApprovalEnvelope, Connector, Run
@@ -62,6 +63,7 @@ async def _settle_failed(
         run.status = "failed"
         run.started_at = run.started_at or now
         run.settled_at = now
+        run.lease_expires_at = None
         await session.flush()
         await append_event(
             session,
@@ -168,33 +170,39 @@ async def _deliver_qq_reply(
 
 async def run_job(ctx: dict[str, Any], run_id: str) -> str:
     """Execute one durable run. v1 commits at settle; per-turn commit is a later refinement."""
-    async with SessionLocal() as session:
-        run = (
-            await session.execute(select(Run).where(Run.id == uuid.UUID(run_id)))
-        ).scalar_one_or_none()
-        if run is None:
-            return "unknown_run"
-        tenant_id, rid, session_id = run.tenant_id, run.id, run.session_id
-        bind_context(
-            tenant_id=str(tenant_id),
-            run_id=str(rid),
-            session_id=str(session_id) if session_id is not None else None,
-        )
-        try:
-            reason = await execute_run(
-                session,
-                run=run,
-                provider=build_provider(),
-                registry=build_default_registry(),
-            )
-            await project_run_trace(session, tenant_id=tenant_id, run_id=rid)
-            await session.commit()
-            await _deliver_im_reply(rid)
-            return reason
-        except Exception:
-            await session.rollback()
-            await _settle_failed(tenant_id, rid, session_id)
-            return "failed"
+    rid = uuid.UUID(run_id)
+    # Phase 1: claim the run + take a liveness lease in an independent committed
+    # transaction so the run is visibly "running" and a dead worker is detectable
+    # as stale (ADR-029). The lease heartbeat then runs alongside execute_run.
+    try:
+        tenant_id, session_id = await claim_run_lease(rid, worker_identity())
+    except LookupError:
+        return "unknown_run"
+    bind_context(
+        tenant_id=str(tenant_id),
+        run_id=str(rid),
+        session_id=str(session_id) if session_id is not None else None,
+    )
+    async with run_heartbeat(rid):
+        async with SessionLocal() as session:
+            run = (await session.execute(select(Run).where(Run.id == rid))).scalar_one_or_none()
+            if run is None:
+                return "unknown_run"
+            try:
+                reason = await execute_run(
+                    session,
+                    run=run,
+                    provider=build_provider(),
+                    registry=build_default_registry(),
+                )
+                await project_run_trace(session, tenant_id=tenant_id, run_id=rid)
+                await session.commit()
+                await _deliver_im_reply(rid)
+                return reason
+            except Exception:
+                await session.rollback()
+                await _settle_failed(tenant_id, rid, session_id)
+                return "failed"
 
 
 async def _deliver_im_resume_ack(correlation_id: uuid.UUID, status: str) -> None:

@@ -17,6 +17,8 @@ onward without redefining the cursor format.
 from __future__ import annotations
 
 import dataclasses
+import datetime
+import re
 import uuid
 
 from sqlalchemy import func, select
@@ -26,6 +28,17 @@ from app.models import EventJournal, Message, Part, Run
 from app.models import Session as SessionModel
 
 PROMPT_VERSION = "chat.v1"
+
+_MARKDOWN = re.compile(r"[|#>*_`~\[\]()]+")
+_WS = re.compile(r"\s+")
+
+
+def _derive_title(text: str, limit: int = 80) -> str | None:
+    """A clean, bounded title from the first user message (no markdown noise)."""
+    cleaned = _WS.sub(" ", _MARKDOWN.sub(" ", text)).strip()
+    if not cleaned:
+        return None
+    return cleaned[: limit - 1] + "\u2026" if len(cleaned) > limit else cleaned
 
 
 class PromptConflict(Exception):
@@ -150,6 +163,10 @@ async def admit_prompt(
     sess = await session.get(SessionModel, (tenant_id, session_id))
     if sess is not None:
         sess.admitted_seq = seq
+        sess.last_activity_at = datetime.datetime.now(datetime.UTC)
+        # Derive a human title from the first user message when unset.
+        if sess.title is None:
+            sess.title = _derive_title(text)
         await session.flush()
 
     cursor = await _session_tail(session, tenant_id, session_id)

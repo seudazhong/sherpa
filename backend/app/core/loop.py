@@ -50,6 +50,16 @@ def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
 
+async def _touch_session_activity(  # type: ignore[no-untyped-def]
+    session, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> None:
+    """Advance sessions.last_activity_at so the Session Library can order by recency."""
+    sess = await session.get(Session, (tenant_id, session_id))
+    if sess is not None:
+        sess.last_activity_at = _now()
+        await session.flush()
+
+
 async def _next_seq(session, tenant_id: uuid.UUID, session_id: uuid.UUID) -> int:  # type: ignore[no-untyped-def]
     val = await session.scalar(
         select(func.coalesce(func.max(Message.seq), 0) + 1).where(
@@ -298,9 +308,11 @@ async def execute_run(  # type: ignore[no-untyped-def]
         select(Session.user_id).where(Session.tenant_id == tenant_id, Session.id == session_id)
     )
 
-    run.status = "running"
-    run.started_at = _now()
-    await session.flush()
+    # Note: the run row is intentionally NOT written here. The worker claims the
+    # run + lease in an independent committed transaction (app.core.lease) before
+    # calling this, so a mid-run heartbeat is never blocked by this long
+    # transaction's row lock. Direct callers (tests) simply see the run settle at
+    # the end. We still emit run.started as the first session event.
     await append_event(
         session,
         tenant_id=tenant_id,
@@ -309,6 +321,7 @@ async def execute_run(  # type: ignore[no-untyped-def]
         event_type="run.started",
         payload={"run_kind": run.run_kind},
     )
+    await _touch_session_activity(session, tenant_id, session_id)
 
     transcript = await assemble_provider_history(session, tenant_id, session_id)
     core_memory = await _load_core_memory(session, tenant_id, decider_user_id)
@@ -429,8 +442,11 @@ async def execute_run(  # type: ignore[no-untyped-def]
         reason = "stopped:budget"
 
     run.status = "succeeded"
+    run.started_at = run.started_at or _now()
     run.settled_at = _now()
+    run.lease_expires_at = None
     await session.flush()
+    await _touch_session_activity(session, tenant_id, session_id)
     await append_event(
         session,
         tenant_id=tenant_id,

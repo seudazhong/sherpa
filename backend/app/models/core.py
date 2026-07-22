@@ -120,6 +120,7 @@ class Session(Base):
     output_tokens_rollup: Mapped[int] = mapped_column(BigInteger, server_default="0")
     cost_usd_rollup: Mapped[Decimal] = mapped_column(Numeric(20, 8), server_default="0")
     last_activity_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    title: Mapped[str | None] = mapped_column(Text)
     created_at = _ts()
     updated_at = _ts()
 
@@ -146,6 +147,9 @@ class Run(Base):
     deadline_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     settled_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    worker_id: Mapped[str | None] = mapped_column(Text)
     error_redacted: Mapped[str | None] = mapped_column(Text)
     created_at = _ts()
     updated_at = _ts()

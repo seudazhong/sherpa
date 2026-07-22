@@ -1,60 +1,70 @@
-"""Session + message REST surface (api.md §3.2, §4.2).
+"""Session + message REST surface (api.md §3.2, §4.2, §10.1).
 
-- POST /sessions           create a web:chat session (Session + CSRF)
-- GET  /sessions           keyset-paginated session list (Session)
-- GET  /sessions/{id}/messages  redacted transcript page (Session)
+- POST  /sessions                     create a web:chat session (Session + CSRF)
+- GET   /sessions                     Session Library browse (Session)
+- PATCH /sessions/{id}/title          rename (Session + CSRF)
+- GET   /sessions/{id}/resume-state   truthful resume preflight (Session)
+- GET   /sessions/{id}/timeline       messages around a typed anchor (Session)
+- POST  /sessions/{id}/recover        state-specific reconciliation (Session + CSRF)
+- GET   /sessions/{id}/messages       redacted transcript page (Session)
 
-All queries are tenant-scoped from RequestContext; resources outside the
-authenticated tenant return 404 (never 403), per §2.1.
+All queries are scoped by tenant AND user (ADR-029); resources outside the
+authenticated owner return 404 (never 403), per §2.1.
 """
 
 from __future__ import annotations
 
-import base64
-import datetime
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import (
     MessagePage,
     PublicMessage,
     PublicMessagePart,
+    RecoverRequest,
+    ResumeStateResponse,
     SessionCreate,
     SessionPage,
     SessionSummary,
+    SessionTitleUpdate,
 )
 from app.auth import RequestContext, require_context, require_csrf
 from app.db import get_session
-from app.models import EventJournal, Message, Part, Run
+from app.models import EventJournal, Message, Part
 from app.models import Session as SessionModel
+from app.services import CallerContext, ServiceError
+from app.services import sessions as svc
 
 router = APIRouter(tags=["sessions"])
 
-_RUN_STATE = {
-    "queued": "queued",
-    "running": "running",
-    "succeeded": "completed",
-    "failed": "failed",
-    "cancelled": "interrupted",
-    "needs_reconciliation": "needs_attention",
-}
+
+def _caller(rc: RequestContext) -> CallerContext:
+    return CallerContext(tenant_id=rc.tenant_id, user_id=rc.user_id, actor="user")
 
 
-def _encode_cursor(created_at: datetime.datetime, sid: uuid.UUID) -> str:
-    return base64.urlsafe_b64encode(f"{created_at.isoformat()}|{sid}".encode()).decode()
+def _http(e: ServiceError) -> HTTPException:
+    return HTTPException(status_code=e.http_status, detail=e.code)
 
 
-def _decode_cursor(cursor: str) -> tuple[datetime.datetime, uuid.UUID]:
-    try:
-        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
-        ts, sid = raw.split("|", 1)
-        return datetime.datetime.fromisoformat(ts), uuid.UUID(sid)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="bad_cursor") from None
+def _summary(view: svc.SessionView) -> SessionSummary:
+    s = view.session
+    return SessionSummary(
+        id=s.id,
+        tenant_id=s.tenant_id,
+        channel=s.channel,
+        umo_key=s.umo_key,
+        title=s.title,
+        resume_state=view.resume_state,  # type: ignore[arg-type]
+        latest_run_state=view.latest_run_state,  # type: ignore[arg-type]
+        last_message_preview=view.last_message_preview,
+        last_activity_at=s.last_activity_at,
+        created_at=s.created_at,
+        updated_at=s.updated_at,
+    )
 
 
 async def _session_tail(db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID) -> int:
@@ -64,44 +74,6 @@ async def _session_tail(db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid
         )
     )
     return int(val or 0)
-
-
-async def _summary(db: AsyncSession, s: SessionModel) -> SessionSummary:
-    latest_status = await db.scalar(
-        select(Run.status)
-        .where(Run.tenant_id == s.tenant_id, Run.session_id == s.id)
-        .order_by(Run.created_at.desc())
-        .limit(1)
-    )
-    latest_state = _RUN_STATE.get(latest_status) if latest_status else None
-
-    preview_mid = await db.scalar(
-        select(Message.id)
-        .where(Message.tenant_id == s.tenant_id, Message.session_id == s.id)
-        .order_by(Message.seq.desc())
-        .limit(1)
-    )
-    preview = None
-    if preview_mid is not None:
-        content = await db.scalar(
-            select(Part.content_redacted).where(
-                Part.tenant_id == s.tenant_id, Part.message_id == preview_mid, Part.ordinal == 0
-            )
-        )
-        if content is not None:
-            preview = str(content.get("text", ""))[:140]
-
-    return SessionSummary(
-        id=s.id,
-        tenant_id=s.tenant_id,
-        channel="web",
-        umo_key=s.umo_key,
-        title=None,
-        latest_run_state=latest_state,  # type: ignore[arg-type]
-        last_message_preview=preview,
-        created_at=s.created_at,
-        updated_at=s.updated_at,
-    )
 
 
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
@@ -122,41 +94,165 @@ async def create_session_endpoint(
         scope_type="chat",
         external_scope_id=str(session_id),
         status="open",
+        title=body.title,
     )
     db.add(sess)
     await db.flush()
     await db.refresh(sess, ["created_at", "updated_at"])
+    view = await svc.get_view(db, _caller(ctx), session_id)
     await db.commit()
-    summary = await _summary(db, sess)
-    # SessionCreate.title is a UI hint; v1 has no title column, so echo it back only.
-    return summary.model_copy(update={"title": body.title})
+    return _summary(view)
 
 
 @router.get("/sessions")
 async def list_sessions(
     ctx: Annotated[RequestContext, Depends(require_context)],
     db: Annotated[AsyncSession, Depends(get_session)],
+    query: str | None = None,
+    session_status: Annotated[str | None, Query(alias="status")] = None,
+    channel: str | None = None,
     cursor: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> SessionPage:
-    stmt = (
-        select(SessionModel)
-        .where(SessionModel.tenant_id == ctx.tenant_id, SessionModel.user_id == ctx.user_id)
-        .order_by(SessionModel.created_at.desc(), SessionModel.id.desc())
-        .limit(limit + 1)
-    )
-    if cursor:
-        ts, sid = _decode_cursor(cursor)
-        stmt = stmt.where(tuple_(SessionModel.created_at, SessionModel.id) < (ts, sid))
+    # P0: browse (recent, filters). Content search (query=) lands in P1.
+    try:
+        page = await svc.browse(
+            db,
+            _caller(ctx),
+            status=session_status,
+            channel=channel,
+            cursor=cursor,
+            limit=limit,
+        )
+    except ServiceError as e:
+        raise _http(e) from None
+    return SessionPage(items=[_summary(v) for v in page.items], next_cursor=page.next_cursor)
 
-    rows = (await db.execute(stmt)).scalars().all()
-    next_cursor = None
-    if len(rows) > limit:
-        last = rows[limit - 1]
-        next_cursor = _encode_cursor(last.created_at, last.id)
-        rows = rows[:limit]
-    items = [await _summary(db, s) for s in rows]
-    return SessionPage(items=items, next_cursor=next_cursor)
+
+@router.patch("/sessions/{session_id}/title")
+async def rename_session(
+    session_id: uuid.UUID,
+    body: SessionTitleUpdate,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> SessionSummary:
+    try:
+        view = await svc.rename(db, _caller(ctx), session_id, body.title)
+        await db.commit()
+    except ServiceError as e:
+        raise _http(e) from None
+    return _summary(view)
+
+
+@router.get("/sessions/{session_id}/resume-state")
+async def resume_state(
+    session_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ResumeStateResponse:
+    try:
+        view = await svc.get_view(db, _caller(ctx), session_id)
+    except ServiceError as e:
+        raise _http(e) from None
+    tail = await _session_tail(db, ctx.tenant_id, session_id)
+    return ResumeStateResponse(
+        session_id=session_id,
+        resume_state=view.resume_state,  # type: ignore[arg-type]
+        latest_run_state=view.latest_run_state,  # type: ignore[arg-type]
+        live=view.live,
+        pending_approval_id=view.pending_approval_id,
+        unresolved_effect_id=view.unresolved_effect_id,
+        events_url=f"/sessions/{session_id}/events?cursor={tail}",
+    )
+
+
+@router.get("/sessions/{session_id}/timeline")
+async def session_timeline(
+    session_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+    anchor_kind: Annotated[str, Query()] = "session",
+    anchor_id: Annotated[str, Query()] = "",
+    before_turns: Annotated[int, Query(ge=0, le=100)] = 20,
+    after_turns: Annotated[int, Query(ge=0, le=100)] = 20,
+) -> MessagePage:
+    try:
+        msgs, _center = await svc.timeline(
+            db,
+            _caller(ctx),
+            session_id,
+            anchor_kind=anchor_kind,
+            anchor_id=anchor_id,
+            before_turns=before_turns,
+            after_turns=after_turns,
+        )
+    except ServiceError as e:
+        raise _http(e) from None
+    items = await _hydrate(db, ctx.tenant_id, session_id, msgs)
+    tail = await _session_tail(db, ctx.tenant_id, session_id)
+    return MessagePage(items=items, next_cursor=None, event_cursor=str(tail))
+
+
+@router.post("/sessions/{session_id}/recover", status_code=status.HTTP_202_ACCEPTED)
+async def recover_session(
+    session_id: uuid.UUID,
+    body: RecoverRequest,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ResumeStateResponse:
+    try:
+        view = await svc.recover(db, _caller(ctx), session_id, body.action)
+        await db.commit()
+    except ServiceError as e:
+        raise _http(e) from None
+    tail = await _session_tail(db, ctx.tenant_id, session_id)
+    return ResumeStateResponse(
+        session_id=session_id,
+        resume_state=view.resume_state,  # type: ignore[arg-type]
+        latest_run_state=view.latest_run_state,  # type: ignore[arg-type]
+        live=view.live,
+        pending_approval_id=view.pending_approval_id,
+        unresolved_effect_id=view.unresolved_effect_id,
+        events_url=f"/sessions/{session_id}/events?cursor={tail}",
+    )
+
+
+async def _hydrate(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    msgs: list[Message],
+) -> list[PublicMessage]:
+    parts_by_msg: dict[uuid.UUID, list[PublicMessagePart]] = {}
+    if msgs:
+        ids = [m.id for m in msgs]
+        parts = (
+            (
+                await db.execute(
+                    select(Part)
+                    .where(Part.tenant_id == tenant_id, Part.message_id.in_(ids))
+                    .order_by(Part.ordinal)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for p in parts:
+            parts_by_msg.setdefault(p.message_id, []).append(
+                PublicMessagePart(kind=p.kind, text=str(p.content_redacted.get("text", "")))  # type: ignore[arg-type]
+            )
+    return [
+        PublicMessage(
+            id=m.id,
+            session_id=session_id,
+            seq=m.seq,
+            role=m.role,  # type: ignore[arg-type]
+            parts=parts_by_msg.get(m.id, []),
+            run_id=m.run_id,
+            created_at=m.created_at,
+        )
+        for m in msgs
+    ]
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -172,7 +268,7 @@ async def list_messages(
             SessionModel.tenant_id == ctx.tenant_id, SessionModel.id == session_id
         )
     )
-    if owner is None:
+    if owner is None or owner != ctx.user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
 
     after_seq = 0
@@ -181,7 +277,7 @@ async def list_messages(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="bad_cursor")
         after_seq = int(cursor)
 
-    msgs = (
+    msgs = list(
         (
             await db.execute(
                 select(Message)
@@ -203,36 +299,6 @@ async def list_messages(
         next_cursor = str(msgs[limit - 1].seq)
         msgs = msgs[:limit]
 
-    parts_by_msg: dict[uuid.UUID, list[PublicMessagePart]] = {}
-    if msgs:
-        ids = [m.id for m in msgs]
-        parts = (
-            (
-                await db.execute(
-                    select(Part)
-                    .where(Part.tenant_id == ctx.tenant_id, Part.message_id.in_(ids))
-                    .order_by(Part.ordinal)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for p in parts:
-            parts_by_msg.setdefault(p.message_id, []).append(
-                PublicMessagePart(kind=p.kind, text=str(p.content_redacted.get("text", "")))  # type: ignore[arg-type]
-            )
-
-    items = [
-        PublicMessage(
-            id=m.id,
-            session_id=session_id,
-            seq=m.seq,
-            role=m.role,  # type: ignore[arg-type]
-            parts=parts_by_msg.get(m.id, []),
-            run_id=m.run_id,
-            created_at=m.created_at,
-        )
-        for m in msgs
-    ]
+    items = await _hydrate(db, ctx.tenant_id, session_id, msgs)
     tail = await _session_tail(db, ctx.tenant_id, session_id)
     return MessagePage(items=items, next_cursor=next_cursor, event_cursor=str(tail))
