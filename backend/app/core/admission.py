@@ -169,6 +169,12 @@ async def admit_prompt(
             sess.title = _derive_title(text)
         await session.flush()
 
+    # Inline session-search projection (ADR-029 P1): the user message + title are
+    # now searchable; the projection is a pure function of canonical rows.
+    from app.search import reindex_session
+
+    await reindex_session(session, tenant_id, session_id)
+
     cursor = await _session_tail(session, tenant_id, session_id)
     return Admission(
         session_id=session_id,

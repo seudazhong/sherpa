@@ -28,6 +28,7 @@ from app.api.schemas import (
     RecoverRequest,
     ResumeStateResponse,
     SessionCreate,
+    SessionMatch,
     SessionPage,
     SessionSummary,
     SessionTitleUpdate,
@@ -52,6 +53,15 @@ def _http(e: ServiceError) -> HTTPException:
 
 def _summary(view: svc.SessionView) -> SessionSummary:
     s = view.session
+    match = None
+    if view.match is not None:
+        match = SessionMatch(
+            kind=view.match.kind,  # type: ignore[arg-type]
+            snippet=view.match.snippet,
+            anchor_kind=view.match.anchor_kind,  # type: ignore[arg-type]
+            anchor_id=view.match.anchor_id,
+            additional_matches=view.match.additional_matches,
+        )
     return SessionSummary(
         id=s.id,
         tenant_id=s.tenant_id,
@@ -64,6 +74,7 @@ def _summary(view: svc.SessionView) -> SessionSummary:
         last_activity_at=s.last_activity_at,
         created_at=s.created_at,
         updated_at=s.updated_at,
+        match=match,
     )
 
 
@@ -114,16 +125,19 @@ async def list_sessions(
     cursor: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> SessionPage:
-    # P0: browse (recent, filters). Content search (query=) lands in P1.
+    # Non-empty query = content search (P1); empty = recent browse (P0).
     try:
-        page = await svc.browse(
-            db,
-            _caller(ctx),
-            status=session_status,
-            channel=channel,
-            cursor=cursor,
-            limit=limit,
-        )
+        if query and query.strip():
+            page = await svc.search_sessions(db, _caller(ctx), query, limit=limit)
+        else:
+            page = await svc.browse(
+                db,
+                _caller(ctx),
+                status=session_status,
+                channel=channel,
+                cursor=cursor,
+                limit=limit,
+            )
     except ServiceError as e:
         raise _http(e) from None
     return SessionPage(items=[_summary(v) for v in page.items], next_cursor=page.next_cursor)

@@ -447,6 +447,11 @@ async def execute_run(  # type: ignore[no-untyped-def]
     run.lease_expires_at = None
     await session.flush()
     await _touch_session_activity(session, tenant_id, session_id)
+    # Reindex the session's search projection now that assistant turns + tool
+    # events are persisted (ADR-029 P1). Pure function of canonical rows.
+    from app.search import reindex_session
+
+    await reindex_session(session, tenant_id, session_id)
     await append_event(
         session,
         tenant_id=tenant_id,

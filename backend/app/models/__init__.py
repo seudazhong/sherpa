@@ -22,6 +22,7 @@ from app.models.files import File
 from app.models.memory import MemoryPassage, UserMemory
 from app.models.observability import Trace
 from app.models.schedules import Schedule, ScheduleFiring
+from app.models.search import SessionSearchEntry
 from app.models.settings import UserSettings
 
 __all__ = [
@@ -53,4 +54,5 @@ __all__ = [
     "File",
     "ChannelConfig",
     "ChannelThreadState",
+    "SessionSearchEntry",
 ]

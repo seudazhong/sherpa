@@ -23,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.lease import run_is_live
 from app.models import ApprovalEnvelope, EffectInvocation, EventJournal, Message, Part, Run
 from app.models import Session as SessionModel
+from app.search import SearchHit
+from app.search import search as _search_index
 from app.services.context import CallerContext
 from app.services.errors import Invalid, NotFound
 
@@ -50,6 +52,7 @@ class SessionView:
     live: bool
     pending_approval_id: str | None
     unresolved_effect_id: str | None
+    match: SearchHit | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -227,6 +230,21 @@ async def browse(
     if status is not None:
         views = [v for v in views if v.resume_state == status]
     return SessionBrowsePage(items=views, next_cursor=next_cursor)
+
+
+async def search_sessions(
+    db: AsyncSession, ctx: CallerContext, query: str, *, limit: int = 30
+) -> SessionBrowsePage:
+    """Content search grouped by session (best match per session), tenant+user scoped."""
+    hits = await _search_index(db, ctx, query, limit=limit)
+    views: list[SessionView] = []
+    for hit in hits:
+        session = await db.get(SessionModel, (ctx.tenant_id, hit.session_id))
+        if session is None or session.user_id != ctx.user_id or session.status == "deleted":
+            continue
+        base = await _view(db, session)
+        views.append(dataclasses.replace(base, match=hit))
+    return SessionBrowsePage(items=views, next_cursor=None)
 
 
 async def _require_owned(
