@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sherpa Session Library</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="mobile-bar">
+      <button class="icon-button" aria-label="Open navigation">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="mobile-brand"><b>S</b><span>Sessions</span></div>
+      <div class="mobile-avatar">O</div>
+    </header>
+
+    <aside class="sidebar">
+      <a class="brand" href="#">
+        <span class="brand-mark">S</span>
+        <span><strong>Sherpa</strong><small>Personal agent</small></span>
+      </a>
+
+      <div class="workspace-card">
+        <i></i>
+        <span><strong>Personal workspace</strong><small>Private · self-hosted</small></span>
+      </div>
+
+      <nav>
+        <p>Workspace</p>
+        <a href="#"><span>◌</span> Chat</a>
+        <a href="#"><span>✉</span> Inbox</a>
+        <a class="active" href="#"><span>⌕</span> Sessions</a>
+        <a href="#"><span>▤</span> Activity</a>
+
+        <p>Organize</p>
+        <a href="#"><span>◷</span> Schedules</a>
+        <a href="#"><span>◈</span> Memory</a>
+        <a href="#"><span>▧</span> Workspace</a>
+
+        <p>Channels</p>
+        <a href="#"><span>◎</span> Messaging</a>
+        <a href="#"><span>⌁</span> Connectors</a>
+      </nav>
+
+      <div class="sidebar-spacer"></div>
+      <a class="settings-link" href="#"><span>⚙</span> Settings</a>
+      <div class="user-card">
+        <span class="avatar">O</span>
+        <span><strong>owner@localhost</strong><small>Workspace owner</small></span>
+        <button title="Sign out">↗</button>
+      </div>
+    </aside>
+
+    <main>
+      <section class="page-head">
+        <div>
+          <span class="eyebrow">History</span>
+          <h1>Sessions</h1>
+          <p>Find past work, inspect what happened, and continue from the right state.</p>
+        </div>
+        <button class="secondary-button">＋ New chat</button>
+      </section>
+
+      <section class="search-panel">
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input
+            id="session-search"
+            type="search"
+            placeholder="Search messages, tools, actions, and titles…"
+            autocomplete="off"
+          />
+          <kbd>⌘ K</kbd>
+        </label>
+        <div class="filter-row" aria-label="Session filters">
+          <button class="filter active" data-filter="all">All</button>
+          <button class="filter" data-filter="ready">Ready</button>
+          <button class="filter" data-filter="running">Running</button>
+          <button class="filter" data-filter="approval">Waiting for you</button>
+          <button class="filter" data-filter="attention">Needs attention</button>
+          <span class="filter-divider"></span>
+          <button class="filter subtle">Any channel⌄</button>
+          <button class="filter subtle">Any time⌄</button>
+        </div>
+      </section>
+
+      <section class="library">
+        <div class="results-pane">
+          <div class="pane-head">
+            <div>
+              <strong id="result-title">Recent sessions</strong>
+              <span id="result-count">7 sessions</span>
+            </div>
+            <button class="icon-more" aria-label="Result options">•••</button>
+          </div>
+
+          <div class="session-list" id="session-list">
+            <button
+              class="session-row active"
+              data-panel="ready"
+              data-status="ready"
+              data-search="session search architecture postgres fts trigram copilot hermes codex web chat"
+            >
+              <span class="row-top">
+                <span class="channel web">WEB</span>
+                <span class="state ready">Ready</span>
+                <time>12 min ago</time>
+              </span>
+              <strong>Design cloud session search</strong>
+              <span class="summary">Compared local agent persistence with Sherpa's event journal.</span>
+              <span class="match"
+                >…a rebuildable <mark>session search</mark> projection over Postgres…</span
+              >
+              <span class="row-foot"><b>3 matches</b><span>Architecture · claude-sonnet-4.6</span></span>
+            </button>
+
+            <button
+              class="session-row"
+              data-panel="approval"
+              data-status="approval"
+              data-search="send project update email approval waiting external action agentmail"
+            >
+              <span class="row-top">
+                <span class="channel email">@</span>
+                <span class="state approval">Waiting for you</span>
+                <time>46 min ago</time>
+              </span>
+              <strong>Send the project update</strong>
+              <span class="summary">Email request paused before an external action.</span>
+              <span class="match">…prepared <mark>send_email</mark> to team@example.com…</span>
+              <span class="row-foot"><b>1 match</b><span>Email · approval expires in 18m</span></span>
+            </button>
+
+            <button
+              class="session-row"
+              data-panel="attention"
+              data-status="attention"
+              data-search="github release sync effect unknown outcome reconcile action"
+            >
+              <span class="row-top">
+                <span class="channel qq">QQ</span>
+                <span class="state attention">Needs attention</span>
+                <time>Yesterday</time>
+              </span>
+              <strong>Sync release notes from GitHub</strong>
+              <span class="summary">The external effect may have happened before interruption.</span>
+              <span class="match">…outcome is <mark>unknown</mark>; no automatic retry was attempted…</span>
+              <span class="row-foot"><b>2 matches</b><span>QQ · effect reconciliation</span></span>
+            </button>
+
+            <button
+              class="session-row"
+              data-panel="running"
+              data-status="running"
+              data-search="gmail backlog analyze candidates running connector"
+            >
+              <span class="row-top">
+                <span class="channel web">WEB</span>
+                <span class="state running">Running</span>
+                <time>Now</time>
+              </span>
+              <strong>Analyze the Gmail backlog</strong>
+              <span class="summary">Scanning imported messages and extracting candidates.</span>
+              <span class="match">126 of 430 messages scanned · 4 candidates found</span>
+              <span class="row-foot"><b>Live</b><span>Connector analysis · last update 8s ago</span></span>
+            </button>
+
+            <button
+              class="session-row"
+              data-panel="interrupted"
+              data-status="attention"
+              data-search="interrupted safe checkpoint code analysis continue recovery"
+            >
+              <span class="row-top">
+                <span class="channel web">WEB</span>
+                <span class="state interrupted">Interrupted</span>
+                <time>2 days ago</time>
+              </span>
+              <strong>Refactor the connector service</strong>
+              <span class="summary">Stopped before the next tool call; the saved checkpoint is safe.</span>
+              <span class="match">…last completed turn persisted before worker shutdown…</span>
+              <span class="row-foot"><b>Safe recovery</b><span>Code task · checkpoint available</span></span>
+            </button>
+
+            <button
+              class="session-row"
+              data-panel="failed"
+              data-status="attention"
+              data-search="failed provider timeout review failure retry context"
+            >
+              <span class="row-top">
+                <span class="channel web">WEB</span>
+                <span class="state failed">Failed</span>
+                <time>3 days ago</time>
+              </span>
+              <strong>Summarize the quarterly backlog</strong>
+              <span class="summary">The model provider timed out after the transcript was saved.</span>
+              <span class="match">…run failed with provider_timeout after 120 seconds…</span>
+              <span class="row-foot"><b>1 failure</b><span>Transcript preserved</span></span>
+            </button>
+
+            <button
+              class="session-row"
+              data-panel="archived"
+              data-status="archived"
+              data-search="archived onboarding gmail setup old session restore"
+            >
+              <span class="row-top">
+                <span class="channel web">WEB</span>
+                <span class="state archived">Archived</span>
+                <time>Jul 10</time>
+              </span>
+              <strong>Initial Gmail onboarding</strong>
+              <span class="summary">Setup notes kept for reference but removed from recent work.</span>
+              <span class="match">…connected Gmail and completed the first incremental sync…</span>
+              <span class="row-foot"><b>Archived</b><span>Available until retention expiry</span></span>
+            </button>
+          </div>
+
+          <div class="empty-results" hidden>
+            <span>⌕</span>
+            <strong>No matching sessions</strong>
+            <p>Try a shorter keyword, another channel, or a wider date range.</p>
+          </div>
+        </div>
+
+        <div class="details-pane">
+          <article class="detail active" data-detail="ready">
+            <header class="detail-head">
+              <div>
+                <span class="eyebrow">Web · Architecture</span>
+                <h2>Design cloud session search</h2>
+                <p>Last active 12 minutes ago · 18 turns · 3 tool calls</p>
+              </div>
+              <button class="icon-more" aria-label="Session options">•••</button>
+            </header>
+
+            <div class="status-banner ready">
+              <span class="status-icon">✓</span>
+              <div><strong>Ready to continue</strong><p>The previous run settled successfully.</p></div>
+              <button class="primary-button">Resume session</button>
+            </div>
+
+            <div class="match-head">
+              <div><span class="eyebrow">Best match</span><strong>Turn 14 of 18</strong></div>
+              <div class="match-nav"><button>↑</button><span>1 / 3</span><button>↓</button></div>
+            </div>
+
+            <div class="timeline">
+              <div class="timeline-item user">
+                <span class="timeline-avatar">O</span>
+                <div>
+                  <span class="timeline-label">You · 4:28 PM</span>
+                  <p>
+                    For Sherpa as a cloud agent, should <mark>session search</mark> copy the local
+                    JSONL + SQLite design?
+                  </p>
+                </div>
+              </div>
+              <div class="timeline-item agent">
+                <span class="timeline-avatar sherpa">S</span>
+                <div>
+                  <span class="timeline-label">Sherpa · 4:31 PM</span>
+                  <p>
+                    Keep the architectural separation, not the file formats. Postgres remains
+                    canonical; a derived projection handles search and can be rebuilt.
+                  </p>
+                </div>
+              </div>
+              <div class="timeline-item tool">
+                <span class="timeline-avatar tool">⌁</span>
+                <div>
+                  <span class="timeline-label">Research · completed</span>
+                  <p>Compared Copilot CLI, Hermes, Codex, Claude Code, and Gemini CLI.</p>
+                  <button class="inline-button">Show research receipt</button>
+                </div>
+              </div>
+              <div class="timeline-item decision">
+                <span class="timeline-avatar decision">◆</span>
+                <div>
+                  <span class="timeline-label">Decision candidate</span>
+                  <p>
+                    Use a tenant-scoped Postgres search projection with lexical + trigram retrieval
+                    first; defer semantic retrieval.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <footer class="detail-foot">
+              <button class="secondary-button">Open full transcript</button>
+              <button class="quiet-button">Copy session link</button>
+              <span>Session ID hidden · available in details</span>
+            </footer>
+          </article>
+
+          <article class="detail" data-detail="approval">
+            <header class="detail-head">
+              <div>
+                <span class="eyebrow">Email · External action</span>
+                <h2>Send the project update</h2>
+                <p>Last active 46 minutes ago · approval expires in 18 minutes</p>
+              </div>
+              <button class="icon-more">•••</button>
+            </header>
+            <div class="status-banner approval">
+              <span class="status-icon">!</span>
+              <div>
+                <strong>Waiting for your approval</strong>
+                <p>No email has been sent. Review the recipient and content first.</p>
+              </div>
+              <button class="primary-button amber">Review approval</button>
+            </div>
+            <div class="approval-card">
+              <span class="eyebrow">Proposed action</span>
+              <h3>Send email to team@example.com</h3>
+              <dl>
+                <div><dt>Subject</dt><dd>Project status — July 22</dd></div>
+                <div><dt>Effect</dt><dd>External communication</dd></div>
+                <div><dt>Requested by</dt><dd>Owner over agentic email</dd></div>
+              </dl>
+              <div class="message-preview">
+                The session search research is complete. The proposed architecture keeps Postgres
+                canonical and adds a rebuildable search projection…
+              </div>
+            </div>
+            <footer class="detail-foot">
+              <button class="secondary-button">Open transcript</button>
+              <span>Opening is read-only; approval remains pending.</span>
+            </footer>
+          </article>
+
+          <article class="detail" data-detail="attention">
+            <header class="detail-head">
+              <div>
+                <span class="eyebrow">QQ · GitHub action</span>
+                <h2>Sync release notes from GitHub</h2>
+                <p>Interrupted yesterday · external outcome not confirmed</p>
+              </div>
+              <button class="icon-more">•••</button>
+            </header>
+            <div class="status-banner attention">
+              <span class="status-icon">?</span>
+              <div>
+                <strong>Outcome unknown</strong>
+                <p>Sherpa cannot prove whether the external action completed.</p>
+              </div>
+              <button class="primary-button danger">Resolve outcome</button>
+            </div>
+            <div class="recovery-card">
+              <span class="eyebrow">Last durable evidence</span>
+              <h3>GitHub request prepared</h3>
+              <p>
+                The worker stopped after sending the request but before persisting a response. It
+                will not retry automatically.
+              </p>
+              <div class="evidence-grid">
+                <div><span>Invocation</span><strong>gh-release-sync…91b</strong></div>
+                <div><span>Last update</span><strong>Yesterday, 6:42 PM</strong></div>
+                <div><span>Risk</span><strong>Duplicate release note</strong></div>
+              </div>
+            </div>
+            <footer class="detail-foot">
+              <button class="secondary-button">Check again</button>
+              <button class="quiet-button">I verified the outcome</button>
+              <span>A generic Resume action is intentionally unavailable.</span>
+            </footer>
+          </article>
+
+          <article class="detail" data-detail="running">
+            <header class="detail-head">
+              <div>
+                <span class="eyebrow">Web · Gmail connector</span>
+                <h2>Analyze the Gmail backlog</h2>
+                <p>Started 3 minutes ago · last update 8 seconds ago</p>
+              </div>
+              <button class="icon-more">•••</button>
+            </header>
+            <div class="status-banner running">
+              <span class="status-icon spinner"></span>
+              <div>
+                <strong>Run is active</strong>
+                <p>Reconnect to live progress without creating another run.</p>
+              </div>
+              <button class="primary-button">Reconnect</button>
+            </div>
+            <div class="progress-card">
+              <div class="progress-copy">
+                <strong>Extracting candidate actions</strong><span>126 / 430 messages</span>
+              </div>
+              <div class="progress-track"><i style="width: 29%"></i></div>
+              <div class="evidence-grid">
+                <div><span>Candidates</span><strong>4 found</strong></div>
+                <div><span>Queue</span><strong>Running now</strong></div>
+                <div><span>Connection</span><strong>Live</strong></div>
+              </div>
+            </div>
+            <footer class="detail-foot">
+              <button class="secondary-button">Open transcript</button>
+              <span>You can leave; this run is durable.</span>
+            </footer>
+          </article>
+
+          <article class="detail" data-detail="interrupted">
+            <header class="detail-head">
+              <div>
+                <span class="eyebrow">Web · Code task</span>
+                <h2>Refactor the connector service</h2>
+                <p>Interrupted 2 days ago · last completed turn is durable</p>
+              </div>
+              <button class="icon-more">•••</button>
+            </header>
+            <div class="status-banner interrupted">
+              <span class="status-icon">↻</span>
+              <div>
+                <strong>Interrupted safely</strong>
+                <p>No external effect was in progress. Continue from the last checkpoint.</p>
+              </div>
+              <button class="primary-button">Continue from checkpoint</button>
+            </div>
+            <div class="recovery-card">
+              <span class="eyebrow">Recovery checkpoint</span>
+              <h3>Service extraction complete</h3>
+              <p>
+                The new service module and REST adapter were saved. The next planned step was to
+                add tool parity tests.
+              </p>
+              <div class="evidence-grid">
+                <div><span>Last turn</span><strong>18 of 24</strong></div>
+                <div><span>Tool state</span><strong>No active tool</strong></div>
+                <div><span>Risk</span><strong>Low</strong></div>
+              </div>
+            </div>
+            <footer class="detail-foot">
+              <button class="secondary-button">Open transcript</button>
+              <span>Continuing creates a new run in the same session.</span>
+            </footer>
+          </article>
+
+          <article class="detail" data-detail="failed">
+            <header class="detail-head">
+              <div>
+                <span class="eyebrow">Web · Analysis</span>
+                <h2>Summarize the quarterly backlog</h2>
+                <p>Failed 3 days ago · transcript and tool receipts preserved</p>
+              </div>
+              <button class="icon-more">•••</button>
+            </header>
+            <div class="status-banner failed">
+              <span class="status-icon">×</span>
+              <div>
+                <strong>Run failed</strong>
+                <p>The provider timed out. No external action was attempted.</p>
+              </div>
+              <button class="primary-button danger">Review failure</button>
+            </div>
+            <div class="recovery-card">
+              <span class="eyebrow">Failure detail</span>
+              <h3>Provider timeout</h3>
+              <p>
+                The last model call exceeded its 120-second deadline. You can inspect the saved
+                context before deciding whether to continue.
+              </p>
+              <div class="evidence-grid">
+                <div><span>Saved messages</span><strong>31</strong></div>
+                <div><span>External effects</span><strong>None</strong></div>
+                <div><span>Retry risk</span><strong>Low</strong></div>
+              </div>
+            </div>
+            <footer class="detail-foot">
+              <button class="secondary-button">Open transcript</button>
+              <button class="quiet-button">Continue with a new message</button>
+            </footer>
+          </article>
+
+          <article class="detail" data-detail="archived">
+            <header class="detail-head">
+              <div>
+                <span class="eyebrow">Web · Setup</span>
+                <h2>Initial Gmail onboarding</h2>
+                <p>Archived July 10 · retained for reference</p>
+              </div>
+              <button class="icon-more">•••</button>
+            </header>
+            <div class="status-banner archived">
+              <span class="status-icon">□</span>
+              <div>
+                <strong>Archived session</strong>
+                <p>It is excluded from recent work but remains searchable.</p>
+              </div>
+              <button class="primary-button">Restore</button>
+            </div>
+            <div class="recovery-card">
+              <span class="eyebrow">Retention</span>
+              <h3>Available for 19 more days</h3>
+              <p>
+                Restoring returns this session to recent work. Permanent deletion removes it from
+                search and disables resume.
+              </p>
+            </div>
+            <footer class="detail-foot">
+              <button class="secondary-button">Open read-only</button>
+              <button class="quiet-button">Delete permanently</button>
+            </footer>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

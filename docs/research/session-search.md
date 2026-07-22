@@ -1,6 +1,12 @@
 # R-SESSION-SEARCH — Cloud session persistence, search, and resume
 
-**Status:** queued for research; no implementation approved.
+**Status:** research complete; recommendation awaiting owner decision. No implementation approved.
+
+## Outputs
+
+- [Research report and architecture recommendation](session-search-report.md)
+- [Static Session Library prototype](../design-session-library/index.html)
+- [Prototype notes](../design-session-library/README.md)
 
 ## Objective
 
