@@ -44,7 +44,7 @@
     <nav class="nav">
       <div class="nav-group">
         <span class="nav-label">Agent</span>
-        <button type="button" class="nav-item muted-item">
+        <button type="button" class="nav-item" data-screen-target="general-chat">
           <span class="nav-icon">C</span>
           Chat
         </button>
@@ -84,6 +84,10 @@
           <span class="nav-icon">F</span>
           Project detail
         </button>
+        <button type="button" class="nav-item" data-screen-target="project-chat">
+          <span class="nav-icon">C</span>
+          Project chat
+        </button>
         <button type="button" class="nav-item" data-screen-target="storage">
           <span class="nav-icon">Q</span>
           Quota states
@@ -118,6 +122,8 @@
           <option value="projects">Projects library</option>
           <option value="new-project">New / import project</option>
           <option value="project-detail">Project detail</option>
+          <option value="general-chat">General Chat</option>
+          <option value="project-chat">Project-bound Chat</option>
           <option value="drive">Drive</option>
           <option value="storage">Quota states</option>
           <option value="conflict">Git conflict</option>
@@ -185,7 +191,7 @@
           <div class="project-copy">
             <div class="row-between">
               <h3>Sherpa web</h3>
-              <span class="status warning">8 changes</span>
+              <span class="status warning">4 changes</span>
             </div>
             <p>GitHub source - main - last opened 18 min ago</p>
             <div class="project-meta">
@@ -309,7 +315,7 @@
         <div class="table-row project-columns">
           <span class="project-cell"><i class="project-icon green">S</i><span><strong>Sherpa web</strong><small>Customer workspace redesign</small></span></span>
           <span><strong>github/sherpa</strong><small>main</small></span>
-          <span><i class="status warning">8 changes</i></span>
+          <span><i class="status warning">4 changes</i></span>
           <span>124 MiB</span>
           <span>18 min ago</span>
           <button class="button quiet" type="button" data-screen-target="project-detail">Open</button>
@@ -428,8 +434,8 @@
         </div>
         <div class="header-actions">
           <button class="button" type="button">Fetch source</button>
-          <button class="button" type="button" data-screen-target="changes">Review 8 changes</button>
-          <button class="button primary" type="button">Open sandbox</button>
+          <button class="button" type="button" data-screen-target="changes">Review 4 changes</button>
+          <button class="button primary" type="button" data-screen-target="project-chat">Open in Chat</button>
         </div>
       </header>
 
@@ -437,7 +443,7 @@
         <span><strong>Source</strong><small>github.com/dazhongguo/sherpa</small></span>
         <span><strong>Branch</strong><small>main</small></span>
         <span><strong>Remote</strong><small>Up to date</small></span>
-        <span><strong>Project head</strong><small>8 staged changes</small></span>
+        <span><strong>Project head</strong><small>4 staged changes</small></span>
         <span><strong>Storage</strong><small>124 MiB</small></span>
       </div>
 
@@ -496,7 +502,7 @@ async def run_agent_job(ctx: dict[str, object], run_id: str) -> None:
           <div class="timeline">
             <div class="timeline-item current">
               <i></i>
-              <span><strong>Sandbox completed</strong><small>8 files changed - 18 min ago</small></span>
+              <span><strong>Sandbox completed</strong><small>4 files changed - 18 min ago</small></span>
             </div>
             <div class="timeline-item">
               <i></i>
@@ -511,6 +517,264 @@ async def run_agent_job(ctx: dict[str, object], run_id: str) -> None:
               <span><strong>Imported from GitHub</strong><small>Commit 5bf1189 - Jul 22</small></span>
             </div>
           </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="general-chat" hidden>
+      <header class="page-header general-chat-header">
+        <div>
+          <span class="eyebrow">General chat</span>
+          <h1>Ask without attaching a Project</h1>
+          <p>General Chat can discuss, plan, and use non-Project capabilities. It has no task working copy or sandbox-mounted Project tree.</p>
+        </div>
+        <label class="context-control general-context-control">
+          <span>Context</span>
+          <select aria-label="General chat context">
+            <option>General - no Project</option>
+            <option>Start a new chat for Sherpa web...</option>
+            <option>Start a new chat for Pricing calculator...</option>
+          </select>
+          <small>Selecting a Project starts a separate Project Chat.</small>
+        </label>
+      </header>
+
+      <div class="general-chat-layout">
+        <section class="card general-chat-main">
+          <div class="general-chat-empty">
+            <span class="general-chat-icon">S</span>
+            <span class="status neutral">No Project attached</span>
+            <h2>What would you like help with?</h2>
+            <p>Use General Chat for questions and planning. Open a Project Chat when Sherpa should read, edit, or test a specific Project.</p>
+            <div class="general-suggestions">
+              <button type="button">Summarize today's activity</button>
+              <button type="button">Help me plan a new application</button>
+              <button type="button">Review my upcoming reminders</button>
+            </div>
+            <button class="button primary" type="button" data-screen-target="project-chat">Start a Project Chat</button>
+          </div>
+          <div class="project-composer general-composer">
+            <div class="composer-context">
+              <span class="context-chip subtle">General - no Project</span>
+            </div>
+            <label>
+              <span class="sr-only">Message Sherpa</span>
+              <textarea rows="3" placeholder="Ask Sherpa anything..."></textarea>
+            </label>
+            <div class="composer-footer">
+              <span>No Project files or task working copy are available in this chat.</span>
+              <button class="button primary" type="button">Send</button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="card general-chat-boundary">
+          <span class="section-label">Current boundary</span>
+          <h2>General capabilities only</h2>
+          <dl class="context-facts">
+            <div><dt>Project binding</dt><dd>None</dd></div>
+            <div><dt>Working copy</dt><dd>Not created</dd></div>
+            <div><dt>Project sandbox</dt><dd>Unavailable</dd></div>
+            <div><dt>Switch behavior</dt><dd>New chat</dd></div>
+          </dl>
+          <div class="deferred-note">
+            <strong>Project identity never changes silently</strong>
+            <span>Choosing a Project creates a new transcript with its own context and pending work.</span>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="project-chat" hidden>
+      <header class="page-header project-chat-header">
+        <div>
+          <button class="back-link" type="button" data-screen-target="project-detail">Sherpa web</button>
+          <span class="eyebrow">Project chat</span>
+          <h1>Build in Sherpa web</h1>
+          <p>This conversation is bound to one Project. Pending work survives across turns even when its sandbox container does not.</p>
+        </div>
+        <div class="chat-context-controls">
+          <label class="context-control">
+            <span>Project context</span>
+            <select aria-label="Project context">
+              <option>Sherpa web</option>
+              <option>Start a new chat for Pricing calculator...</option>
+              <option>Start a new chat for Research tools...</option>
+            </select>
+            <small>Choosing another Project starts a new chat.</small>
+          </label>
+          <span class="status success">Working copy open</span>
+        </div>
+      </header>
+
+      <div class="project-chat-layout">
+        <section class="card project-chat-main" aria-label="Project chat conversation">
+          <div class="chat-binding-banner">
+            <span class="binding-icon">P</span>
+            <span>
+              <strong>Bound to Sherpa web</strong>
+              <small>Base checkpoint "Workspace shell" - Project head stays unchanged until Save.</small>
+            </span>
+            <span class="status neutral">Edits and tests allowed</span>
+          </div>
+
+          <div class="prototype-chat-thread">
+            <article class="chat-message user-message">
+              <span class="chat-avatar user-avatar">D</span>
+              <div class="chat-bubble">
+                <p>Update the Workspace navigation and make sure the mobile drawer still works.</p>
+              </div>
+            </article>
+
+            <article class="chat-message assistant-message">
+              <span class="chat-avatar agent-avatar">S</span>
+              <div class="chat-bubble">
+                <p>I will work in this chat's isolated task working copy, update the navigation, and run the available offline checks.</p>
+              </div>
+            </article>
+
+            <article class="sandbox-run-card">
+              <div class="run-card-head">
+                <span>
+                  <span class="section-label">Sandbox run</span>
+                  <strong>Workspace navigation update</strong>
+                </span>
+                <span class="status success">Completed</span>
+              </div>
+              <div class="run-steps">
+                <div class="run-step done">
+                  <i>1</i>
+                  <span><strong>Working copy loaded</strong><small>Materialized from checkpoint "Workspace shell"</small></span>
+                </div>
+                <div class="run-step done">
+                  <i>2</i>
+                  <span><strong>Scratch volume mounted</strong><small>Writable cache only - Project head not mounted</small></span>
+                </div>
+                <div class="run-step done">
+                  <i>3</i>
+                  <span><strong>4 files updated</strong><small>Sidebar.tsx, WorkspaceView.tsx, styles.css, FilesView.tsx</small></span>
+                </div>
+                <div class="run-step done">
+                  <i>4</i>
+                  <span><strong>Offline checks passed</strong><small>Manifest, route-reference, and diff validation</small></span>
+                </div>
+                <div class="run-step durable">
+                  <i>5</i>
+                  <span><strong>Working copy persisted</strong><small>Safe to destroy and rebuild the container</small></span>
+                </div>
+              </div>
+              <div class="run-card-footer">
+                <span>Container is idle and may stay warm for 12 minutes.</span>
+                <span>Network off - no credentials mounted</span>
+              </div>
+            </article>
+
+            <article class="chat-message assistant-message">
+              <span class="chat-avatar agent-avatar">S</span>
+              <div class="chat-bubble result-bubble">
+                <span class="status success">Ready to review</span>
+                <h2>The navigation update is staged</h2>
+                <p>Four files changed and the offline checks passed. The saved Project is still unchanged.</p>
+                <div class="result-facts">
+                  <span><strong>4 files</strong><small>Pending</small></span>
+                  <span><strong>+284 -61</strong><small>Line changes</small></span>
+                  <span><strong>18.4 MiB</strong><small>Reserved candidates</small></span>
+                </div>
+                <div class="result-actions">
+                  <button class="button" type="button">Continue working</button>
+                  <button class="button primary" type="button" data-screen-target="changes">Review changes</button>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div class="project-composer">
+            <div class="composer-context">
+              <span class="context-chip">Project: Sherpa web</span>
+              <span class="context-chip subtle">Edits and tests allowed</span>
+            </div>
+            <label>
+              <span class="sr-only">Message Sherpa about this Project</span>
+              <textarea rows="3" placeholder="Continue working in this Project..."></textarea>
+            </label>
+            <div class="composer-footer">
+              <span>Sherpa continues from the durable working copy, not from a particular container.</span>
+              <button class="button primary" type="button">Send</button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="project-chat-aside">
+          <article class="card context-card">
+            <div class="context-card-head">
+              <span>
+                <span class="section-label">Project context</span>
+                <h2>Sherpa web</h2>
+              </span>
+              <span class="project-icon green">S</span>
+            </div>
+            <dl class="context-facts">
+              <div><dt>Saved head</dt><dd>Workspace shell</dd></div>
+              <div><dt>Source</dt><dd>github/sherpa</dd></div>
+              <div><dt>Branch</dt><dd>main</dd></div>
+              <div><dt>Storage</dt><dd>124 MiB</dd></div>
+            </dl>
+          </article>
+
+          <article class="card context-card working-copy-card">
+            <div class="context-card-head">
+              <span>
+                <span class="section-label">Task working copy</span>
+                <h2>Durable pending state</h2>
+              </span>
+              <span class="status warning">Open</span>
+            </div>
+            <div class="working-copy-chain" aria-label="Project state hierarchy">
+              <span><i>1</i><strong>Saved head</strong><small>Workspace shell</small></span>
+              <b></b>
+              <span class="active"><i>2</i><strong>Working copy</strong><small>4 files pending</small></span>
+              <b></b>
+              <span><i>3</i><strong>Scratch cache</strong><small>Rebuildable</small></span>
+            </div>
+            <dl class="context-facts">
+              <div><dt>Last persisted</dt><dd>Just now</dd></div>
+              <div><dt>Base snapshot</dt><dd>Workspace shell</dd></div>
+              <div><dt>Chat isolation</dt><dd>Single writer</dd></div>
+              <div><dt>Idle retention</dt><dd>7 days</dd></div>
+            </dl>
+          </article>
+
+          <article class="card context-card">
+            <div class="context-card-head">
+              <span>
+                <span class="section-label">Sandbox runtime</span>
+                <h2>Idle - warm cache</h2>
+              </span>
+              <span class="runtime-dot" aria-hidden="true"></span>
+            </div>
+            <div class="runtime-grid">
+              <span><strong>Container</strong><small>Replaceable</small></span>
+              <span><strong>Warm TTL</strong><small>12 min</small></span>
+              <span><strong>Network</strong><small>Off</small></span>
+              <span><strong>Credentials</strong><small>None</small></span>
+            </div>
+            <p class="context-note">If the container disappears, Sherpa rematerializes the same working copy into a fresh scratch volume.</p>
+          </article>
+
+          <article class="card context-card executor-card">
+            <div class="context-card-head">
+              <span>
+                <span class="section-label">Initial executor</span>
+                <h2>Sherpa built-in tools</h2>
+              </span>
+              <span class="status success">In scope</span>
+            </div>
+            <p>Project read/write, sandbox commands, and existing test tools run through Sherpa's bounded loop.</p>
+            <div class="deferred-note">
+              <strong>Specialist coding agents are deferred</strong>
+              <span>No Copilot CLI or other model-driven coding process is embedded in this first sandbox design.</span>
+            </div>
+          </article>
         </aside>
       </div>
     </section>
@@ -727,7 +991,7 @@ async def run_agent_job(ctx: dict[str, object], run_id: str) -> None:
         <article class="card branch-card">
           <span class="section-label">Project head</span>
           <h2>2 local snapshots ahead</h2>
-          <p>8 files changed since source commit <code>5bf1189</code>.</p>
+          <p>4 files changed since source commit <code>5bf1189</code>.</p>
           <div class="commit">
             <i></i>
             <span><strong>Workspace shell</strong><small>Checkpoint - 18 min ago</small></span>
@@ -814,17 +1078,17 @@ async def run_agent_job(ctx: dict[str, object], run_id: str) -> None:
       </header>
 
       <div class="change-summary">
-        <article class="metric"><strong>8</strong><span>Files changed</span></article>
+        <article class="metric"><strong>4</strong><span>Files changed</span></article>
         <article class="metric"><strong>+284 -61</strong><span>Line changes</span></article>
-        <article class="metric"><strong>18.4 MiB</strong><span>New durable bytes</span></article>
-        <article class="metric"><strong>2</strong><span>Candidate artifacts</span></article>
+        <article class="metric"><strong>18.4 MiB</strong><span>Reserved candidate bytes</span></article>
+        <article class="metric"><strong>1</strong><span>Candidate artifact</span></article>
       </div>
 
       <div class="review-layout">
         <aside class="card changed-files">
           <div class="tree-head">
             <span class="section-label">Changed files</span>
-            <span>8 selected</span>
+            <span>4 selected</span>
           </div>
           <label class="change-file active">
             <input type="checkbox" checked>
@@ -878,7 +1142,7 @@ async def run_agent_job(ctx: dict[str, object], run_id: str) -> None:
       <article class="card save-panel">
         <div>
           <span class="section-label">Save boundary</span>
-          <h2>Apply 7 selected files to the Project</h2>
+          <h2>Apply 4 selected files to the Project</h2>
           <p>This creates a new immutable snapshot. The base snapshot has not changed since the sandbox started.</p>
         </div>
         <label class="checkpoint-option">
@@ -888,7 +1152,7 @@ async def run_agent_job(ctx: dict[str, object], run_id: str) -> None:
         <div class="save-actions">
           <button class="button danger-outline" type="button">Discard all</button>
           <button class="button" type="button">Keep selected artifacts</button>
-          <button class="button primary" type="button" data-screen-target="project-detail">Save 7 files</button>
+          <button class="button primary" type="button" data-screen-target="project-detail">Save 4 files</button>
         </div>
       </article>
     </section>

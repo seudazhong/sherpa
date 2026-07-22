@@ -1,6 +1,6 @@
 # R-WORKSPACE-PRODUCT — Research and design recommendation
 
-**Status:** research complete; ready for owner decision. No implementation is approved by this document.
+**Status:** research complete. The Project-bound Chat and sandbox-lifecycle direction was owner-confirmed on 2026-07-22; no implementation is approved by this document.
 
 **Date:** 2026-07-22
 
@@ -14,12 +14,14 @@
 | Meaning of Project | A durable Sherpa-owned development state with a file tree, snapshots, activity, optional source binding, and sandbox actions. A Git repository is an optional source, not the Project identity or source of truth. |
 | Meaning of Drive | General private documents, uploads, generated exports, and reusable assets. Drive is never mounted wholesale into a sandbox. |
 | Execution term | Keep **Sandbox** for the ephemeral compute layer. Do not reuse the overloaded word "workspace" for a container or run. |
+| Project Chat | A chat is either General or bound to exactly one Project. Selecting another Project starts a new chat; there is no global "development mode" that silently changes the current session. |
 | Navigation | Future-state routes: `/work` (overview), `/work/projects`, and `/work/drive`. Keep API prefixes separate from SPA routes. |
 | Canonical stores | Postgres owns metadata, ownership, quota, versions, snapshots, sync state, and change sets. MinIO owns immutable bytes. Redis remains an accelerator only. |
 | Storage architecture | Extend the logical metadata tree with immutable, tenant-scoped blob records and project snapshots. Do not introduce a separate durable Git store. This is Option 1 with a deliberate path toward Option 3, not a full Merkle-tree platform on day one. |
 | Quota | Deployment-configured **5 GiB per personal user** is a reasonable default, not a schema constant. Enforce a tenant limit and a deployment hard ceiling as well. |
 | Accounting | Charge each owner once per distinct durable blob they reference. Multiple snapshots or versions pointing at unchanged bytes do not multiply usage. No deduplication credit crosses user or tenant boundaries. |
-| Sandbox durability | **Immutable snapshot in, scratch copy/COW layer, reviewed change set out.** Only an explicit Save advances the Project head. |
+| Sandbox durability | Persist the **task working copy**, not the container. Project snapshot + durable working-copy overlay are authoritative; scratch volume and warm container are disposable caches. Only an explicit Save advances Project head. |
+| Initial coding executor | Use Sherpa's built-in Project/file/sandbox tools only. Embedded coding agents or CLI adapters are explicitly deferred until the native Project Chat flow is proven. |
 | Git synchronization | Fetch may update remote status but never overwrite local durable state. Apply remote changes explicitly; surface divergence/conflicts. Push, remote branch creation, and PR creation are external writes and require approval. No force push in the first implementation. |
 | First implementation increment | Ship the Workspace shell plus a correct Drive foundation: quota/reservations, folders, versions, trash, search/sort, storage management, UI, and agent tools. Do not expose Projects navigation until the Project slice is real. |
 
@@ -84,6 +86,9 @@ All sources in this section are first-party documentation accessed 2026-07-22.
 | Project | A named durable development state with a file tree, snapshots, optional source binding, activity, and sandbox actions | A remote repository alone |
 | Source | Optional external origin/binding, initially GitHub repository + branch | Canonical Project state |
 | Sandbox | A temporary isolated execution environment materialized from one Project snapshot | Durable storage |
+| Project Chat | A session whose immutable context binding identifies one Project. `project_id = null` means General chat. | A mode that can silently switch the current conversation between projects |
+| Task working copy | Durable pending Project state owned by one Project Chat, based on one saved snapshot and reusable across turns | The canonical Project head |
+| Scratch volume | A node-local materialization/cache of a task working copy, mounted read-write into a sandbox | The only copy of pending work |
 | Change set | The bounded, reviewable output of a sandbox run | An already-applied mutation |
 | Checkpoint | A pinned Project snapshot that can be restored | A running container or Git credential bundle |
 | Artifact | A retained run output. It belongs to the Project until explicitly copied or exported to Drive. | Every temporary build cache or log |
@@ -117,6 +122,11 @@ The existing `/workspace` SPA route should redirect to `/work/drive` only when t
 - A Drive item can be copied into a Project, but the copy becomes Project-owned state with independent lifecycle.
 - A Project artifact can be retained inside the Project or explicitly exported to Drive.
 - Linking a Drive item to a Project does not make the whole Drive visible to the sandbox.
+- A chat is created as General or Project-bound. After the first admitted message, its `project_id` is immutable; choosing another Project creates a new chat.
+- Selecting a Project is the development context. Do not add a second global "normal/development" mode switch. A narrower `Plan only | Allow edits and tests` policy may control mutations without changing Project identity.
+- A Project Chat creates its task working copy lazily on the first mutating action. The Project head remains unchanged until Save.
+- Separate Project Chats use separate task working copies even when they target the same Project.
+- The initial Project Chat executor is Sherpa itself through built-in tools. Embedded Copilot CLI, Claude Code, or other coding-agent processes are not part of the first increment.
 - Search may be federated on Workspace home, but results retain their domain label and open in Drive or Project context.
 - Trash is domain-aware: Drive items and deleted Projects can share a Storage management view while preserving different restore semantics.
 - The static prototype shows the full future state. Production navigation must not expose Projects until the corresponding service, UI, tools, and lifecycle are implemented.
@@ -158,17 +168,23 @@ This is the recommended first implementation increment.
 - Projects library and Project detail.
 - Blank Project, template, uploaded archive, and one-time GitHub branch import.
 - Project file tree, activity, storage usage, source metadata, and snapshots.
+- **Open in Chat** creates a new Project-bound session. The project binding is visible in the chat header and cannot change in-place.
+- The first W2 Project Chat may read/discuss the Project without creating a task working copy.
 - GitHub import materializes the selected branch head and records the source commit. It does not retain or charge the full remote history by default.
 - No background merge, push, force push, submodules, or live preview.
 
-### Increment W3 — Sandbox change review
+### Increment W3 — Project Chat working copy and sandbox change review
 
-- Materialize one immutable Project snapshot into a per-run scratch checkout.
-- Run the current network-disabled hardened sandbox against that scratch state.
-- Persist a bounded change set and artifact manifest.
+- On the first mutating turn, create a durable task working copy based on the current Project snapshot.
+- Materialize that working copy into a scratch volume and run the current network-disabled hardened sandbox against it.
+- Persist the working-copy overlay after each bounded tool batch, before waiting for user input, and before sandbox teardown.
+- A container may remain warm for a short configurable idle TTL, but it is never authoritative and may be killed at any time.
+- Persist a bounded change set and artifact manifest relative to the saved Project head.
+- Dependency installation/resolution is not part of W3. Commands run only with runtimes/tools already present in the approved base image and dependencies already present in the Project snapshot; otherwise the run stops with an explicit `environment_missing_dependencies` result.
 - Review added/modified/deleted files and artifacts.
 - Save selected changes, optionally pin a checkpoint, or discard the change set.
 - Reject save if the Project head moved since the run base unless the changes can be safely rebased and reviewed again.
+- Use Sherpa's built-in file/edit/run/test tools only. Do not embed a specialist coding agent in W3.
 
 ### Increment W4 — GitHub synchronization and external writes
 
@@ -183,6 +199,7 @@ This is the recommended first implementation increment.
 - Fork automation, submodules, Git LFS, multiple remotes, full-history mirrors.
 - Network-enabled development environments, dependency installation policy, prebuilds, live previews, and long-running services.
 - Team/shared Drive, Project transfer, roles, pooled quota, and collaboration.
+- Embedded coding-agent executors (for example CLI-based coding agents), multi-agent delegation, and provider-specific authentication/streaming adapters.
 - Cross-tenant physical deduplication, storage tiering, and compliance retention.
 
 ## 5. Architecture comparison
@@ -285,6 +302,24 @@ Names are proposed, not frozen. Every table carries `tenant_id` and composite ke
 
 - retained build outputs/logs/previews selected by the user; ephemeral run output is not durable quota until retained.
 
+### 6.5 Project-bound Chat and working state
+
+`sessions.project_id` (proposed contract extension)
+
+- nullable: `null` means General chat;
+- immutable after the first admitted user message;
+- Project access is checked when creating the session and on every Project operation;
+- changing Project creates a new session rather than mutating transcript/tool context in-place.
+
+`project_working_copies`
+
+- one durable pending state owned by a Project Chat and Project;
+- fields include `project_id`, `session_id`, `base_snapshot_id`, overlay/manifest reference, quota reservation, optimistic version, single-writer fence token, last persisted event/turn, and timestamps;
+- states: `open | ready_for_review | saved | discarded | conflicted | expired`;
+- multiple chats may target one Project, but their working copies never share a writable scratch tree.
+
+Sandbox executions reuse the existing durable `runs`/event journal and link to a working copy. A Docker container ID, local volume path, or warm-cache lease is operational metadata only and is never the recovery source of truth.
+
 ## 7. Quota and accounting semantics
 
 ### 7.1 Three ceilings
@@ -368,6 +403,8 @@ Recommended policy defaults, all deployment-configurable:
 - trash retention: 30 days;
 - unpinned version retention: 30 days with a count cap;
 - pinned checkpoints retained until explicitly unpinned/deleted;
+- open task working-copy idle retention: an initial 7-day hypothesis with warning before expiry;
+- a working-copy reservation may not expire independently while the working copy remains `open`. Idle expiry atomically transitions the working copy to `expired`, releases reserved quota, and enqueues overlay cleanup;
 - trash and history count toward quota;
 - do not silently purge unexpired trash merely because a user is full. Block new durable writes, explain the categories, and offer explicit cleanup. Deployment emergency policy is separate and must be visible to the operator.
 
@@ -452,43 +489,89 @@ GitHub import should be shallow by default. Remote history and clone caches are 
 - The sync worker may decrypt credentials; the sandbox, Project tree, prompt, logs, and tool results may not receive them.
 - Branch protection and rulesets are surfaced as product guidance, not raw Git errors ([GitHub protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)).
 
-## 10. Sandbox durability semantics
+## 10. Project Chat and sandbox durability semantics
 
-### 10.1 Snapshot in
+### 10.1 Authoritative state hierarchy
 
-- Select one Project and one immutable base snapshot.
-- Materialize only that Project, or a declared sparse subset, into a fresh scratch checkout.
-- W3 adds one writable scratch mount plus a post-run tree/diff extraction path to the current sandbox. This intentionally supersedes ADR-025's present "no workspace mount" exclusion while preserving its network, identity, capability, rootfs, and resource limits.
-- Do not mount the canonical Project bytes read-write.
-- Do not mount Drive, other Projects, MinIO credentials, Git credentials, connector credentials, or tool-output spill.
-- Keep the current network-disabled sandbox for the first Project execution increment.
+```text
+Project head snapshot          durable, saved, user-visible
+        |
+        v
+Task working copy              durable pending overlay, spans chat turns
+        |
+        v materialize / rebuild
+Scratch volume                 node-local cache, replaceable
+        |
+        v mount
+Sandbox container              ephemeral process boundary, optional warm TTL
+```
 
-OpenHands explicitly warns that any read-write mount can be modified by the agent ([Docker sandbox](https://docs.openhands.dev/openhands/usage/sandboxes/docker)); therefore Sherpa must mount a disposable scratch copy, not its source of truth.
+The system maintains the task working copy, not a particular container. A running container improves latency; it is never required for correctness or recovery.
 
-### 10.2 Change set out
+### 10.2 Project-bound Chat lifecycle
 
-After execution:
+1. Create a General chat (`project_id = null`) or a Project Chat bound to one immutable `project_id`.
+2. The Project Chat initially reads from the current Project head. The first mutating action atomically creates a task working copy with `base_snapshot_id = current_snapshot_id`.
+3. Acquire the working copy's single-writer lease/fence token and materialize `base snapshot + persisted overlay` into a fresh scratch volume.
+4. Launch a hardened sandbox with only that scratch volume mounted read-write. W3 intentionally supersedes ADR-025's present "no workspace mount" exclusion while preserving its network, identity, capability, rootfs, and resource limits.
+5. After each bounded tool batch, before asking/waiting for the user, and before teardown, capture the scratch delta and persist it into the working copy. A run is not reported as successfully durable until this boundary completes.
+6. A container may remain warm for a short configurable idle TTL (an initial 10–20 minute hypothesis) and reuse the scratch cache. Expiry, crash, worker restart, or host loss simply triggers rematerialization from the durable working copy.
+7. Continue turns reuse the same working copy. Save/checkpoint/discard closes or advances it; switching Project always creates a new chat and working copy.
 
-- compare scratch state with the immutable base snapshot;
+OpenHands explicitly warns that any read-write mount can be modified by the agent ([Docker sandbox](https://docs.openhands.dev/openhands/usage/sandboxes/docker)); therefore Sherpa mounts a disposable scratch copy, never its source of truth.
+
+### 10.3 Persistence boundary
+
+| Class | Examples | Rule |
+|---|---|---|
+| Durable authority | base snapshot, working-copy overlay/manifest, file operations, quota reservation, test/action receipts, run events | Persist in Postgres/MinIO/event journal; sufficient to rebuild |
+| Rebuildable cache | materialized scratch tree, dependency/package cache, prepared image keyed by environment/lockfiles | Bounded, evictable, never the only copy |
+| Never persisted as workspace state | PIDs, RAM, sockets, open shell sessions, temporary rootfs, model/Git/storage credentials | Lost on teardown; secrets never enter Project files/checkpoints |
+
+Long-running dev servers, hosted previews, and process resurrection are later capabilities. The first increment persists file state and receipts only.
+
+### 10.4 Concurrency and recovery
+
+- One working copy has one active writer lease/fence token. A stale sandbox cannot publish a later overlay.
+- Multiple Project Chats for the same Project receive isolated working copies.
+- Save uses compare-and-set against `base_snapshot_id/current_snapshot_id`; a moved Project head produces a conflict/review flow.
+- Container or node loss resumes from the last persisted working-copy boundary. Unpersisted scratch writes are not presented as completed work.
+- Package caches and warm containers may improve recovery time but cannot change the resulting file tree or permission boundary.
+
+### 10.5 Change set out
+
+After each execution boundary:
+
+- compare scratch state with the persisted working copy and saved base;
 - reject path escape, unsafe symlinks, devices, sockets, and `.git` credential/config leakage;
 - bound changed-file count, changed bytes, total artifact bytes, and diff/output size;
 - reserve quota for proposed new durable bytes;
-- persist a `project_change_set` with added/modified/deleted files and candidate artifacts;
-- tear down the container and scratch environment after capture.
+- persist the working-copy overlay and project change-set projection;
+- stop or warm-idle the container according to policy.
 
-### 10.3 User actions
+### 10.6 User actions
 
 | Action | Effect |
 |---|---|
-| Save selected | Apply reviewed file operations and advance Project head to a new snapshot |
-| Save and checkpoint | Save, then pin the resulting snapshot with a name/note |
+| Continue | Keep the durable working copy open for later chat turns; container reuse is optional |
+| Save selected | Apply reviewed working-copy operations and advance Project head to a new snapshot |
+| Save and checkpoint | Save, then pin the resulting snapshot with a name/note; the chat may start a fresh working copy from the new head |
 | Keep artifact | Retain selected output under Project artifacts and charge durable quota |
 | Export to Drive | Copy a retained artifact/file into Drive through the Drive service |
-| Discard | Delete staged change-set bytes and release the reservation; Project head is unchanged |
+| Discard | Delete the working-copy overlay/staged bytes and release the reservation; Project head is unchanged |
 
 If the Project head changed after the sandbox started, Save must fail with a conflict or produce a newly reviewed rebase/merge change set. It must never apply against the wrong base.
 
 Gitpod/Ona snapshots demonstrate the correct credential boundary: file state is captured, while environment variables, authentication, Git credentials, and running processes are not ([workspace snapshots](https://ona.com/docs/classic/user/configure/workspaces/collaboration)).
+
+### 10.7 Initial executor boundary
+
+- Sherpa core remains the orchestrator and uses built-in Project read/write, sandbox command, and test tools.
+- No Copilot CLI, Claude Code, or other specialist coding-agent process is embedded in the initial sandbox.
+- The first sandbox remains network-disabled; it receives no model/provider credential.
+- The initial environment is an approved predeclared runtime image. It does not fetch packages or resolve missing dependencies. A command requiring unavailable dependencies returns an explicit environment error; it never silently enables network access.
+- Initial demonstrations and acceptance checks must be dependency-free/offline or operate only on dependencies already retained in the Project snapshot.
+- A future `CodingExecutor` adapter may delegate a bounded task only after the native Project Chat workflow is validated. That adapter must still return structured events, diffs, test receipts, and artifacts into the same working-copy/save boundary; it cannot write Project head or approve Git actions directly.
 
 ## 11. Security and lifecycle requirements
 
@@ -571,9 +654,12 @@ POST   /projects
 POST   /projects/imports
 GET    /projects/{id}
 GET    /projects/{id}/tree
+POST   /projects/{id}/chats             # creates a new Project-bound session
+GET    /sessions/{id}/project-context
 POST   /projects/{id}/fetch
 POST   /projects/{id}/apply-remote
 POST   /projects/{id}/sandbox-runs
+GET    /projects/{id}/working-copies/{working_copy_id}
 GET    /projects/{id}/change-sets/{change_set_id}
 POST   /projects/{id}/change-sets/{change_set_id}/apply
 POST   /projects/{id}/change-sets/{change_set_id}/discard
@@ -586,6 +672,7 @@ Exact shapes belong in the frozen API contract before implementation.
 
 - Drive: `drive_list`, `drive_search`, `drive_create_folder`, `drive_write`, `drive_move`, `drive_trash`, `drive_restore`, `drive_list_versions`, `drive_restore_version`.
 - Projects: `project_list`, `project_create`, `project_import`, `project_tree`, `project_read`, `project_write`, `project_fetch`, `project_run`, `project_review_changes`, `project_save`, `project_checkpoint`, `project_discard`.
+- `project_run` operates on the current Project Chat's working copy through Sherpa's built-in executor. There is no initial `delegate_coding_agent` tool.
 - External Git: `project_push` and future PR/repository actions are `ask`.
 - Permanent Drive purge remains human-only or `ask`.
 
@@ -599,11 +686,13 @@ Binary upload from a human may use upload sessions; agent-generated text/bounded
 2. Projects library;
 3. New/import Project flow;
 4. Project detail with file tree and source status;
-5. Drive browser with preview, versions, trash, and bulk actions;
-6. quota warning/full and storage management;
-7. Git import/source credential, divergence/conflict, and push-approval states;
-8. sandbox change review with Save/checkpoint/discard;
-9. desktop and mobile layouts.
+5. General Chat with no Project capabilities and an explicit transition to a new Project Chat;
+6. Project-bound Chat with visible Project identity, durable task working copy, sandbox/cache state, built-in executor, and review handoff;
+7. Drive browser with preview, versions, trash, and bulk actions;
+8. quota warning/full and storage management;
+9. Git import/source credential, divergence/conflict, and push-approval states;
+10. sandbox change review with Continue/Save/checkpoint/discard;
+11. desktop and mobile layouts.
 
 The prototype is future-state research only. It does not alter production navigation or imply implementation approval.
 
@@ -613,6 +702,7 @@ The prototype is future-state research only. It does not alter production naviga
 
 - In owner review, Drive, Project, Source, Sandbox, Change set, and Checkpoint each have one unambiguous meaning.
 - The main human flows complete without a hidden technical ID: upload/restore a Drive file; create/import a Project; review/save/discard sandbox changes; understand a Git conflict; free storage.
+- General Chat and Project Chat are visibly distinct. A Project Chat displays its bound Project, and selecting another Project starts a new chat rather than changing the current transcript in-place.
 - Every shipped page works at 390 px with no horizontal scrolling and keyboard-visible focus.
 - No navigation item is shipped before its underlying service, UI controls, tools, and truthful states exist.
 
@@ -633,6 +723,7 @@ The prototype is future-state research only. It does not alter production naviga
 - Duplicate-content uploads expose no cross-owner existence signal.
 - Archive fixtures cover traversal, absolute paths, symlink escape, devices, excessive entries, nested archives, expansion ratio, and interrupted extraction.
 - Unknown-size import/archive/output operations cannot start unless their configured maximum reservation fits; unused reservation is released at commit.
+- A network-disabled initial sandbox reports missing dependencies truthfully and never attempts an undeclared package install.
 - Sandboxes can access only the selected scratch Project tree and receive no Drive, other Project, credential, or spill path.
 - Deployment readiness reports the configured storage-at-rest encryption posture and never overclaims it.
 
@@ -650,8 +741,13 @@ The prototype is future-state research only. It does not alter production naviga
 - Discard leaves Project head byte-identical to the base snapshot.
 - Save applies only reviewed operations and creates a new snapshot.
 - A concurrent Project-head change blocks stale Save.
+- Killing the warm container or losing the worker/node does not lose the last persisted working-copy boundary; the next run rematerializes an equivalent scratch tree.
+- Two Project Chats targeting the same Project cannot observe or mutate each other's pending working copies.
+- A stale sandbox fence token cannot publish an overlay.
+- Working-copy idle expiry and reservation release are one atomic lifecycle transition; an open working copy cannot retain bytes after its reservation is independently swept.
 - Credentials and running processes are absent from checkpoints.
 - Artifact retention consumes quota only after explicit Keep/Export.
+- The initial executor uses only Sherpa built-in tools; no embedded coding-agent process or model credential is present in the sandbox.
 
 ### Recovery
 
@@ -668,6 +764,7 @@ Do not implement until these are reviewed and frozen.
    - Personal workspace is the ownership umbrella.
    - Projects and Drive are distinct sibling products.
    - Project is durable Sherpa state; Source is optional; Sandbox is ephemeral.
+   - Chat is General or immutably Project-bound; changing Project creates a new chat.
 
 2. **ADR-030 — Durable workspace storage and quota**
    - Postgres canonical metadata + immutable tenant-scoped MinIO blobs.
@@ -681,6 +778,8 @@ Do not implement until these are reviewed and frozen.
    - fetch does not mutate Project head;
    - external writes are approval-gated and OID-checked;
    - immutable snapshot/COW scratch execution;
+   - durable task working copy is authoritative while scratch volume/container are rebuildable caches;
+   - initial execution uses Sherpa built-in tools; embedded coding agents are deferred;
    - explicit reviewed Save/checkpoint/discard.
 
 ### Amend existing ADRs
@@ -691,19 +790,21 @@ Do not implement until these are reviewed and frozen.
 
 ### Frozen contracts
 
-- `contracts/data-model.md`: add storage, Drive, Project, source, snapshot, change-set, and quota tables/invariants.
+- `contracts/data-model.md`: add storage, Drive, Project, source, snapshot, working-copy, change-set, session Project binding, and quota tables/invariants.
 - `contracts/events-and-effects.md`: add upload/import/save/purge/fetch/push events, idempotency, outbox, and `effect_unknown` reconciliation.
-- `contracts/api.md`: add REST and Tool schemas, upload sessions, pagination, conflict payloads, and signed-download rules.
-- `contracts/config-and-secrets.md`: add quota/retention/upload/import/archive/scanner/source/sandbox settings and Git credential boundaries.
+- `contracts/api.md`: add REST and Tool schemas, Project Chat creation/context, working-copy state, upload sessions, pagination, conflict payloads, and signed-download rules.
+- `contracts/config-and-secrets.md`: add quota/retention/upload/import/archive/scanner/source/sandbox settings, working-copy idle retention, warm-container/scratch-cache bounds, and Git credential boundaries.
 - `11-agent-tool-surface.md`: add UI + Tool parity matrix for Drive and Projects.
 
 ## 16. Owner decision gate
 
-The research task is complete when the owner accepts or changes these six decisions:
+The research task is complete when the owner accepts or changes these eight decisions:
 
 1. **Names/navigation:** Personal workspace umbrella; Projects + Drive siblings; Sandbox execution.
-2. **Boundary:** Projects are not Drive folders; remote Git is optional source.
-3. **Quota:** 5 GiB configurable personal default plus tenant and deployment ceilings.
-4. **Accounting:** per-owner unique durable blobs; history/trash count; ephemeral output does not count until retained.
-5. **Durability:** immutable Project snapshots; scratch sandbox; explicit reviewed Save.
-6. **Implementation order:** W1 Workspace + Drive correctness before Projects, sandbox save, and Git sync.
+2. **Project Chat (owner-confirmed 2026-07-22):** General or bound to exactly one Project; switching Project starts a new chat.
+3. **Boundary:** Projects are not Drive folders; remote Git is optional source.
+4. **Quota:** 5 GiB configurable personal default plus tenant and deployment ceilings.
+5. **Accounting:** per-owner unique durable blobs; history/trash count; ephemeral output does not count until retained.
+6. **Durability (owner-confirmed 2026-07-22):** persist task working copy; scratch volume/container are rebuildable; explicit reviewed Save.
+7. **Initial executor (owner-confirmed 2026-07-22):** Sherpa built-in tools only; embedded coding agents deferred.
+8. **Implementation order:** W1 Workspace + Drive correctness before Projects, sandbox save, and Git sync.

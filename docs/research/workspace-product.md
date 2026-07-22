@@ -1,8 +1,8 @@
 # R-WORKSPACE-PRODUCT — Personal drive and project workspaces
 
-**Status:** research/design complete; awaiting owner decision. No implementation approved.
+**Status:** research/design complete; Project-bound Chat and sandbox-lifecycle direction owner-confirmed on 2026-07-22. No implementation approved.
 
-**Outcome:** [`workspace-product-report.md`](workspace-product-report.md) recommends Personal workspace as the umbrella, Projects + Drive as distinct sibling products, Postgres metadata + immutable tenant-scoped MinIO blobs, configurable 5 GiB personal quota with tenant/deployment ceilings, and snapshot-in/change-set-out sandbox durability. Static flows: [`workspace-product-prototype/index.html`](workspace-product-prototype/index.html).
+**Outcome:** [`workspace-product-report.md`](workspace-product-report.md) recommends Personal workspace as the umbrella, Projects + Drive as distinct sibling products, General vs Project-bound Chat, a durable task working copy across turns, Postgres metadata + immutable tenant-scoped MinIO blobs, configurable 5 GiB personal quota with tenant/deployment ceilings, and replaceable scratch/container execution. The initial executor is Sherpa's built-in tools; embedded coding agents are deferred. Static flows: [`workspace-product-prototype/index.html`](workspace-product-prototype/index.html).
 
 ## Product thesis
 
@@ -54,7 +54,8 @@ This is a useful storage seam, but not yet a complete personal cloud workspace.
 12. How does a project mount into a sandbox while preserving the ADR-025 isolation boundary?
 13. Which data is ephemeral during execution and which changes become durable only after an explicit save/checkpoint?
 14. How are diffs, generated files, build artifacts, logs, and previews reviewed before consuming durable storage?
-15. How do UI and agent tools expose the same project/drive capabilities through the ADR-023 service + dual-adapter pattern?
+15. How does General vs Project-bound Chat work, and what pending state survives across turns when containers are disposable?
+16. How do UI and agent tools expose the same project/drive capabilities through the ADR-023 service + dual-adapter pattern?
 
 ### Security and lifecycle
 
@@ -69,6 +70,7 @@ This is a useful storage seam, but not yet a complete personal cloud workspace.
 - Users can manage ordinary files through a familiar drive-like browser.
 - Users can create a project, import one from GitHub, or synchronize an existing repository.
 - Projects have a file tree, source status, recent activity, storage usage, and development entry point.
+- A Project can open a new Project-bound Chat whose visible task working copy survives across turns even if its sandbox container is destroyed.
 - Sandboxes can work on a project without gaining access to unrelated user data.
 - Changes and artifacts can be reviewed, saved, versioned, or discarded explicitly.
 - The agent can perform every safe UI capability through the same service layer, with external Git writes approval-gated.
@@ -89,8 +91,9 @@ The recommendation must identify the canonical metadata store, blob layout, tran
 4. Personal Drive with folders, upload, search, sort, preview, versions, trash, and bulk actions.
 5. Quota warning/full states and storage-management flow.
 6. GitHub import/sync conflict and credential/approval states.
-7. Sandbox change review: save, checkpoint, discard, and artifact retention.
-8. Desktop and mobile variants.
+7. General vs Project-bound Chat with visible context boundaries, task working-copy state, sandbox lifecycle, and review handoff.
+8. Sandbox change review: continue, save, checkpoint, discard, and artifact retention.
+9. Desktop and mobile variants.
 
 ## Deliverables
 
@@ -107,6 +110,7 @@ The recommendation must identify the canonical metadata store, blob layout, tran
 - Do not redesign the production Files page or change navigation during research.
 - Do not implement GitHub synchronization, collaborative sharing, hosted previews, or new storage infrastructure yet.
 - Do not mount the entire personal drive into code-execution sandboxes.
+- Do not embed Copilot CLI or another specialist coding agent in the initial Project Chat/sandbox increment.
 - Do not hard-code 5 GB until deployment policy and accounting semantics are reviewed.
 
 ## Exit criteria
@@ -118,4 +122,5 @@ Research is complete only when the owner can decide:
 3. the quota owner, default, and accounting rules;
 4. the durable/ephemeral boundary for development;
 5. Git import and synchronization semantics;
-6. the architecture and first implementation increment.
+6. General vs Project-bound Chat and cross-turn task working-copy semantics;
+7. the architecture and first implementation increment.
