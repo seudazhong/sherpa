@@ -16,6 +16,7 @@ from app.models.core import (
     Tenant,
     User,
 )
+from app.models.drive import DriveNode, DriveVersion, StorageAccount, StorageBlob
 from app.models.effects import ApprovalEnvelope, EffectInvocation
 from app.models.events import EventJournal, Outbox
 from app.models.files import File
@@ -55,4 +56,8 @@ __all__ = [
     "ChannelConfig",
     "ChannelThreadState",
     "SessionSearchEntry",
+    "StorageAccount",
+    "StorageBlob",
+    "DriveNode",
+    "DriveVersion",
 ]

@@ -19,6 +19,7 @@ class ObjectStore(Protocol):
     async def put(self, key: str, data: bytes, content_type: str) -> None: ...
     async def get(self, key: str) -> bytes: ...
     async def delete(self, key: str) -> None: ...
+    async def list_keys(self, prefix: str = "") -> list[str]: ...
 
 
 class MemoryObjectStore:
@@ -37,6 +38,9 @@ class MemoryObjectStore:
 
     async def delete(self, key: str) -> None:
         self._blobs.pop(key, None)
+
+    async def list_keys(self, prefix: str = "") -> list[str]:
+        return [k for k in self._blobs if k.startswith(prefix)]
 
 
 class MinioObjectStore:
@@ -77,6 +81,14 @@ class MinioObjectStore:
     def _delete_sync(self, key: str) -> None:
         self._client.remove_object(self._bucket, key)
 
+    def _list_sync(self, prefix: str) -> list[str]:
+        self._ensure_bucket()
+        return [
+            obj.object_name
+            for obj in self._client.list_objects(self._bucket, prefix=prefix, recursive=True)
+            if obj.object_name is not None
+        ]
+
     async def put(self, key: str, data: bytes, content_type: str) -> None:
         await asyncio.to_thread(self._put_sync, key, data, content_type)
 
@@ -85,6 +97,9 @@ class MinioObjectStore:
 
     async def delete(self, key: str) -> None:
         await asyncio.to_thread(self._delete_sync, key)
+
+    async def list_keys(self, prefix: str = "") -> list[str]:
+        return await asyncio.to_thread(self._list_sync, prefix)
 
 
 _memory_store = MemoryObjectStore()

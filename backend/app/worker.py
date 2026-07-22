@@ -404,12 +404,33 @@ async def delivery_tick(ctx: dict[str, Any]) -> str:
     return f"delivered={counts}"
 
 
+async def drive_maintenance(ctx: dict[str, Any]) -> str:
+    """Leader-gated: reclaim Drive bytes — GC unreferenced blobs + sweep orphans.
+
+    Objects are content-addressed and never deleted inline (ADR-030). This job is
+    the sole deleter: it removes objects for blobs whose ``ref_count = 0`` past the
+    retention window, and sweeps objects with no blob row (crash after write, before
+    commit). The reconcile is idempotent and convergent.
+    """
+    if not await try_acquire_leader("drive_maintenance", ttl_ms=280_000):
+        return "not_leader"
+    from app.services import drive as drive_svc
+
+    async with SessionLocal() as session:
+        gced = await drive_svc.gc_unreferenced_blobs(session)
+        await session.commit()
+    async with SessionLocal() as session:
+        swept = await drive_svc.sweep_orphan_objects(session)
+    return f"gc={gced} orphans={swept}"
+
+
 class WorkerSettings:
     functions = [ping, run_job, gmail_sync_job, sync_and_analyze_job, approval_resume_job]
     cron_jobs = [
         cron(scheduler_tick, second=0),
         cron(delivery_tick, second=15),
         cron(periodic_connector_sync, minute=set(range(0, 60, 5))),
+        cron(drive_maintenance, minute=set(range(0, 60, 10))),
     ]
     on_startup = _startup
     on_shutdown = _shutdown

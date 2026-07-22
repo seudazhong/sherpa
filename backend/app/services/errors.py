@@ -57,3 +57,13 @@ class Conflict(ServiceError):
 class Internal(ServiceError):
     code = "internal"
     http_status = 500
+
+
+class TooLarge(ServiceError):
+    code = "payload_too_large"
+    http_status = 413
+
+
+class InsufficientStorage(ServiceError):
+    code = "insufficient_storage"
+    http_status = 507

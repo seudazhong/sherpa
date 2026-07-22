@@ -15,10 +15,12 @@ from app.services.context import CallerContext
 from app.services.errors import (
     Conflict,
     Forbidden,
+    InsufficientStorage,
     Internal,
     Invalid,
     NotFound,
     ServiceError,
+    TooLarge,
     VersionConflict,
 )
 
@@ -31,4 +33,6 @@ __all__ = [
     "Invalid",
     "Conflict",
     "Internal",
+    "TooLarge",
+    "InsufficientStorage",
 ]

@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     minio_bucket: str = "sherpa-files"
     minio_secure: bool = False
 
+    # Personal Drive (ADR-030, W1). Per-user quota + per-file upload cap are
+    # deployment-configurable (NOT schema constants). Defaults: 5 GiB / 100 MiB.
+    drive_quota_bytes: int = 5 * 1024 * 1024 * 1024
+    drive_max_file_bytes: int = 100 * 1024 * 1024
+    drive_trash_retention_days: int = 30
+    drive_blob_gc_retention_hours: int = 24
+
     # Code execution sandbox (ADR-007/025). "disabled" (default) keeps dev/tests
     # offline; "docker" runs each snippet in a hardened ephemeral container
     # (no network, dropped caps, non-root, read-only rootfs, mem/pids/time caps).
