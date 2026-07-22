@@ -32,6 +32,10 @@
 | 10 | **多用户 / 团队协作**（最后的大平台扩展） | 多人登录 + RBAC + 共享工作区/任务/记忆（**完成记忆的「团队共享」层**） | #2 #12 |
 | 11 | **评估飞轮增强 + token 级流式打磨**（贯穿式持续投入，非一次性功能） | trace/scores/goldens/回归/pinned 实验 + 逐 token 流式体验（**含从 v1 推迟来的抽取精度 goldens + 50–100 封基准 + 回归集，ADR-024**） | 手册#11 |
 
+### 架构调研任务（不自动进入实现顺序）
+
+- **R-SESSION-SEARCH · 云端 session 持久化 / 搜索 / 恢复** — 调研 GitHub Copilot CLI、Hermes 及其他 local coding agent 的 JSONL、SQLite、索引重建、上下文恢复和分支语义；再结合 Sherpa 的 Postgres event journal、tenant isolation、跨设备/跨渠道、审批与 effect recovery，提出云端架构与 Session Library UX。先完成证据、方案比较、静态 HTML 流程和 ADR/contract 建议，再决定是否实施。完整任务书：[`research/session-search.md`](research/session-search.md)。
+
 > **审批/对外写动作的归属（已下沉，不再是独立后置里程碑）**：通道无关基座（web 渲染器 + run 恢复 + 权限门）在 **v1 收尾**；各渠道审批渲染器随其渠道交付（QQ→里程碑4、邮件→里程碑5）；各类对外写动作随其系统落地（`send_email` 已在 v1；GitHub repo 写 → 里程碑7；等等），均复用同一审批基座。
 
 **依赖提醒（不改顺序，仅标注给未来的执行者）**：① 记忆的「tenant 共享」层要等「多用户」（里程碑10）才完整——单用户阶段先做 user 私有记忆；② ~~agentic email/QQ 批审批依赖跨渠道渲染器~~ **已解决**：审批基座（web 渲染器 + run 恢复）在 v1 收尾，各渠道渲染器随其渠道（QQ→4、邮件→5）一起交付，无前向依赖。
