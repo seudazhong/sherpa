@@ -19,6 +19,7 @@ halts the action, we surface the preview + correlation id over IM, and an
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -28,6 +29,10 @@ from app.channels.qq import QQClient
 from app.core import Admission, admit_prompt
 from app.models import ApprovalEnvelope, Message, Part
 from app.models import Session as SessionModel
+from app.permissions import ResolveError, resolve_approval
+from app.queue import enqueue_approval_resume, enqueue_run
+
+Notifier = Callable[[str, str], Awaitable[None]]
 
 _QQ_NS = uuid.uuid5(uuid.NAMESPACE_URL, "sherpa/channels/qq")
 
@@ -245,3 +250,95 @@ async def deliver_run_reply(
         return False
     body = compose_reply(text, approval)
     return await client.send_private(external_id, body)
+
+
+# --------------------------------------------------------------------------- #
+# Generic inbound routing — shared by the API (simulate/email) and the worker  #
+# (QQ WebSocket). Turns one inbound message into an approval resolve or a run. #
+# --------------------------------------------------------------------------- #
+
+
+async def handle_inbound(
+    db: AsyncSession,
+    *,
+    channel: str,
+    installation: str,
+    notify: Notifier,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    sender: str,
+    text: str,
+    message_id: str | None,
+) -> dict[str, str]:
+    """Route one inbound message: approval command or a new run. Commits."""
+    sess = await ensure_channel_session(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        channel=channel,
+        installation_id=installation,
+        external_id=sender,
+    )
+
+    command = parse_command(text)
+    if command is not None:
+        env = await find_pending_approval(
+            db,
+            tenant_id=tenant_id,
+            session_id=sess.id,
+            correlation_prefix=command.correlation_prefix,
+        )
+        if env is None:
+            await db.commit()
+            await notify(sender, "No pending approval to act on.")
+            return {"status": "no_pending_approval"}
+        return await resolve_over_channel(
+            db,
+            env=env,
+            user_id=user_id,
+            sender=sender,
+            command=command,
+            channel=channel,
+            notify=notify,
+        )
+
+    admission = await admit_inbound(
+        db, sess=sess, user_id=user_id, text=text, external_message_id=message_id
+    )
+    await db.commit()
+    await enqueue_run(admission.run_id)
+    return {"status": "queued", "run_id": str(admission.run_id), "session_id": str(sess.id)}
+
+
+async def resolve_over_channel(
+    db: AsyncSession,
+    *,
+    env: ApprovalEnvelope,
+    user_id: uuid.UUID,
+    sender: str,
+    command: ApprovalCommand,
+    channel: str,
+    notify: Notifier,
+) -> dict[str, str]:
+    """Resolve a pending approval from an inbound command (server-trusted verify)."""
+    try:
+        result = await resolve_approval(
+            db,
+            tenant_id=env.tenant_id,
+            correlation_id=env.correlation_id,
+            actor_id=user_id,
+            channel=channel,
+            choice=command.choice,
+            verify=lambda _row: None,  # server holds the envelope; sender is signature-authed
+        )
+    except ResolveError as exc:
+        await db.rollback()
+        await notify(sender, f"Could not resolve approval: {exc.detail}")
+        return {"status": "resolve_failed"}
+
+    await db.commit()
+    if result.mutated:
+        await enqueue_approval_resume(env.correlation_id)
+    verb = "Rejected." if command.choice == "reject" else "Approved — running the action now."
+    await notify(sender, verb)
+    return {"status": "resolved", "decision": command.choice}

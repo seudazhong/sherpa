@@ -145,7 +145,7 @@ async def test_email_webhook_auth_and_routing(monkeypatch: pytest.MonkeyPatch) -
     async def _fake_enqueue(run_id: uuid.UUID) -> None:
         enqueued.append(run_id)
 
-    monkeypatch.setattr("app.api.channels.enqueue_run", _fake_enqueue)
+    monkeypatch.setattr("app.channels.inbound.enqueue_run", _fake_enqueue)
     _configure_email(monkeypatch)
 
     await _drop_owner()
@@ -215,7 +215,7 @@ async def test_email_simulate_status_transcript(monkeypatch: pytest.MonkeyPatch)
     async def _fake_enqueue(run_id: uuid.UUID) -> None:
         enqueued.append(run_id)
 
-    monkeypatch.setattr("app.api.channels.enqueue_run", _fake_enqueue)
+    monkeypatch.setattr("app.channels.inbound.enqueue_run", _fake_enqueue)
     _configure_email(monkeypatch)
 
     await _drop_owner()

@@ -73,15 +73,9 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-sherpa}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-sherpa-dev-secret}
       MINIO_BUCKET: ${MINIO_BUCKET:-sherpa-files}
-      # QQ / IM inbound channel (milestone 4). Disabled by default; set these in
-      # .env to connect a self-hosted OneBot v11 bridge. The web needs the secret
-      # + owner id to auth the webhook; the worker needs the api base + token to
-      # push replies.
-      QQ_KIND: ${QQ_KIND:-disabled}
-      QQ_API_BASE: ${QQ_API_BASE:-http://host.docker.internal:5700}
-      QQ_ACCESS_TOKEN: ${QQ_ACCESS_TOKEN:-}
-      QQ_WEBHOOK_SECRET: ${QQ_WEBHOOK_SECRET:-}
-      QQ_OWNER_ID: ${QQ_OWNER_ID:-}
+      # QQ official bot (ADR-028) is configured at runtime in the UI (DB-backed,
+      # AppID/AppSecret sealed in the vault) — no QQ_* env. The botpy WebSocket
+      # client runs in the worker.
       # Agentic email (milestone 5). Disabled ('recording') by default; set these
       # in .env to send/receive via a real AgentMail inbox. The web shows status +
       # authenticates the inbound webhook; the worker performs the actual send.
@@ -118,11 +112,6 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-sherpa-dev-secret}
       MINIO_BUCKET: ${MINIO_BUCKET:-sherpa-files}
       SANDBOX_KIND: ${SANDBOX_KIND:-docker}
-      QQ_KIND: ${QQ_KIND:-disabled}
-      QQ_API_BASE: ${QQ_API_BASE:-http://host.docker.internal:5700}
-      QQ_ACCESS_TOKEN: ${QQ_ACCESS_TOKEN:-}
-      QQ_WEBHOOK_SECRET: ${QQ_WEBHOOK_SECRET:-}
-      QQ_OWNER_ID: ${QQ_OWNER_ID:-}
       EMAIL_KIND: ${EMAIL_KIND:-recording}
       AGENTMAIL_API_KEY: ${AGENTMAIL_API_KEY:-}
       AGENTMAIL_INBOX_ID: ${AGENTMAIL_INBOX_ID:-}

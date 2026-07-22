@@ -1,15 +1,14 @@
-"""IM / QQ channel (milestone 4, ADR-026).
+"""QQ + email channel tests (ADR-026/027/028).
 
-Unit tests (no I/O): signature verify, command parsing, reply composition.
-DB tests (skip without Postgres): session mapping, admission idempotency, reply
-delivery, pending-approval matching. API tests (skip without Postgres+Redis):
-webhook auth + routing, simulate, status — enqueue is monkeypatched and the
-outbound client is a RecordingQQClient, so tests never touch Redis-jobs or QQ.
+Unit tests (no I/O): command parsing, reply composition. DB tests (skip without
+Postgres): session mapping, admission idempotency, reply delivery, pending-approval
+matching. API tests (skip without Postgres+Redis): simulate, status, transcript —
+enqueue is monkeypatched and the outbound client is a RecordingQQClient, so tests
+never touch Redis-jobs or QQ. Official QQ has no HTTP webhook (WS in the worker).
 """
 
 from __future__ import annotations
 
-import json
 import uuid
 
 import httpx
@@ -28,7 +27,7 @@ from app.channels import (
     find_pending_approval,
     parse_command,
 )
-from app.channels.qq import build_qq_client, sign_body, verify_signature
+from app.channels.qq import build_qq_client
 from app.config import settings
 from app.db import SessionLocal, ping_db
 from app.effects import begin_invocation
@@ -38,22 +37,12 @@ from app.models import Session as SessionModel
 from app.permissions import request_approval
 from app.permissions.policy import classify_effect
 from app.redis_client import ping_redis
+from app.services import channels as chan_svc
 from app.tools.builtin import SendEmailTool
 
 # --------------------------------------------------------------------------- #
 # Unit — no I/O.                                                               #
 # --------------------------------------------------------------------------- #
-
-
-def test_verify_signature_roundtrip() -> None:
-    secret, body = "s3cr3t", b'{"post_type":"message"}'
-    good = sign_body(secret, body)
-    assert verify_signature(secret, body, good)
-    assert not verify_signature(secret, body, "sha1=deadbeef")
-    assert not verify_signature(secret, body, None)
-    assert not verify_signature(secret, b"tampered", good)
-    # Empty secret = unsigned/trusted mode → accept.
-    assert verify_signature("", body, None)
 
 
 def test_parse_command() -> None:
@@ -309,77 +298,6 @@ async def _drop_owner() -> None:
         await s.commit()
 
 
-def _configure_qq(monkeypatch: pytest.MonkeyPatch, recorder: RecordingQQClient) -> None:
-    monkeypatch.setattr(settings, "qq_kind", "onebot")
-    monkeypatch.setattr(settings, "qq_owner_id", "424242")
-    monkeypatch.setattr(settings, "qq_webhook_secret", "hooksecret")
-    monkeypatch.setattr("app.api.channels.build_qq_client", lambda: recorder)
-
-
-@pytest.mark.asyncio
-async def test_qq_webhook_auth_and_routing(monkeypatch: pytest.MonkeyPatch) -> None:
-    if not await ping_db() or not await ping_redis():
-        pytest.skip("database or redis not reachable")
-
-    enqueued: list[uuid.UUID] = []
-
-    async def _fake_enqueue(run_id: uuid.UUID) -> None:
-        enqueued.append(run_id)
-
-    monkeypatch.setattr("app.api.channels.enqueue_run", _fake_enqueue)
-    _configure_qq(monkeypatch, RecordingQQClient())
-
-    await _drop_owner()
-    transport = ASGITransport(app=app)
-    try:
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-            body = json.dumps(
-                {
-                    "post_type": "message",
-                    "message_type": "private",
-                    "user_id": 424242,
-                    "raw_message": "hello sherpa",
-                    "message_id": 9,
-                }
-            ).encode()
-
-            # bad signature -> 401
-            r = await client.post(
-                "/channels/qq/webhook", content=body, headers={"X-Signature": "sha1=bad"}
-            )
-            assert r.status_code == 401
-
-            good = sign_body("hooksecret", body)
-            # non-owner sender -> 403
-            other = json.dumps(
-                {
-                    "post_type": "message",
-                    "message_type": "private",
-                    "user_id": 999,
-                    "raw_message": "hi",
-                    "message_id": 8,
-                }
-            ).encode()
-            r = await client.post(
-                "/channels/qq/webhook",
-                content=other,
-                headers={"X-Signature": sign_body("hooksecret", other)},
-            )
-            assert r.status_code == 403
-
-            # valid owner message -> queued + a run enqueued + a qq session created
-            r = await client.post(
-                "/channels/qq/webhook", content=body, headers={"X-Signature": good}
-            )
-            assert r.status_code == 200
-            data = r.json()
-            assert data["status"] == "queued"
-            assert len(enqueued) == 1
-            assert uuid.UUID(data["session_id"])
-    finally:
-        await _drop_owner()
-
-
 @pytest.mark.asyncio
 async def test_qq_simulate_and_status(monkeypatch: pytest.MonkeyPatch) -> None:
     if not await ping_db() or not await ping_redis():
@@ -390,8 +308,8 @@ async def test_qq_simulate_and_status(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_enqueue(run_id: uuid.UUID) -> None:
         enqueued.append(run_id)
 
-    monkeypatch.setattr("app.api.channels.enqueue_run", _fake_enqueue)
-    _configure_qq(monkeypatch, RecordingQQClient())
+    monkeypatch.setattr("app.channels.inbound.enqueue_run", _fake_enqueue)
+    monkeypatch.setattr("app.api.channels.build_qq_client", RecordingQQClient)
 
     await _drop_owner()
     transport = ASGITransport(app=app)
@@ -404,6 +322,22 @@ async def test_qq_simulate_and_status(monkeypatch: pytest.MonkeyPatch) -> None:
             assert r.status_code == 200
             csrf = r.json()["csrf_token"]
 
+            # Seed a QQ config in the DB (official flow: config is DB-backed, not env).
+            from app.auth import owner_ids as _oids
+
+            tid, uid = _oids()
+            async with SessionLocal() as s:
+                await chan_svc.set_qq_config(
+                    s,
+                    tid,
+                    uid,
+                    app_id="102000001",
+                    enabled=True,
+                    owner_external_id="owner_openid",
+                    secret="app-secret-xyz",
+                )
+                await s.commit()
+
             r = await client.post(
                 "/channels/qq/simulate",
                 json={"text": "what can you do?"},
@@ -415,17 +349,21 @@ async def test_qq_simulate_and_status(monkeypatch: pytest.MonkeyPatch) -> None:
             assert len(enqueued) == 1
             session_id = sim["session_id"]
 
-            # status reflects config + shows the thread
+            # status reflects DB config + shows the thread
             r = await client.get("/channels")
             assert r.status_code == 200
             st = r.json()
             assert st["qq"]["enabled"] and st["qq"]["configured"]
-            assert any(t["session_id"] == session_id for t in st["threads"])
+            assert st["qq"]["app_id"] == "102000001" and st["qq"]["secret_set"]
+            assert any(
+                t["session_id"] == session_id and t["channel"] == "qq" for t in st["threads"]
+            )
 
             # thread transcript shows the inbound user message
             r = await client.get(f"/channels/threads/{session_id}")
             assert r.status_code == 200
             tx = r.json()
+            assert tx["channel"] == "qq"
             assert any(
                 m["role"] == "user" and "what can you do" in m["text"] for m in tx["messages"]
             )

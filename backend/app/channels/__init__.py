@@ -1,4 +1,4 @@
-"""IM / QQ channel: inbound webhook → durable loop → outbound reply (milestone 4)."""
+"""QQ + agentic-email channels: inbound → durable loop → outbound reply (ADR-026/027/028)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from app.channels.email import (
 )
 from app.channels.inbound import (
     ApprovalCommand,
+    Notifier,
     admit_inbound,
     approval_preview_text,
     compose_reply,
@@ -19,21 +20,21 @@ from app.channels.inbound import (
     ensure_channel_session,
     final_assistant_text,
     find_pending_approval,
+    handle_inbound,
     parse_command,
     pending_approval_for_run,
+    resolve_over_channel,
 )
 from app.channels.qq import (
-    OneBotQQClient,
     OutboundMessage,
     QQClient,
     RecordingQQClient,
     build_qq_client,
-    sign_body,
-    verify_signature,
 )
 
 __all__ = [
     "ApprovalCommand",
+    "Notifier",
     "admit_inbound",
     "approval_preview_text",
     "compose_reply",
@@ -41,15 +42,14 @@ __all__ = [
     "ensure_channel_session",
     "final_assistant_text",
     "find_pending_approval",
+    "handle_inbound",
     "parse_command",
     "pending_approval_for_run",
-    "OneBotQQClient",
+    "resolve_over_channel",
     "OutboundMessage",
     "QQClient",
     "RecordingQQClient",
     "build_qq_client",
-    "sign_body",
-    "verify_signature",
     "AgentMailClient",
     "EmailChannelClient",
     "RecordingEmailClient",
