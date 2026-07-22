@@ -363,3 +363,139 @@ async def thread_transcript(
         messages=messages,
         pending_approvals=approvals,
     )
+
+
+# --------------------------------------------------------------------------- #
+# QQ official config: manage AppID/Secret + owner, test-connection, QR bind.    #
+# All owner-authed (+ CSRF on writes). The secret is never returned.            #
+# --------------------------------------------------------------------------- #
+
+
+class QQConfigBody(BaseModel):
+    app_id: Annotated[str, Field(min_length=1, max_length=64)]
+    enabled: bool = True
+    owner_openid: Annotated[str, Field(max_length=128)] = ""
+    secret: Annotated[str, Field(max_length=256)] = ""  # blank keeps the stored one
+
+
+@router.put("/channels/qq/config")
+async def put_qq_config(
+    body: QQConfigBody,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> QQStatus:
+    await chan_svc.set_qq_config(
+        db,
+        ctx.tenant_id,
+        ctx.user_id,
+        app_id=body.app_id,
+        enabled=body.enabled,
+        owner_external_id=body.owner_openid,
+        secret=body.secret or None,
+    )
+    await db.commit()
+    qq = await chan_svc.get_qq_config(db, ctx.tenant_id, ctx.user_id)
+    return QQStatus(
+        enabled=bool(qq and qq.enabled),
+        configured=bool(qq and qq.enabled and qq.app_id and qq.secret_set),
+        app_id=qq.app_id if qq else "",
+        owner_openid_set=bool(qq and qq.owner_external_id),
+        secret_set=bool(qq and qq.secret_set),
+    )
+
+
+class TestResult(BaseModel):
+    ok: bool
+    detail: str
+
+
+@router.post("/channels/qq/test")
+async def test_qq(
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> TestResult:
+    """Attempt an official login with the stored credentials (secret never exposed)."""
+    from app.channels.qq_official import test_qq_credentials
+
+    row = await chan_svc.get_config(db, ctx.tenant_id, ctx.user_id, "qq")
+    if row is None or not row.app_id or not row.secret_enc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "qq_not_configured")
+    secret = chan_svc.reveal_secret(row)
+    ok, detail = await test_qq_credentials(row.app_id, secret or "")
+    return TestResult(ok=ok, detail=detail)
+
+
+# Short-lived task_id -> bind key map (single-user v1; the web process owns both
+# the start and poll of a QR bind). A restart drops in-flight scans — start again.
+_BIND_KEYS: dict[str, str] = {}
+
+
+class BindStart(BaseModel):
+    task_id: str
+    qr_url: str
+
+
+@router.post("/channels/qq/bind/start")
+async def qq_bind_start(
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+) -> BindStart:
+    from app.channels.qq_bind import QQBindError, connect_url, create_bind_task
+
+    try:
+        task = await create_bind_task()
+    except QQBindError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from None
+    _BIND_KEYS[task.task_id] = task.key
+    return BindStart(task_id=task.task_id, qr_url=connect_url(task.task_id, source="Sherpa"))
+
+
+class BindPoll(BaseModel):
+    task_id: str
+
+
+class BindPollResult(BaseModel):
+    status: str  # pending | completed | expired
+    app_id: str = ""
+    owner_openid: str = ""
+
+
+@router.post("/channels/qq/bind/poll")
+async def qq_bind_poll(
+    body: BindPoll,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> BindPollResult:
+    from app.channels.qq_bind import (
+        STATUS_COMPLETED,
+        STATUS_EXPIRED,
+        QQBindError,
+        poll_bind_result,
+    )
+
+    key = _BIND_KEYS.get(body.task_id)
+    if key is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown_bind_task")
+    try:
+        result = await poll_bind_result(body.task_id, key)
+    except QQBindError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from None
+    if result.status == STATUS_EXPIRED:
+        _BIND_KEYS.pop(body.task_id, None)
+        return BindPollResult(status="expired")
+    if result.status != STATUS_COMPLETED:
+        return BindPollResult(status="pending")
+    # Completed: persist the bound bot (enabled) + the scanning user as owner.
+    await chan_svc.set_qq_config(
+        db,
+        ctx.tenant_id,
+        ctx.user_id,
+        app_id=result.app_id,
+        enabled=True,
+        owner_external_id=result.owner_openid,
+        secret=result.secret,
+    )
+    await db.commit()
+    _BIND_KEYS.pop(body.task_id, None)
+    return BindPollResult(
+        status="completed", app_id=result.app_id, owner_openid=result.owner_openid
+    )

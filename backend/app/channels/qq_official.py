@@ -66,6 +66,19 @@ def build_qq_sender(app_id: str, secret: str) -> QQOfficialSender | RecordingQQC
     return RecordingQQClient()
 
 
+async def test_qq_credentials(app_id: str, secret: str) -> tuple[bool, str]:
+    """Attempt an official login with the given AppID/Secret. Returns (ok, detail)."""
+    if not app_id or not secret:
+        return False, "missing app_id or secret"
+    try:
+        http = botpy.BotHttp(timeout=15, app_id=app_id, secret=secret)
+        robot = await http.login(botpy.Token(app_id, secret))
+    except Exception as exc:  # noqa: BLE001 - surfaced as a test result, never raised
+        return False, str(exc)[:200]
+    name = getattr(robot, "username", None) or getattr(robot, "id", None) or "ok"
+    return True, str(name)
+
+
 async def route_c2c_inbound(
     *,
     tenant_id: uuid.UUID,
