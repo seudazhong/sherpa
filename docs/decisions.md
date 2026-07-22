@@ -205,7 +205,7 @@
   - OneBot 需自建 bridge（NapCat/go-cqhttp/Lagrange 等）+ **非官方协议登录 QQ**，有**封号/合规风险**，且多一个运维组件；官方平台用 **AppID + AppSecret**、合规、且 **WebSocket 模式 bot 主动外连网关、无需公网 URL/反代**，最契合自托管单用户。
   - 生态验证：Hermes / OpenClaw / **AstrBot**（开源，已读其官方适配器源码）均用此路径。
 - **连接模式选择**：**WebSocket**（自托管友好，无需公网）而非 Webhook（需公网 IP+域名+HTTPS+反代、Ed25519 验签）。Webhook 留作后续可选。
-- **接入 UX（复活 Connectors 页）**：**手动 AppID/Secret 优先**（永远可用）；**扫码一键**作为 fast-follow（`q.qq.com/lite/create_bind_task` → 二维码 `q.qq.com/qqbot/openclaw/connect.html?task_id=..` → `poll_bind_result` → 用本地 base64 AES-256 key 对 `bot_encrypt_secret` 做 **AES-GCM** 解密得 AppSecret；**待确认该端点对非合作方是否开放**，不行则仅手动）。Secret → **AEAD 凭据保险库（ADR-019）**，永不日志、响应脱敏（仅显示 set/last4）。
+- **接入 UX（复活 Connectors 页）**：**手动 AppID/Secret 优先**（永远可用）；**扫码一键**（✅ 官方对第三方开放，已确认 2026-07-22）——腾讯公开 SDK `@tencent-connect/qqbot-connector` + wiki「第三方 Agent 接入」，`create_bind_task` 只需客户端自生成 key、无合作方 token，`source` 留空显示"第三方机器人"。流程：`POST q.qq.com/lite/create_bind_task {key:base64 AES-256}` → 二维码 `q.qq.com/qqbot/openclaw/connect.html?task_id=..&source=..` → `POST /lite/poll_bind_result {task_id}` → 返回 `bot_appid` + `bot_encrypt_secret`（AES-256-GCM，用 key 解）+ **`user_openid`（扫码人=owner，用于 owner 绑定）**。Python 直连即可（官方 SDK 端点与 AstrBot 逆向逐字一致）。Secret → **AEAD 凭据保险库（ADR-019）**，永不日志、响应脱敏（仅显示 set/last4）。
 - **运行位置**：botpy WS 客户端作为 **worker 的有界重连后台任务**（类比 `_relay_loop`），优雅关闭（参考 AstrBot `ManagedBotWebSocket`/`shutdown`）。
 - **复用（不重造）**：通道无关入站管线（`ensure_channel_session(channel='qq', external_id=<user_openid>)` → `admit_prompt` → 有界循环）、**审批基座**（`resolve_approval(channel='qq')`）、`/channels/qq/simulate`（人工验收）、Messaging UI 全部保留。**删除**现有 M4 的 OneBot 部分：`app/channels/qq.py` 的 `OneBotQQClient` + HMAC-SHA1 `verify_signature` + `/channels/qq/webhook` 的 OneBot 事件解析。
 - **发送约束**：**被动回复**用入站 `msg_id`（+`msg_seq`），需按会话保存最近 msg_id（异步 worker 回复可能延迟，超回复窗兜底走**主动推送**，受配额限制）。API：`post_c2c_message`（单聊）等；`msg_type` 0=文本。
@@ -214,7 +214,7 @@
 - **排除 / 后置**：Webhook 模式；群消息（先私聊/C2C）；富媒体段（先纯文本）；定时提醒路由到 QQ（冻结 `schedules` CHECK，同 ADR-026）。
 - **可验证性**：真实端到端需真实 bot 账号（+ 可能的 IP 白名单）→ **手动验收**（用户已同意此类留手动）；开发期用 `/channels/qq/simulate` + Messaging 页走人工路径。
 - **与 ADR-026 关系**：**部分取代**——保留 ADR-026 的"IM 线程映射到既有 `sessions`（`channel='qq'`）、审批复用 v1 基座、无新表/无冻结契约变更"结论；**只替换传输层**（OneBot → 官方 botpy/WS）。
-- **来源**：用户输入「既然要用官方 bot，OneBot 就不需要了」；调研见会话工作区 `qq-official-bot-research.md`（AstrBot 源码 + 腾讯 api-v2）。
+- **来源**：用户输入「既然要用官方 bot，OneBot 就不需要了」；调研见会话工作区 `qq-official-bot-research.md`（AstrBot 源码 + 腾讯 api-v2 + 官方 SDK `@tencent-connect/qqbot-connector@1.2.0` 确认扫码端点对第三方开放）。
 
 #### 构建任务拆解（评审后再写代码；真实端到端留手动验收）
 1. **ADR + 依赖**（本条已含）：加 `qq-botpy` + `pycryptodome` 到 `backend/pyproject.toml`；`uv sync`；`uv.lock` 提交。
