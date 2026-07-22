@@ -20,7 +20,7 @@
 
 | 序 | 里程碑 | 能实现什么 | 原需求 |
 |---|---|---|---|
-| 1 | **两层记忆 + RAG(pgvector)** | agent 跨会话长期记忆（user 私有；tenant 共享待多用户）+ 混合检索 | 铁律#6 |
+| 1 | **两层记忆 + RAG(pgvector)** | agent 跨会话长期记忆（user 私有；tenant 共享待多用户）+ 手工语义笔记混合检索 | 铁律#6 |
 | 2 | **个人文件存储 / MinIO** | 每用户持久 workspace，上传/同步文件与代码，agent 读写 | #4 |
 | 3 | **代码执行 / 沙箱**（gVisor/Firecracker） | agent 改/跑代码/跑测试（最危险，前置：后端中立执行契约 + 隔离 + 出口策略 + 聚合配额 + 威胁评审） | #3 · ADR-007 |
 | 4 | **QQ / IM bot 入站**（AstrBot/aiocqhttp）**+ QQ 审批/通知渲染器** | 在 QQ 等 IM 里跟 agent 对话、收通知、**在 QQ 上批准/拒绝**（复用 v1 审批基座） | #10 |
@@ -34,6 +34,7 @@
 
 ### 架构调研任务（不自动进入实现顺序）
 
+- **R-KNOWLEDGE-BASE · 来源型个人知识库** — ✅ 调研/设计完成：当前 `memory_passages` 是手工语义笔记，不是文档知识库。建议另建 file-backed Knowledge 垂直切片（来源/版本/异步解析切块/混合检索/引用/UI+工具），继续用 Postgres FTS + pgvector，不上独立向量库；实现尚未批准，先审 ADR/契约、embedding 隐私选择、中文检索方案和小 golden 集。完整报告：[`research/knowledge-base.md`](research/knowledge-base.md)。
 - **R-SESSION-SEARCH · 云端 session 持久化 / 搜索 / 恢复** — 调研 GitHub Copilot CLI、Hermes 及其他 local coding agent 的 JSONL、SQLite、索引重建、上下文恢复和分支语义；再结合 Sherpa 的 Postgres event journal、tenant isolation、跨设备/跨渠道、审批与 effect recovery，提出云端架构与 Session Library UX。先完成证据、方案比较、静态 HTML 流程和 ADR/contract 建议，再决定是否实施。完整任务书：[`research/session-search.md`](research/session-search.md)。
 - **R-WORKSPACE-PRODUCT · 个人网盘 + 项目工作空间** — 将现有 `Files` 视为后台对象存储能力，调研面向用户的 Workspace / Projects / Drive 产品形态；覆盖每用户配额（5 GB 为待验证假设）、GitHub 导入/同步、持久开发空间、sandbox 挂载与保存、版本/回收站、容量核算和未来共享边界。先产出竞品证据、产品 IA、静态 HTML、架构比较及 ADR/contract 建议。完整任务书：[`research/workspace-product.md`](research/workspace-product.md)。
 

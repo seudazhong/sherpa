@@ -45,6 +45,7 @@
 - **理由**：个人助理与小团队协作统一，不必来回改 schema。共享 block 保持小（编辑会 rebuild 所有成员 prompt）。
 - **来源**：Letta memory blocks（many-to-many attach）。
 > **评审修订（2026-07-19）**：v1 单用户 → 只保留 **user 私有记忆**；tenant 共享 block 随团队功能一并推迟（schema 仍留 owner 维度以便未来）。此外 v1 的 memory/RAG（pgvector）整体推迟出 v1（见 ADR-012），先用最简候选/待办数据即可。
+> **Post-v1 实现注（2026-07-22）**：user 私有 core memory 与手工语义笔记 `memory_passages` 已实现；它们属于长期记忆，不等于有来源/版本/切块/引用的文档知识库。后者仍未批准实现，见 [`research/knowledge-base.md`](research/knowledge-base.md)。
 
 ### ADR-005 · 运行时 = 异步 job 优先 + 事件总线流式
 - **决策**：所有 agent 运行都是异步 job；交互式靠 SSE/WS 从事件总线回推。web 进程永不跑 core 循环。
@@ -93,6 +94,7 @@
 - **决策**：主库 Postgres；向量用 pgvector（复用 PG）；队列/总线/锁用 Redis；对象存储用 MinIO。
 - **理由**：为"docker 一键部署"服务，尽量少起服务。无状态设计让将来拆分（Qdrant/独立 broker）不改上层。
 > **评审修订（2026-07-19）**：v1 **推迟 MinIO/文件 与 pgvector/RAG**；受支持部署栈 = **Postgres + Redis + web + worker**（单实例单用户）。对象存储/向量随对应功能再加。
+> **Post-v1 实现注（2026-07-22）**：MinIO Files 与 pgvector 手工语义笔记均已落地。来源型文档 Knowledge 若获批准，继续复用 Postgres FTS + pgvector；当前无规模证据支持新增独立向量数据库。
 
 ### ADR-013 · agentic email 与用户 Gmail 是两种信任级别
 - **决策**：Gmail 连接器 = 读用户账户数据（OAuth 最小 scope、只读优先）；agentic email = agent 自有通信身份（收指令/发通知）。两者内容都不可信→SAFE 工具集。

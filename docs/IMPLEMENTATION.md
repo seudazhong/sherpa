@@ -73,7 +73,7 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 | **T8** | **Output spill + DisplayPayload**: implement `ToolOutputSpillReference` (api §7.2, spill to `TOOL_OUTPUT_ROOT/{invocation_id}.txt`); upgrade `ToolResult.return_display` to `DisplayPayload{format,content}` | api §7.2 | oversized tool output spills to file + head/tail summary + spill ref; tests |
 
 **M-tools exit:** in the browser, the agent (via chat) can list/accept/edit/dismiss candidates, create/complete todos, trigger a Gmail sync (candidates appear), create a reminder, and read activity — each permission-gated (own-data writes allowed, `send_email` still asks); REST unchanged; full `pytest`/`ruff`/`mypy` + `npm build` green. **Not agent tools (by design):** approval resolution, untrusted-content tool access, raw delete of imported data. — ✅ **DONE (T1–T8 shipped + browser-verified; pytest 88).**
-> **Deferred:** `memory_*` tools need the two-tier memory tables first (separate task, not in M-tools).
+> **Post-v1 update:** core-memory and manual semantic-note tools/RAG have shipped. A source-backed document Knowledge product is a separate capability, not an extension of `memory_passages`; research/design is in [`research/knowledge-base.md`](research/knowledge-base.md), with no implementation approved yet.
 
 ---
 
