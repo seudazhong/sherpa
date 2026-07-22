@@ -35,6 +35,15 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 6. **R-KNOWLEDGE-BASE research** — ✅ complete: audited the shipped manual-note RAG, researched production KB patterns, and designed a separate file-backed Knowledge vertical slice with async source/version ingestion, hybrid retrieval, citations, multilingual handling, UI, tools, and release gates. Recommendation: GO for the narrow slice after owner approval and ADR/contract review; no implementation has started. Report: [`research/knowledge-base.md`](research/knowledge-base.md).
 Then the remaining **post-v1 milestones** in `09-roadmap.md` (cron → GitHub → provider/sub-agent → plugins → teams → eval), in the owner's chosen order.
 
+## ▶▶ Active build (owner-approved 2026-07-23): P0 → P2, no mid-review
+
+Sequenced implementation of the two completed research lines, through **P2**, then unified owner acceptance. Prereqs done: **ADR-029** (Session Library + search) + **ADR-030** (Personal Drive/W1); contract additions in `contracts/data-model.md §"Post-v1 contract additions"` and `contracts/api.md §10`; task breakdown in [`IMPLEMENTATION.md` Phase P0–P2](IMPLEMENTATION.md). Order:
+- **P0 — Session Library**: persisted title, `last_activity_at` + run lease/heartbeat, browse+filters, truthful state-specific Resume/Reconnect/Recover, dedicated `/sessions` page.
+- **P1 — Session search**: `session_search_entries` projection (same-txn jobs + event_journal), FTS + CJK bigram + trigram, grouped results + typed deep-link anchors, rebuild + retention/redaction.
+- **P2 — Personal Drive (W1)**: storage accounts/quota, immutable ref-counted blobs, drive nodes/versions/trash, cross-store commit fix + GC, files→Drive migration, Workspace/Drive UI.
+
+Deferred within these lines: session semantic search + branch/lineage (Phase C); Projects/sandbox/GitHub (W2–W4).
+
 ## In progress
 _Nothing in progress._ **M-tools shipped** (ADR-023, [`11-agent-tool-surface.md`](11-agent-tool-surface.md)): app/services/ capability layer + REST/Tool dual adapters; the agent tools = list/accept/edit/dismiss candidates, create/update/complete/list todos (+ POST /todos, migration 0014 for standalone agent todos), list/sync connectors, create/list/cancel reminders + digests (+ /schedules REST), list notifications/activity + get/update settings; ALLOWED policy engine (own-data writes allowed, external actions ask); tool output spill.
 Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0014`; `--env-file .env` enables the real model). Note: `uv run pytest` wipes the owner tenant → re-login in the browser. **SPA routes must not collide with an API proxy prefix** (Activity UI lives at `/data`).

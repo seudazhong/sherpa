@@ -77,6 +77,45 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
+## Phase P0–P2 — Session Library, session search, personal Drive (post-v1, ADR-029/030)
+
+> Owner-approved 2026-07-23: implement through **P2** without mid-review, then unified acceptance. Prereqs done: ADR-029/030 + contract additions (data-model §"Post-v1 contract additions", api.md §10). Each task: implement → backend gate (`alembic upgrade head` · `ruff` · `mypy app` · `pytest`) + frontend (`npm run build`/`lint`) → commit → tick STATUS. Playwright human-lane per phase.
+
+### P0 — Session Library: browse + state-specific resume (ADR-029 Phase A)
+
+| # | Task | refs | AC |
+|---|---|---|---|
+| **P0.1** | **Schema `0019`**: persist `sessions.title` (+CHECK); add `runs.heartbeat_at/lease_expires_at/worker_id` + `ix_runs_live_lease`; models updated | data-model §post-v1; ADR-029 | `alembic upgrade head` clean; round-trip test |
+| **P0.2** | **Activity + lease maintenance**: write `last_activity_at` on message admission + run state change; worker refreshes run lease (15s) and sets it stale on settle; title derived from first user message when unset | ADR-029 | lease fresh while running, expired after crash; `last_activity_at` advances; test |
+| **P0.3** | **Session service + resume-state**: `services/sessions.py` browse (filters + keyset snapshot cursor, tenant+user), `resume_state` computation (idle/running/stale/approval/expired/interrupted/effect_unknown/failed/archived), `recover` (recheck/verified/new_run), `rename`, `timeline` around typed anchor | api §10.1; ADR-017 | each state computed truthfully; approval past expiry → `approval_expired`; unit tests per branch |
+| **P0.4** | **REST**: `GET /sessions` (extended), `PATCH /sessions/{id}/title`, `GET /sessions/{id}/resume-state`, `GET /sessions/{id}/timeline`, `POST /sessions/{id}/recover`; authz tenant+user | api §10.1 | endpoints return contract shapes; authz test |
+| **P0.5** | **Frontend Sessions page** at `/sessions`: list + filters, detail restore (transcript + run state + approvals + activity), state-specific action buttons, responsive desktop+390px | design-session-library | `npm run build`/`lint` green; renders |
+| **P0.6** | **Verify P0**: backend gate + frontend; Playwright human lane desktop+mobile | AGENTS §2 | states/actions verified in browser |
+
+### P1 — Session content search (ADR-029 Phase B)
+
+| # | Task | refs | AC |
+|---|---|---|---|
+| **P1.1** | **Schema `0020`** (search): `session_search_entries` (+generated `fts`/`cjk_fts`, trigram index), `search_projection_jobs`, `search_projection_checkpoints`; enable `pg_trgm`; models | data-model §post-v1 | migration clean; indexes present; test |
+| **P1.2** | **Projector**: same-txn `search_projection_jobs` on message/title/delete/redaction; worker consuming jobs **and** `event_journal` (tool/run/audit) → upsert/tombstone entries with typed anchors + CJK bigrams; durable checkpoint; idempotent rebuild command | ADR-029; ADR-016 | user message + title indexed; delete tombstones ≤1min; rebuild reproduces entries; tests |
+| **P1.3** | **Search service + API**: fused FTS + CJK-bigram + trigram, weighted + recency, session-grouped + escaped snippet + typed anchor; wire into `GET /sessions?query=`; retention/redaction filter | api §10.1 | English + Chinese queries return grouped matches; deep-link anchor opens correct turn; no cross-user leak; tests |
+| **P1.4** | **Frontend search**: search box + grouped matches + snippet + deep-link to turn in Sessions page; responsive | design-session-library | build/lint green; search + open verified |
+| **P1.5** | **Verify P1**: backend gate + frontend; Playwright search + deep-link human lane | AGENTS §2 | verified in browser |
+
+### P2 — Personal Drive foundation (ADR-030 Workspace W1)
+
+| # | Task | refs | AC |
+|---|---|---|---|
+| **P2.1** | **Schema `0021` + store correctness**: `storage_accounts`, `storage_blobs` (immutable, ref-counted), `drive_nodes`, `drive_versions`; object store gains streaming + content-addressed put; reconciliation/GC worker | data-model §post-v1; ADR-030 | migration clean; blob dedupe by hash; GC removes only ref_count=0 past retention; tests |
+| **P2.2** | **Drive service + API + tools**: folders, upload (reserve→write→commit→usage), download, rename/move, versions + restore-version, trash/restore, quota accounting, storage summary; REST §10.2; agent tools (purge human-only) | api §10.2; ADR-023 | quota never double-counts unchanged bytes; crash leaves no orphan/lost bytes (reconcile converges); trash restorable; tests |
+| **P2.3** | **Files → Drive migration**: migrate `files` rows into personal Drive root, preserve version/hash, no object-key exposure; legacy `/files` behavior preserved during transition | ADR-030 | existing files visible + downloadable post-migration; test |
+| **P2.4** | **Frontend Workspace/Drive**: Drive browser (folders, breadcrumbs, upload, versions, trash, search/sort) + storage management (Active/History/Trash/Reserved/Available) at `/workspace`; responsive | workspace-product-report | build/lint green; renders |
+| **P2.5** | **Verify P2 + unified**: backend gate + frontend; Playwright drive human lane; final check before owner acceptance | AGENTS §2 | verified; ready for owner acceptance |
+
+**P0–P2 exit:** dedicated Sessions library (browse + truthful state-specific resume + content search with exact deep-links) and a Personal Drive (folders, versions, trash, quota, storage management) with the files→Drive migration; agent parity via tools; zero cross-tenant/user leakage; full backend gate + frontend build/lint green; Playwright human-lane per phase.
+
+---
+
 
 ## Cross-cutting (do continuously, not a separate phase)
 - **Tests with every task** — deterministic, mock provider, `pytest-asyncio`. No real model calls in tests.

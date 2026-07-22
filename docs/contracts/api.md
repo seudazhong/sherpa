@@ -1335,3 +1335,143 @@ Anything not listed is not a v1 API. In particular, `/webhooks/*`, `/qq/*`,
 `/agentic-email/*`, `/connectors/github/*`, `/files/*`, `/sandbox/*`,
 `/agents/*`, generic `/cron/*`, WebSocket routes, and approval-renderer routes
 MUST be absent.
+
+## 10. Post-v1 endpoints (ADR-029 / ADR-030)
+
+> Added after the frozen v1 inventory. QQ (`/channels/qq/*`), agentic email
+> (`/channels/email/*`), connectors config, memory, and files already shipped in
+> post-v1 milestones. This section adds the **Session Library / search** (ADR-029)
+> and **Personal Drive** (ADR-030) routes. All are `Session`-authenticated,
+> tenant + user scoped, and follow the same representation/cursor rules as v1.
+
+### 10.1 Session Library and search (ADR-029)
+
+Extends the existing `SessionSummary` used by `GET /sessions`:
+
+```python
+ResumeState = Literal[
+    "ready",        # idle; latest run settled → Resume session
+    "running",      # run lease fresh → Reconnect
+    "stale",        # status=running but lease expired → Recover run
+    "approval",     # pending approval, not expired → Review approval
+    "approval_expired",
+    "interrupted",  # interrupted before an external effect → Continue from checkpoint
+    "effect_unknown",  # needs reconciliation → Resolve outcome (never blind retry)
+    "failed",       # → Review failure
+    "archived",
+]
+
+class SessionSummary(StrictModel):
+    id: UUID
+    tenant_id: UUID
+    channel: str                 # web|qq|email
+    umo_key: str
+    title: str | None
+    resume_state: ResumeState
+    latest_run_state: RunState | None
+    last_message_preview: str | None
+    last_activity_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    match: SessionMatch | None    # present only in search responses
+
+class SessionMatch(StrictModel):
+    kind: Literal["title", "user_message", "assistant_message", "tool", "action"]
+    snippet: str                 # escaped; server never returns trusted HTML
+    anchor_kind: Literal["message", "event", "audit", "session"]
+    anchor_id: str
+    additional_matches: int
+
+class SessionTitleUpdate(StrictModel):
+    title: Annotated[str, Field(min_length=1, max_length=200)]
+
+class ResumeStateResponse(StrictModel):
+    session_id: UUID
+    resume_state: ResumeState
+    latest_run_state: RunState | None
+    live: bool                   # run lease fresh
+    pending_approval_id: str | None
+    unresolved_effect_id: str | None
+    events_url: str
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /sessions?query=&status=&channel=&updated_before=&cursor=&limit=` | none → `CursorPage[SessionSummary]` | Session | `200`, `400`, `401`, `422`, `503` |
+| `PATCH /sessions/{id}/title` | `SessionTitleUpdate` → `SessionSummary` | Session + CSRF | `200`, `401`, `404`, `409`, `422` |
+| `GET /sessions/{id}/resume-state` | none → `ResumeStateResponse` | Session | `200`, `401`, `404` |
+| `GET /sessions/{id}/timeline?anchor_kind=&anchor_id=&before_turns=&after_turns=` | none → `MessagePage` | Session | `200`, `400`, `401`, `404`, `422` |
+| `POST /sessions/{id}/recover` | `RecoverRequest` → `ResumeStateResponse` | Session + CSRF | `202`, `401`, `404`, `409`, `422` |
+
+- An empty `query` returns recent sessions ordered by `last_activity_at`
+  (snapshot cursor). A non-empty `query` returns session-grouped matches ranked by
+  fused FTS/CJK/trigram score (query-hash cursor). Both filter `tenant_id` **and**
+  `user_id`.
+- `resume_state` is computed, never advertised as an action that will immediately
+  fail: `approval` requires `now() < expires_at`; a `running` status past the run
+  lease is reported as `stale`, not `running`.
+- `timeline` maps an `event`/`tool` anchor to its `run_id` and the surrounding
+  message turn; it **never** compares `messages.seq` with
+  `event_journal.session_seq`.
+- `POST /sessions/{id}/recover` accepts only a state-specific reconciliation
+  decision (`RecoverRequest.action ∈ recheck|verified|new_run`) and reuses
+  invocation idempotency; it is not a generic retry.
+- Search snippets are escaped text plus match ranges; `ts_headline` output is
+  never returned as trusted HTML.
+- Branching (`POST /sessions/{id}/branches`) is Phase C and out of scope here.
+
+### 10.2 Personal Drive (ADR-030)
+
+```python
+class DriveNode(StrictModel):
+    id: UUID
+    parent_id: UUID | None
+    node_type: Literal["folder", "file"]
+    name: str
+    size_bytes: int
+    content_type: str
+    version: int
+    trashed: bool
+    updated_at: datetime
+
+class StorageAccount(StrictModel):
+    quota_bytes: int
+    used_bytes: int
+    reserved_bytes: int
+    trashed_bytes: int
+    available_bytes: int
+
+class FolderCreate(StrictModel):
+    parent_id: UUID | None = None
+    name: Annotated[str, Field(min_length=1, max_length=255)]
+
+class NodeMove(StrictModel):
+    if_version: int
+    parent_id: UUID | None = None
+    name: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /drive/nodes?parent=&query=&sort=&cursor=&limit=` | none → `CursorPage[DriveNode]` | Session | `200`, `400`, `401`, `422` |
+| `POST /drive/folders` | `FolderCreate` → `DriveNode` | Session + CSRF | `201`, `401`, `409`, `422`, `507` |
+| `POST /drive/files` | multipart (`path`, file) → `DriveNode` | Session + CSRF | `201`, `401`, `409`, `413`, `422`, `507` |
+| `GET /drive/nodes/{id}/content` | none → bytes | Session | `200`, `401`, `404` |
+| `PATCH /drive/nodes/{id}` | `NodeMove` → `DriveNode` | Session + CSRF | `200`, `401`, `404`, `409`, `422` |
+| `GET /drive/nodes/{id}/versions` | none → `list[DriveVersion]` | Session | `200`, `401`, `404` |
+| `POST /drive/nodes/{id}/restore-version` | `{version:int}` → `DriveNode` | Session + CSRF | `200`, `401`, `404`, `422`, `507` |
+| `POST /drive/nodes/{id}/trash` | none → `DriveNode` | Session + CSRF | `200`, `401`, `404` |
+| `POST /drive/nodes/{id}/restore` | none → `DriveNode` | Session + CSRF | `200`, `401`, `404`, `409` |
+| `DELETE /drive/nodes/{id}` | none → `204` (permanent purge) | Session + CSRF | `204`, `401`, `403`, `404` |
+| `GET /drive/storage` | none → `StorageAccount` | Session | `200`, `401` |
+
+- `507 insufficient_storage` when a reservation would exceed quota. Reservation is
+  taken before the object write and released on failure.
+- Uploads exceeding the per-file cap return `413`.
+- `DELETE` (permanent purge) is human-only/approval-gated; agent tools may trash
+  and restore but not purge.
+- Blob bytes are content-addressed and reference-counted; object deletion happens
+  only in a reconciliation/GC worker after `ref_count = 0` past retention.
+- The agent drives every non-purge capability through the same service layer
+  (ADR-023): `drive_list`, `drive_search`, `drive_make_folder`, `drive_write`,
+  `drive_read`, `drive_move`, `drive_trash`, `drive_restore`.

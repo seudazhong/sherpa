@@ -214,6 +214,44 @@
 - **owner 归属（单用户 v1）**：仅 owner 的 QQ openid 走 FULL 层级——首绑 openid 或 allowlist 字段。
 - **新依赖**：`qq-botpy`（WS+发送）+ `pycryptodome`（扫码 AES-GCM 解密）。（Webhook 的 Ed25519 依赖 `cryptography`——不做 webhook 则免。）
 - **排除 / 后置**：Webhook 模式；群消息（先私聊/C2C）；富媒体段（先纯文本）；定时提醒路由到 QQ（冻结 `schedules` CHECK，同 ADR-026）。
+
+---
+
+## Post-v1 产品线 ADR（2026-07-23，落实 R-SESSION-SEARCH / R-WORKSPACE-PRODUCT 调研）
+
+### ADR-029 · Session Library + 会话搜索（落地 P0/P1，源自 R-SESSION-SEARCH）
+- **决策（用户拍板 2026-07-23，实现到 P2 的一部分）**：把"浏览/搜索/恢复历史会话"做成一等产品 **Session Library**，取代当前 Chat 顶部的会话下拉。**保留"可重放 canonical history + 可重建 search projection"的分层，但云端不引入 JSONL/SQLite**（区别于 Copilot CLI / Codex 的本地实现；见 [`research/session-search-report.md`](research/session-search-report.md)）。
+- **真相源不变（ADR-016）**：`sessions`/`runs`/`messages`/`parts`/`event_journal`/`approval_envelopes`/`effect_invocations`/`audit_receipts` 仍是 Postgres canonical；搜索用**派生、可重建**的投影表 `session_search_entries`，损坏即从 canonical 重放重建，永不作为唯一副本。
+- **P0（Session Library 浏览+恢复，先做，无内容搜索）**：
+  - **会话标题持久化**：`sessions.title text NULL`（当前仅在 create 回显、未落库）；未设置时由首条用户消息派生（脱敏截断），可改名。
+  - **`last_activity_at` 维护**：列已存在且已建索引但从未写入；P0 起在每次消息落库/运行状态变化时更新，作为浏览排序键。
+  - **run 存活判定（liveness）**：`runs.status='running'` **不等于** worker 活着。新增 Postgres 心跳/租约（`runs.heartbeat_at`、`runs.lease_expires_at`、`runs.worker_id`）：worker 每 15s 续租、45s 过期；**Reconnect 仅在租约新鲜时可用**，过期归为 **Interrupted / Recover run**。Redis 心跳仅加速展示、非真相源。
+  - **状态化恢复语义**（不再用单一 "Resume" 按钮）：idle→Resume session；running(lease fresh)→Reconnect；running(lease stale)→Recover run；pending approval(`now()<expires_at`)→Review approval；expired approval→Dismiss；interrupted-safe→Continue from checkpoint；`effect_unknown`/`needs_reconciliation`→Resolve outcome（**绝不盲重试**，ADR-017）；failed→Review failure；archived→Open/Restore；deleted→不可恢复。审批过期是惰性判定，API **不得**暴露点了必失败的动作。
+  - **恢复语义拆分**：Open（只读加载 transcript/活动/状态）、Resume（对同一 durable session 提交新 prompt）、Reconnect（附着现有 SSE 流、不新建 run）、Recover（先对账 interrupted/stale run）。
+  - **授权**：所有 browse/search/timeline/resume-state/recover 查询同时校验 `tenant_id` **与** `user_id`（为未来多用户租户，现有 `/sessions/{id}/messages` 仅查 owner-is-None 的缺口一并收口）。
+- **P1（会话内容搜索）**：
+  - **派生投影 `session_search_entries`**（tenant/user 作用域，见 data-model 契约）：每个可索引单元一行（title / user_message / assistant_message / tool / action）。
+  - **两条独立计数轴不可混用**：`messages.seq` 与 `event_journal.session_seq` 是**各自 per-session 独立**的计数器，绝不能当同一条时间轴比较。投影用 **typed anchor**（`anchor_kind` ∈ message/event/audit + `anchor_id` + `run_id`），deep-link 时后端把 event/tool 命中映射回其 `run_id` 与相邻消息 turn。
+  - **检索**：Postgres FTS（`simple` 配置，空白分词精确 token/短语）+ **应用层 Unicode 字符 bigram** 索引处理中文/CJK + `pg_trgm`（≥3 码点的模糊/子串）。字段加权 title>user>assistant>tool/action + 轻量 recency。**不上独立向量库/OpenSearch**；语义检索（pgvector hybrid RRF）留 Phase C，且需 golden 集证明 MRR 提升≥10% 才保留。
+  - **投影更新不能只靠 event_journal**：prompt admission **不发用户消息事件**（`core/history.py` 已注明），title/status/删除也非 append 事件。故用**同事务投影 outbox**：消息/标题/归档/删除/脱敏在 canonical 写入同事务里写投影作业行；tool/run 事件与 audit 继续从 `event_journal` 消费；删除/脱敏产生**显式 tombstone**（清空 `content_text` + 置 `redacted_at`，生成列 fts 变空，永不命中）。live 投影与全量重建读同一 canonical 集合。
+  - **快照式游标**：browse 与 ranked search 用不同 opaque cursor（browse=snapshot 时刻+`(last_activity_at, id)`；search=query hash+`(score, last_activity_at, id)`），避免翻页时被新活动插入打乱。
+- **分阶段**：A=浏览+状态化恢复（P0）；B=lexical/CJK/trigram 搜索+精确跳转+投影重建/保留删除传播（P1）；C=语义召回+从某 turn 分支+lineage+托管多租户分区/RLS（**后置，本次不做**）。分支创建新 session（`parent_session_id` + `branched_from_message_id`），原 session 与 journal 不变。
+- **验收关键**：零跨租户/用户结果；索引永不是唯一副本；删/过期 ≤1min 从结果移除；重建产生同一可搜索集合；无 raw reasoning/明文密钥进投影；`ts_headline` 输出**必须**转义后再返回（非可信 HTML）；恢复保真覆盖 idle/live/stale/approval/expired/interrupted/effect_unknown/failed/archived/双端并发 十态，人需对账者绝不静默变 ready。
+- **不改的**：ADR-016/017 真相源与 effect 语义；ADR-020/021 审批与审计边界；ADR-023 能力层+双适配器（搜索/浏览同样 service→REST+Tool）。
+
+### ADR-030 · Personal Drive 基础（落地 P2 / Workspace W1，源自 R-WORKSPACE-PRODUCT）
+- **决策（用户拍板 2026-07-23，方向已于 2026-07-22 确认）**：把当前扁平的 **Files**（`/workspace`，仅上传/下载/永久删）升级为面向用户的 **Personal Drive**——W1 只做 Drive 基础，**不**暴露 Projects 导航、**不**把 Drive 挂进 sandbox、**不**做 GitHub 同步（那些是 W2/W3/W4）。
+- **产品词汇（防"workspace"一词多义）**：Personal workspace=所有权/配额容器；Drive=通用私有文件；后续 Projects/Source/Sandbox/Task working copy 等见 [`research/workspace-product-report.md`](research/workspace-product-report.md)。SPA 未来路由 `/work`、`/work/drive`（避开 API 前缀冲突）；W1 先在现有 `/workspace` 内落地，不新增顶层 Projects 项。
+- **存储真相源（ADR-012 延伸）**：Postgres 存**元数据/所有权/配额/版本/回收站/对账状态**；MinIO 存**不可变、租户作用域的字节 blob**；Redis 仅加速。**不**引入独立 Git 存储（那是被否的 Option 2）。这是 Option 1 + 向 Option 3 的可控演进，不是一上来就 Merkle 平台。
+- **新表（见 data-model 契约）**：`storage_accounts`（每 user 配额账户：quota_bytes、used_bytes、reserved_bytes）、`storage_blobs`（不可变，按 content_hash 去重，引用计数）、`drive_nodes`（folder/file 为一等记录，非纯路径前缀，支持 move/rename 事务、subtree、trash 状态）、`drive_versions`（每次覆写保留旧版本指向旧 blob，可恢复）。均带 `tenant_id`+复合键（ADR-015 前向兼容）。
+- **配额**：**部署可配置的每人 5 GiB 默认**（非 schema 常量）；另设 tenant 上限与部署硬顶。**记账**：每个 owner 对每个**不同 durable blob** 只计一次；多版本/多快照指向同一未变字节**不翻倍**；去重 credit **不跨 user/tenant 边界**。大写入前先 `reserved_bytes` 预留，失败释放。
+- **跨库一致性修正（当前 bug）**：现 `put_file` 先写新对象再 commit DB、`delete_file` 先删对象再 commit（`services/files.py`），崩溃/失败会留孤儿对象或删掉已提交行的旧对象。W1 改为 **DB 先行 + 不可变 blob + 引用计数 + 后台对账 GC**：写入=先 upsert blob 记录与节点（同事务），对象已存在则复用；删除=只解引用/进回收站，实际字节由 **对账/GC worker** 在无引用且过保留期后清理。孤儿/校验和/配额/GC 各有 reconciliation 作业。
+- **回收站**：以**永久删**替换为 **trash（软删+保留期+restore+显式 purge）**；purge 仅人工或审批门（agent 工具不得永久清除）。
+- **流式**：上传/下载不再整对象读入进程内存；大上传走可续传/分块（W1 至少去掉全量 buffer）。
+- **迁移**：现有 `files` 行迁入个人 Drive root，不暴露 object key，保留 version/hash；旧 REST/Tool 行为在过渡期保持可用（ADR-023 能力层不破坏）。
+- **Agent 平权（ADR-023）**：agent 经同一 service 可 list/search/建文件夹/写上传（限量）/rename/move/看版本/恢复版本/进回收站/恢复；**永久 purge 人工专属**。
+- **W1 明确不做**：Projects 导航占位、Drive 挂 sandbox、GitHub 同步/新 Git service（分别 W2/W3/W4）。
+- **验收关键**：配额/预留正确且不跨界翻倍；崩溃不产生孤儿对象或丢字节（对账可收敛）；trash 可 restore、purge 需授权；每页 390px 无横向滚动；迁移后旧文件可见可下载、版本/hash 保留。契约（data-model/api）**先于代码**更新（本 ADR 同批）。
 - **可验证性**：真实端到端需真实 bot 账号（+ 可能的 IP 白名单）→ **手动验收**（用户已同意此类留手动）；开发期用 `/channels/qq/simulate` + Messaging 页走人工路径。
 - **与 ADR-026 关系**：**部分取代**——保留 ADR-026 的"IM 线程映射到既有 `sessions`（`channel='qq'`）、审批复用 v1 基座、无新表/无冻结契约变更"结论；**只替换传输层**（OneBot → 官方 botpy/WS）。
 - **来源**：用户输入「既然要用官方 bot，OneBot 就不需要了」；调研见会话工作区 `qq-official-bot-research.md`（AstrBot 源码 + 腾讯 api-v2 + 官方 SDK `@tencent-connect/qqbot-connector@1.2.0` 确认扫码端点对第三方开放）。

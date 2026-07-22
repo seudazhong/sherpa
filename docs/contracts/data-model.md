@@ -1918,3 +1918,222 @@ every table:
 
 That migration is incomplete until role grants and API/worker/scheduler
 cross-tenant isolation tests ship with it.
+
+## Post-v1 contract additions (ADR-029 / ADR-030)
+
+> These tables/columns are **not** part of the frozen v1 block above. They are
+> added by later migrations (`0019+`). Every table keeps `tenant_id` + composite
+> tenant-scoped keys (ADR-015). Session-search and drive-metadata tables are
+> derived/rebuildable where noted; canonical truth stays in the v1 tables and
+> MinIO blobs.
+
+### Session Library + search (ADR-029, migrations `0019`, `0021`)
+
+```sql
+-- P0: persisted session title + run liveness lease.
+ALTER TABLE sessions ADD COLUMN title text;
+ALTER TABLE sessions
+    ADD CONSTRAINT ck_sessions_title
+    CHECK (title IS NULL OR char_length(title) BETWEEN 1 AND 200);
+
+ALTER TABLE runs ADD COLUMN heartbeat_at timestamptz;
+ALTER TABLE runs ADD COLUMN lease_expires_at timestamptz;
+ALTER TABLE runs ADD COLUMN worker_id text;
+-- A run is "live" only while status='running' AND lease_expires_at > now().
+CREATE INDEX ix_runs_live_lease
+    ON runs (tenant_id, lease_expires_at)
+    WHERE status = 'running';
+
+-- P1: derived, rebuildable search projection. One row per indexable unit.
+CREATE TABLE session_search_entries (
+    tenant_id        uuid NOT NULL,
+    id               uuid NOT NULL,
+    user_id          uuid NOT NULL,
+    session_id       uuid NOT NULL,
+    source_kind      text NOT NULL,          -- title|user_message|assistant_message|tool|action
+    source_id        text NOT NULL,          -- canonical id of the origin (message id, event id, receipt id)
+    anchor_kind      text NOT NULL,          -- message|event|audit|session
+    anchor_id        text NOT NULL,          -- typed deep-link target; never compares message.seq to event.session_seq
+    run_id           uuid,                   -- maps tool/action entries back to a turn
+    message_seq      bigint,                 -- nullable; only for message-kind anchors
+    event_session_seq bigint,               -- nullable; independent counter, never mixed with message_seq
+    channel          text NOT NULL,
+    content_text     text NOT NULL,          -- bounded, redacted; empty after tombstone
+    normalized_text  text NOT NULL,          -- lowercased/space-normalized for trigram
+    cjk_terms        text NOT NULL DEFAULT '', -- app-generated Unicode bigrams for CJK
+    occurred_at      timestamptz NOT NULL,
+    projection_version integer NOT NULL,
+    redacted_at      timestamptz,            -- set on delete/redaction tombstone
+    fts tsvector GENERATED ALWAYS AS (to_tsvector('simple', content_text)) STORED,
+    cjk_fts tsvector GENERATED ALWAYS AS (to_tsvector('simple', cjk_terms)) STORED,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_session_search_entries PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_sse_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_sse_session FOREIGN KEY (tenant_id, session_id)
+        REFERENCES sessions (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT uq_sse_source
+        UNIQUE (tenant_id, source_kind, source_id, projection_version),
+    CONSTRAINT ck_sse_kind
+        CHECK (source_kind IN
+            ('title','user_message','assistant_message','tool','action')),
+    CONSTRAINT ck_sse_anchor_kind
+        CHECK (anchor_kind IN ('message','event','audit','session')),
+    CONSTRAINT ck_sse_content_bound
+        CHECK (octet_length(content_text) <= 32768)
+);
+CREATE INDEX ix_sse_browse
+    ON session_search_entries (tenant_id, user_id, occurred_at DESC, id)
+    WHERE redacted_at IS NULL;
+CREATE INDEX ix_sse_session_anchor
+    ON session_search_entries (tenant_id, session_id, occurred_at DESC);
+CREATE INDEX ix_sse_fts ON session_search_entries USING GIN (fts);
+CREATE INDEX ix_sse_cjk_fts ON session_search_entries USING GIN (cjk_fts);
+CREATE INDEX ix_sse_normalized_trgm
+    ON session_search_entries USING GIN (normalized_text gin_trgm_ops);
+
+-- Same-transaction projection change feed. Prompt admission emits no user-message
+-- journal event, and title/status/delete are not journal events, so the projector
+-- also consumes this outbox (tool/run events + audit continue via event_journal).
+CREATE TABLE search_projection_jobs (
+    tenant_id      uuid NOT NULL,
+    id             uuid NOT NULL,
+    session_id     uuid NOT NULL,
+    op             text NOT NULL,            -- upsert_message|upsert_title|tombstone_session|tombstone_source
+    source_kind    text,
+    source_id      text,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    claimed_at     timestamptz,
+    processed_at   timestamptz,
+    CONSTRAINT pk_search_projection_jobs PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_spj_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT ck_spj_op
+        CHECK (op IN
+            ('upsert_message','upsert_title','tombstone_session','tombstone_source'))
+);
+CREATE INDEX ix_spj_unprocessed
+    ON search_projection_jobs (tenant_id, created_at)
+    WHERE processed_at IS NULL;
+
+-- Durable projector cursor over event_journal (tool/run/audit) for rebuild + catch-up.
+CREATE TABLE search_projection_checkpoints (
+    tenant_id        uuid NOT NULL,
+    projector        text NOT NULL,          -- 'event_journal' | 'jobs'
+    last_event_id    uuid,
+    projection_version integer NOT NULL DEFAULT 1,
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_search_projection_checkpoints PRIMARY KEY (tenant_id, projector)
+);
+```
+
+Notes: `pg_trgm` must be enabled (`CREATE EXTENSION IF NOT EXISTS pg_trgm`). CJK
+handling is application-generated Unicode bigrams (no `zhparser`/`pg_bigm`
+dependency). Deletion/redaction sets `content_text=''` + `redacted_at`; the
+generated `fts`/`cjk_fts` become empty and never match. A rebuild truncates a
+`projection_version` and replays canonical `messages`/`event_journal`/
+`audit_receipts`.
+
+### Personal Drive (ADR-030, migration `0020`)
+
+```sql
+-- Per-user quota account. used_bytes counts distinct referenced blobs once.
+CREATE TABLE storage_accounts (
+    tenant_id      uuid NOT NULL,
+    user_id        uuid NOT NULL,
+    quota_bytes    bigint NOT NULL,
+    used_bytes     bigint NOT NULL DEFAULT 0,
+    reserved_bytes bigint NOT NULL DEFAULT 0,
+    version        integer NOT NULL DEFAULT 1,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_storage_accounts PRIMARY KEY (tenant_id, user_id),
+    CONSTRAINT fk_sa_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_sa_numbers
+        CHECK (quota_bytes >= 0 AND used_bytes >= 0 AND reserved_bytes >= 0)
+);
+
+-- Immutable content-addressed blob record. Reference-counted; GC removes the
+-- MinIO object only when ref_count reaches 0 and retention has elapsed.
+CREATE TABLE storage_blobs (
+    tenant_id     uuid NOT NULL,
+    user_id       uuid NOT NULL,
+    content_hash  bytea NOT NULL,
+    object_key    text NOT NULL,
+    size_bytes    bigint NOT NULL,
+    content_type  text NOT NULL DEFAULT 'application/octet-stream',
+    ref_count     integer NOT NULL DEFAULT 0,
+    unreferenced_at timestamptz,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_storage_blobs PRIMARY KEY (tenant_id, user_id, content_hash),
+    CONSTRAINT fk_sb_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_sb_size CHECK (size_bytes >= 0 AND ref_count >= 0)
+);
+CREATE INDEX ix_sb_gc
+    ON storage_blobs (tenant_id, unreferenced_at)
+    WHERE ref_count = 0;
+
+-- Folder/file nodes as first-class records (not path prefixes).
+CREATE TABLE drive_nodes (
+    tenant_id     uuid NOT NULL,
+    id            uuid NOT NULL,
+    user_id       uuid NOT NULL,
+    parent_id     uuid,                       -- NULL = Drive root
+    node_type     text NOT NULL,              -- folder|file
+    name          text NOT NULL,
+    content_hash  bytea,                       -- current version's blob (file only)
+    size_bytes    bigint NOT NULL DEFAULT 0,
+    content_type  text NOT NULL DEFAULT 'application/octet-stream',
+    version       integer NOT NULL DEFAULT 1,
+    trashed_at    timestamptz,
+    purge_after   timestamptz,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_drive_nodes PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_dn_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_dn_parent FOREIGN KEY (tenant_id, parent_id)
+        REFERENCES drive_nodes (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT ck_dn_type CHECK (node_type IN ('folder','file')),
+    CONSTRAINT ck_dn_name
+        CHECK (char_length(name) BETWEEN 1 AND 255 AND name NOT LIKE '%/%')
+);
+-- Unique name among live (non-trashed) siblings of the same owner.
+CREATE UNIQUE INDEX uq_dn_sibling_name
+    ON drive_nodes (tenant_id, user_id, parent_id, name)
+    WHERE trashed_at IS NULL;
+CREATE INDEX ix_dn_parent
+    ON drive_nodes (tenant_id, user_id, parent_id)
+    WHERE trashed_at IS NULL;
+CREATE INDEX ix_dn_trash
+    ON drive_nodes (tenant_id, user_id, purge_after)
+    WHERE trashed_at IS NOT NULL;
+
+-- Retained prior file versions (each points at an immutable blob).
+CREATE TABLE drive_versions (
+    tenant_id     uuid NOT NULL,
+    id            uuid NOT NULL,
+    node_id       uuid NOT NULL,
+    user_id       uuid NOT NULL,
+    version       integer NOT NULL,
+    content_hash  bytea NOT NULL,
+    size_bytes    bigint NOT NULL,
+    content_type  text NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_drive_versions PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_dv_node FOREIGN KEY (tenant_id, node_id)
+        REFERENCES drive_nodes (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT uq_dv_node_version UNIQUE (tenant_id, node_id, version)
+);
+```
+
+Cross-store ordering (fixes the current `files` bug): within one DB transaction,
+upsert the `storage_blobs` record (reusing an existing hash), the `drive_nodes`
+row, the `drive_versions` row, and the `storage_accounts` reservation→usage; the
+MinIO object for a new hash is written **before** commit, but object deletion is
+never inline — a reconciliation/GC worker removes objects only for blobs whose
+`ref_count = 0` past retention. Trash is `trashed_at`/`purge_after`; permanent
+purge is human-only/approval-gated (ADR-030).
