@@ -17,21 +17,53 @@ export interface AppMeta {
   real_model: boolean;
 }
 
+export type ResumeState =
+  | "ready"
+  | "running"
+  | "stale"
+  | "approval"
+  | "approval_expired"
+  | "interrupted"
+  | "effect_unknown"
+  | "failed"
+  | "archived";
+
+export interface SessionMatch {
+  kind: "title" | "user_message" | "assistant_message" | "tool" | "action";
+  snippet: string;
+  anchor_kind: "message" | "event" | "audit" | "session";
+  anchor_id: string;
+  additional_matches: number;
+}
+
 export interface SessionSummary {
   id: string;
   tenant_id: string;
   channel: string;
   umo_key: string;
   title: string | null;
+  resume_state: ResumeState;
   latest_run_state: string | null;
   last_message_preview: string | null;
+  last_activity_at: string | null;
   created_at: string;
   updated_at: string;
+  match?: SessionMatch | null;
 }
 
 export interface SessionPage {
   items: SessionSummary[];
   next_cursor: string | null;
+}
+
+export interface ResumeStateResponse {
+  session_id: string;
+  resume_state: ResumeState;
+  latest_run_state: string | null;
+  live: boolean;
+  pending_approval_id: string | null;
+  unresolved_effect_id: string | null;
+  events_url: string;
 }
 
 export interface PromptAdmission {
@@ -228,13 +260,21 @@ export interface ApprovalEnvelopeBody {
   expires_at: string;
   nonce: string;
   authorized_actor: { type: "user"; id: string };
-  decision: { actor: { type: "user"; id: string }; channel: "web"; choice: string };
+  decision: {
+    actor: { type: "user"; id: string };
+    channel: "web";
+    choice: string;
+  };
 }
 
 export interface ApprovalResolution {
   correlation_id: string;
   state: "resolved";
-  winning_decision: { actor: { type: string; id: string }; channel: string; choice: string };
+  winning_decision: {
+    actor: { type: string; id: string };
+    channel: string;
+    choice: string;
+  };
   decided_at: string;
 }
 
@@ -372,14 +412,23 @@ export class ApiError extends Error {
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, { credentials: "include", ...init });
   if (!res.ok) {
-    throw new ApiError(res.status, `${init.method ?? "GET"} ${path} -> ${res.status}`);
+    throw new ApiError(
+      res.status,
+      `${init.method ?? "GET"} ${path} -> ${res.status}`,
+    );
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
-function jsonInit(method: string, csrf: string | null, body?: unknown): RequestInit {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+function jsonInit(
+  method: string,
+  csrf: string | null,
+  body?: unknown,
+): RequestInit {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   if (csrf) headers["X-CSRF-Token"] = csrf;
   return {
     method,
@@ -390,13 +439,54 @@ function jsonInit(method: string, csrf: string | null, body?: unknown): RequestI
 
 export const api = {
   login: (email: string, password: string) =>
-    req<AuthSession>("/auth/login", jsonInit("POST", null, { email, password })),
+    req<AuthSession>(
+      "/auth/login",
+      jsonInit("POST", null, { email, password }),
+    ),
   session: () => req<AuthSession>("/auth/session"),
   getMeta: () => req<AppMeta>("/meta"),
   logout: (csrf: string) => req<void>("/auth/logout", jsonInit("POST", csrf)),
-  listSessions: () => req<SessionPage>("/sessions"),
+  listSessions: (params?: {
+    query?: string;
+    status?: string;
+    channel?: string;
+    cursor?: string;
+    limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.query) q.set("query", params.query);
+    if (params?.status) q.set("status", params.status);
+    if (params?.channel) q.set("channel", params.channel);
+    if (params?.cursor) q.set("cursor", params.cursor);
+    if (params?.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return req<SessionPage>(`/sessions${qs ? `?${qs}` : ""}`);
+  },
+  renameSession: (csrf: string, sid: string, title: string) =>
+    req<SessionSummary>(
+      `/sessions/${sid}/title`,
+      jsonInit("PATCH", csrf, { title }),
+    ),
+  resumeState: (sid: string) =>
+    req<ResumeStateResponse>(`/sessions/${sid}/resume-state`),
+  sessionTimeline: (sid: string, anchorKind: string, anchorId: string) =>
+    req<MessagePage>(
+      `/sessions/${sid}/timeline?anchor_kind=${encodeURIComponent(anchorKind)}&anchor_id=${encodeURIComponent(anchorId)}`,
+    ),
+  recoverSession: (
+    csrf: string,
+    sid: string,
+    action: "recheck" | "verified" | "new_run",
+  ) =>
+    req<ResumeStateResponse>(
+      `/sessions/${sid}/recover`,
+      jsonInit("POST", csrf, { action }),
+    ),
   createSession: (csrf: string, title?: string | null) =>
-    req<SessionSummary>("/sessions", jsonInit("POST", csrf, { title: title ?? null })),
+    req<SessionSummary>(
+      "/sessions",
+      jsonInit("POST", csrf, { title: title ?? null }),
+    ),
   listMessages: (sid: string) => req<MessagePage>(`/sessions/${sid}/messages`),
   prompt: (csrf: string, sid: string, text: string) =>
     req<PromptAdmission>(
@@ -420,13 +510,22 @@ export const api = {
     req<Todo>(`/todos/${id}`, jsonInit("PATCH", csrf, patch)),
   listNotifications: () => req<NotificationPage>("/notifications"),
   listPermissions: () => req<PendingApprovalPage>("/permissions"),
-  resolvePermission: (csrf: string, p: PendingApproval, nonce: string, choice: string) =>
+  resolvePermission: (
+    csrf: string,
+    p: PendingApproval,
+    nonce: string,
+    choice: string,
+  ) =>
     req<ApprovalResolution>(
       `/permissions/${p.correlation_id}/resolve`,
       jsonInit("POST", csrf, {
         schema_version: "1.0",
         correlation_id: p.correlation_id,
-        bound: { tenant_id: p.tenant_id, run_id: p.run_id, invocation_id: p.invocation_id },
+        bound: {
+          tenant_id: p.tenant_id,
+          run_id: p.run_id,
+          invocation_id: p.invocation_id,
+        },
         action: {
           tool_name: p.tool_name,
           permission_scope: p.permission_scope,
@@ -439,15 +538,29 @@ export const api = {
         expires_at: p.expires_at,
         nonce,
         authorized_actor: { type: "user", id: p.authorized_actor.id },
-        decision: { actor: { type: "user", id: p.authorized_actor.id }, channel: "web", choice },
+        decision: {
+          actor: { type: "user", id: p.authorized_actor.id },
+          channel: "web",
+          choice,
+        },
       } satisfies ApprovalEnvelopeBody),
     ),
   listActivity: (type?: string) =>
-    req<ActivityPage>(`/activity${type ? `?type=${encodeURIComponent(type)}` : ""}`),
+    req<ActivityPage>(
+      `/activity${type ? `?type=${encodeURIComponent(type)}` : ""}`,
+    ),
   deleteImported: (csrf: string) =>
-    req<DeleteImportedResult>("/activity/delete-imported", jsonInit("POST", csrf)),
+    req<DeleteImportedResult>(
+      "/activity/delete-imported",
+      jsonInit("POST", csrf),
+    ),
   listSchedules: () => req<SchedulePage>("/schedules"),
-  createDigest: (csrf: string, localTime: string, timezone: string, name?: string) =>
+  createDigest: (
+    csrf: string,
+    localTime: string,
+    timezone: string,
+    name?: string,
+  ) =>
     req<Schedule>(
       "/schedules",
       jsonInit("POST", csrf, {
@@ -479,7 +592,10 @@ export const api = {
       }),
     ),
   cancelSchedule: (csrf: string, id: string, ifVersion: number) =>
-    req<Schedule>(`/schedules/${id}/cancel`, jsonInit("POST", csrf, { if_version: ifVersion })),
+    req<Schedule>(
+      `/schedules/${id}/cancel`,
+      jsonInit("POST", csrf, { if_version: ifVersion }),
+    ),
   getSettings: () => req<Settings>("/settings"),
   updateSettings: (csrf: string, patch: Record<string, unknown>) =>
     req<Settings>("/settings", jsonInit("PATCH", csrf, patch)),
@@ -492,9 +608,16 @@ export const api = {
   addPassage: (csrf: string, text: string) =>
     req<PassageItem>("/memory/passages", jsonInit("POST", csrf, { text })),
   deletePassage: (csrf: string, id: string) =>
-    req<void>(`/memory/passages/${encodeURIComponent(id)}`, jsonInit("DELETE", csrf)),
+    req<void>(
+      `/memory/passages/${encodeURIComponent(id)}`,
+      jsonInit("DELETE", csrf),
+    ),
   listFiles: () => req<FilePage>("/files"),
-  uploadFile: async (csrf: string, path: string, file: File): Promise<FileItem> => {
+  uploadFile: async (
+    csrf: string,
+    path: string,
+    file: File,
+  ): Promise<FileItem> => {
     const fd = new FormData();
     fd.append("path", path);
     fd.append("upload", file);
@@ -507,7 +630,8 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, `POST /files -> ${res.status}`);
     return (await res.json()) as FileItem;
   },
-  deleteFile: (csrf: string, id: string) => req<void>(`/files/${id}`, jsonInit("DELETE", csrf)),
+  deleteFile: (csrf: string, id: string) =>
+    req<void>(`/files/${id}`, jsonInit("DELETE", csrf)),
   channelsStatus: () => req<ChannelsStatus>("/channels"),
   simulateQQ: (csrf: string, text: string, fromId?: string) =>
     req<SimulateResult>(
@@ -519,15 +643,26 @@ export const api = {
       "/channels/email/simulate",
       jsonInit("POST", csrf, { text, from_id: fromId ?? "" }),
     ),
-  threadTranscript: (sid: string) => req<ThreadTranscript>(`/channels/threads/${sid}`),
+  threadTranscript: (sid: string) =>
+    req<ThreadTranscript>(`/channels/threads/${sid}`),
   putQQConfig: (
     csrf: string,
-    cfg: { app_id: string; enabled: boolean; owner_openid: string; secret: string },
+    cfg: {
+      app_id: string;
+      enabled: boolean;
+      owner_openid: string;
+      secret: string;
+    },
   ) => req<QQStatus>("/channels/qq/config", jsonInit("PUT", csrf, cfg)),
-  testQQ: (csrf: string) => req<QQTestResult>("/channels/qq/test", jsonInit("POST", csrf)),
-  qqBindStart: (csrf: string) => req<QQBindStart>("/channels/qq/bind/start", jsonInit("POST", csrf)),
+  testQQ: (csrf: string) =>
+    req<QQTestResult>("/channels/qq/test", jsonInit("POST", csrf)),
+  qqBindStart: (csrf: string) =>
+    req<QQBindStart>("/channels/qq/bind/start", jsonInit("POST", csrf)),
   qqBindPoll: (csrf: string, taskId: string) =>
-    req<QQBindPollResult>("/channels/qq/bind/poll", jsonInit("POST", csrf, { task_id: taskId })),
+    req<QQBindPollResult>(
+      "/channels/qq/bind/poll",
+      jsonInit("POST", csrf, { task_id: taskId }),
+    ),
 };
 
 export function exportUrl(): string {

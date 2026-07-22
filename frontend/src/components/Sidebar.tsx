@@ -12,6 +12,7 @@ type IconName =
   | "memory"
   | "messaging"
   | "schedules"
+  | "sessions"
   | "settings";
 
 interface NavItem {
@@ -25,6 +26,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     label: "Workspace",
     items: [
       { label: "Chat", path: "/", icon: "chat" },
+      { label: "Sessions", path: "/sessions", icon: "sessions" },
       { label: "Inbox", path: "/inbox", icon: "inbox" },
       { label: "Activity", path: "/data", icon: "activity" },
     ],
@@ -64,6 +66,12 @@ function NavIcon({ name }: { name: IconName }) {
       <>
         <path d="M4 5h16v13H4z" />
         <path d="M4 13h4l1.5 2h5L16 13h4M7 9h10" />
+      </>
+    ),
+    sessions: (
+      <>
+        <circle cx="11" cy="11" r="6.5" />
+        <path d="m21 21-4.5-4.5M11 8v3l2 1.5" />
       </>
     ),
     activity: (

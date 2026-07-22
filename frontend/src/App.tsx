@@ -10,6 +10,7 @@ import LoginView from "./views/LoginView";
 import MemoryView from "./views/MemoryView";
 import MessagingView from "./views/MessagingView";
 import SchedulesView from "./views/SchedulesView";
+import SessionsView from "./views/SessionsView";
 import SettingsView from "./views/SettingsView";
 
 function Protected({ children }: { children: JSX.Element }) {
@@ -22,7 +23,10 @@ export default function App() {
   const { ready, authed } = useAuth();
   return (
     <Routes>
-      <Route path="/login" element={ready && authed ? <Navigate to="/" replace /> : <LoginView />} />
+      <Route
+        path="/login"
+        element={ready && authed ? <Navigate to="/" replace /> : <LoginView />}
+      />
       <Route
         path="/"
         element={
@@ -36,6 +40,14 @@ export default function App() {
         element={
           <Protected>
             <InboxView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/sessions"
+        element={
+          <Protected>
+            <SessionsView />
           </Protected>
         }
       />

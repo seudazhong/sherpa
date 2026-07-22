@@ -6,6 +6,7 @@ import {
   type FormEvent,
 } from "react";
 import ReactMarkdown from "react-markdown";
+import { useSearchParams } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 
 import {
@@ -65,6 +66,7 @@ function sessionLabel(s: SessionSummary): string {
 
 export default function ChatView() {
   const { email, csrf } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
@@ -193,15 +195,24 @@ export default function ChatView() {
     let cancelled = false;
     const boot = async () => {
       try {
-        const page = await api.listSessions();
+        const page = await api.listSessions({ limit: 100 });
         if (cancelled) return;
         setSessions(page.items);
-        let sid = page.items[0]?.id ?? null;
+        const requested = searchParams.get("session");
+        const preferred =
+          requested && page.items.some((s) => s.id === requested)
+            ? requested
+            : null;
+        let sid = preferred ?? page.items[0]?.id ?? null;
         if (!sid) {
           if (!csrf) return;
           const created = await api.createSession(csrf);
           setSessions([created]);
           sid = created.id;
+        }
+        if (requested) {
+          searchParams.delete("session");
+          setSearchParams(searchParams, { replace: true });
         }
         if (cancelled) return;
         await loadSession(sid);
