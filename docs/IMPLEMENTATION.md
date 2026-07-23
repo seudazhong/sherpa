@@ -140,6 +140,26 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
+## Phase APPROVALS — 待审批入口 + 可配置预授权 grants (ADR-034) — **ACCEPTED (2026-07-23)**
+
+> Two features that make background/scheduled external actions both safe and automatable (driven by the scheduled-email use case): **(A)** a standalone pending-approvals surface so background/scheduled approvals can be resolved (today the nonce is delivered only via chat SSE, so they can't be); **(B)** configurable pre-authorization **grants** (e.g., an email-recipient allowlist) so the loop auto-allows matching actions without an approval. Prereq: **ADR-034 accepted + contract deltas** (data-model `permission_grants`, api §4.7 + grants). Per task: backend gate + frontend → commit → tick STATUS. Two-lane Playwright per phase. Security invariants from ADR-019/020/021 are non-negotiable (see ADR-034).
+
+| # | Task | refs | AC |
+|---|---|---|---|
+| **APR.0** | **ADR-034 + contracts**: finalize ADR-034; write `permission_grants` DDL (data-model, migration `0024`); api.md §4.7 — web resolution `nonce` optional (session+CSRF+authorized_actor+binding), and a new grants section (`GET/POST/DELETE /grants`). | ADR-034; ADR-020; data-model; api §4.7 | contract before code; ADR accepted |
+| **APR.A1** | **Web resolution nonce-optional**: `permissions/service.resolve_approval` + `api/permissions.resolve` accept web owner resolution without a nonce (verify session actor==authorized_decider + CSRF + full binding); non-web channels still require nonce. `GET /permissions` unchanged (already lists pending). | ADR-034; api §4.7 | background approval resolvable via web w/o nonce; channel path unchanged; authz test |
+| **APR.A2** | **Approvals UI**: standalone Approvals page at `/approvals` (list pending: tool, preview, source run/session, expiry; Approve `allow_once`/`always`, Reject → `/permissions/{id}/resolve`); sidebar entry + pending count; wire InboxView approvals to actually resolve. Responsive. | ADR-034; design | build/lint green; resolves a real pending approval in browser |
+| **APR.B1** | **Grants schema + matcher + loop**: `permission_grants` table + model (migration `0024`); a per-tool matcher registry (send_email recipient allowlist first); `core/loop` checks matching grants on `ask` → auto-allow (record effect + audit receipt `auto_approved_by_grant`, no envelope, no pause). Grants service (owner-only). | ADR-034; core/loop; ADR-021 | matched action auto-executes + audited; unmatched still asks; no cross-user leak; tests |
+| **APR.B2** | **`always` persists a grant**: resolving with `always` derives + persists a grant from the action scope (send_email → add recipient to allowlist); subsequent matching actions auto-allow. | ADR-034 | after `always`, the same recipient auto-sends next time; test |
+| **APR.B3** | **Grants REST + UI**: `GET/POST/DELETE /grants` (owner + CSRF; NOT an agent tool); grants management UI (e.g., Settings: "Trusted email recipients" + general grants list, add/remove). Responsive. | ADR-034; api §4.7 | build/lint green; add/remove a grant in browser; agent has no grant tool |
+| **APR.V** | **Verify APPROVALS**: backend gate + frontend; Playwright two lanes — human (approve a background approval; add an email allowlist; a scheduled email to a whitelisted address auto-sends, non-whitelisted still asks) + agent (scheduled_task to a whitelisted recipient auto-executes; agent cannot self-grant). | AGENTS §2 | verified both lanes; ready for owner acceptance |
+
+**APPROVALS exit:** background/scheduled approvals are resolvable from a real UI; owner-configured grants auto-allow matching external actions (with audit) while everything else still asks; `always` persists a grant; non-web channels keep the nonce; zero cross-user/tenant leakage; full gate + build/lint green; Playwright both lanes.
+
+**Explicitly out of scope (later ADR):** wildcard/regex grants, cross-user shared grants, time-window/quota-limited grants, per-session `always` persistence, agent-created grants.
+
+---
+
 
 ## Cross-cutting (do continuously, not a separate phase)
 - **Tests with every task** — deterministic, mock provider, `pytest-asyncio`. No real model calls in tests.

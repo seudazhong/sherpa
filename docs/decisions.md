@@ -358,3 +358,20 @@
 - **验收关键**：每次 LLM 调用可见装配输入/token/finish_reason（不再靠反推）；默认无内容泄漏、无密钥进 span；日志仍是真相源、后端挂不丢 run；测试用 `InMemorySpanExporter` 确定性通过；Phoenix 复用现有 Postgres、默认关闭、一开关接通。
 
 - **来源**：R-OBSERVABILITY 调研 [`research/observability.md`](research/observability.md)（OTel GenAI semconv · Langfuse · Arize Phoenix/OpenInference · OpenLLMetry · landscape）；用户输入「起草 ADR-033 + 契约 diff」；STATUS item0 推迟的可观测记录。
+
+### ADR-034 · 待审批入口 + 可配置预授权（grants）——让后台/定时任务的外部动作既安全又可自动化（源自定时发邮件用例）
+
+- **决策（用户拍板 2026-07-23）**：把审批从"只在 Chat 页随 SSE 弹出"扩成两件事：**(A) 独立的「待审批」前台入口**（列出所有 pending 审批、可 Approve/Reject，覆盖后台/定时任务产生的审批）；**(B) 可配置的「预授权」grants**（用户配置的自动放行规则，如**收件人白名单**：给自己个人/工作邮箱发信免逐次审批直接发）。二者组合覆盖绝大多数定时/自主场景（定时发邮件、发 QQ、写码跑码、未来能力）：**能预授权的直接自动做，不能预授权的进待审批入口等人工**。
+- **动机**：现有实现（recon 2026-07-23）——`permissions/policy.evaluate(tool)` **只看 `tool.flags`**（看不到 args/收件人/用户配置），外部动作一律 `ask`；审批 **nonce 只随 `permission.asked` SSE 事件下发**、`GET /permissions` 不含 nonce，故**后台/定时任务的审批在没有开着的 Chat 流时无法被批准**（InboxView 只能「Review in chat」）；`allow_session`/`always` 选项存在但 **resume 对所有 allow 一视同仁、grants 未落地**。定时发邮件因此每次都卡在无法操作的审批上。
+- **(A) 待审批入口 —— Web 解析改为 nonce 可选（**协调 ADR-020**）**：
+  - **决策**：`POST /permissions/{id}/resolve` 对 `channel='web'` 的 owner 解析，**以 会话Cookie(HttpOnly) + CSRF + `authorized_decider` 相等 + 完整 binding 校验（correlation/run/invocation/tool/scope/session/effect/args_hash/policy_version）** 为准，**nonce 变为可选**（提供则仍校验）；**非 web 渠道（QQ/邮件）仍要求 nonce**（那里 actor 身份更弱）。理由：nonce 的初衷是"确保决策者看到了那次 ask + 单次防重放"，对已强认证的 owner Web 会话，session+CSRF+binding 已等价达成；DB 仍只存 `nonce_hash`（不落明文）。这落实了 STATUS 早已标注的"web 的 nonce 交付需决策"。
+  - 前端新增 **Approvals 页（SPA 路由 `/approvals`，避开 API 前缀 `/permissions`）**：列 pending（工具、预览、来源 run/session、到期），Approve(`allow_once`/`always`)/Reject，直接调 `/permissions/{id}/resolve`（web、无需 nonce）；侧栏入口带未决计数；InboxView 的审批项也接上真正的解析（不再只跳 chat）。
+- **(B) 预授权 grants —— 让 policy 变 args/上下文感知**：
+  - **新表 `permission_grants`**（见 data-model 契约；tenant+user 作用域，ADR-015 复合键）：`tool_name` + `match_json`（工具专属匹配规则，如 send_email 的收件人白名单 `{"recipients":["a@x.com"]}`）+ `scope` + 审计字段。**owner 专属配置，agent 不得自建 grant**（不给 agent 工具、无 agent 可写 REST）。
+  - **匹配器登记表**（每 `tool_name` 一个纯函数 `matches(match_json, args)->bool`）：首发 **send_email**（`args["to"].lower() ∈ recipients`，精确、默认不通配）；结构可扩展到 QQ 目标、代码执行等。
+  - **循环集成**：`core/loop.py` 命中 `ask` 后、建审批信封**之前**，查匹配的 grant → 命中则**自动放行**（照常 `begin_invocation` 记 effect + 执行 + **写审计回执**，**不建 envelope、不停机**）。未命中才建审批（现有行为）。审计上标注 `auto_approved_by_grant`，留痕可查（ADR-021）。
+  - **`always` 落地为建 grant**：用户在待审批入口选 `always` 时，从该动作 scope 派生并**持久化一条 grant**（如 send_email→把本次收件人加入白名单），实现"批一次、以后自动"。`allow_session` 仍限本 session（v1 可先等同 `allow_once` + 建议用 `always`；session 级持久留后续）。
+- **安全不变量（不得违反，复用 ADR-019/020/021）**：grant 仅 owner 配置、tenant+user 作用域、**精确匹配不默认通配**；自动放行**仍记 effect_invocation + 审计回执**（有据可查）；grant 绝不含密钥；解析仍做完整 binding + args_hash + policy/actor 校验，`permission_scope` 不可被客户端放大；非 web 渠道 nonce 不放松；审批预览仍为语义纯文本、渲染端转义。
+- **明确不做（本阶段）**：通配/正则 grant、跨 user 共享 grant、时间窗/次数限额 grant、per-session `always`（session 持久）、把 grant 开放给 agent 自建——留后续 ADR。
+- **验收关键**：后台/定时任务产生的审批能在 `/approvals` 页被 owner 批准并真正执行；给白名单收件人的定时邮件**免审批自动发**、非白名单仍进待审批；`always` 建出可见 grant、之后同类动作自动放行；自动放行有审计回执；非 web 渠道仍需 nonce；零跨 user/tenant 泄漏；契约（data-model `permission_grants` + api §4.7/新 grants 段）先于代码。双路径 Playwright：人工（批一个后台审批 + 配一条邮箱白名单 → 定时邮件自动发）+ agent（定时任务命中白名单自动执行，agent 无法自建 grant）。
+- **来源**：用户输入「1.待审批入口，适用场景:实在不能预授权但是又想让它定时做的…需要我人工审批。2.可设置的预授权，例如设置邮箱地址白名单，给我自己的个人邮箱工作邮箱发邮件都不需要我审批，直接就能发…定时发QQ消息、写代码跑代码以及未来…都能被这两种覆盖」；recon 见本会话审批/策略架构调研。
