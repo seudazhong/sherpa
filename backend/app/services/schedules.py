@@ -87,11 +87,13 @@ async def create_schedule(
             raise NotFound("todo not found")
         local_time = None
         fire_at = next_fire_at
+        cadence_kind = "once"
     elif kind == "daily_digest":
         if local_time is None:
             raise Invalid("daily_digest needs local_time")
         todo_id, reminder_kind = None, None
         fire_at = _next_daily(local_time, timezone)
+        cadence_kind = "daily"
     else:
         raise Invalid("invalid kind")
     if fire_at.tzinfo is None:
@@ -110,6 +112,7 @@ async def create_schedule(
         delivery_channel=delivery_channel,
         timezone=timezone,
         local_time=local_time,
+        cadence_kind=cadence_kind,
         next_fire_at=fire_at,
         misfire_policy="fire_once",
         duplicate_policy="prefer_no_duplicate",

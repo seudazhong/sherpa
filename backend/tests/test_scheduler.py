@@ -103,6 +103,44 @@ async def test_fire_due_creates_one_firing_and_advances_cursor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_once_schedule_completes_after_firing() -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            tid, uid = await _seed_tenant(s)
+            now = datetime.datetime.now(_UTC)
+            sched = Schedule(
+                tenant_id=tid,
+                id=uuid.uuid4(),
+                user_id=uid,
+                kind="daily_digest",
+                name="One-off",
+                delivery_channel="web",
+                timezone="UTC",
+                local_time=datetime.time(8, 0),
+                cadence_kind="once",
+                next_fire_at=now - datetime.timedelta(minutes=1),
+                misfire_policy="fire_once",
+                duplicate_policy="prefer_no_duplicate",
+                status="active",
+            )
+            s.add(sched)
+            await s.flush()
+
+            created = await fire_due_schedules(s, now)
+            assert len(created) == 1
+            refreshed = await s.get(Schedule, (tid, sched.id))
+            assert refreshed is not None and refreshed.status == "completed"
+
+            # A completed schedule is no longer due.
+            again = await fire_due_schedules(s, now)
+            assert again == []
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
 async def test_missed_firing_is_visible() -> None:
     if not await ping_db():
         pytest.skip("database not reachable")

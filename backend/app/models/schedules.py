@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKeyConstraint,
     Integer,
+    SmallInteger,
     String,
     Text,
     Time,
@@ -47,6 +48,12 @@ class Schedule(Base):
     delivery_channel: Mapped[str] = mapped_column(Text)
     timezone: Mapped[str] = mapped_column(Text)
     local_time: Mapped[datetime.time | None] = mapped_column(Time)
+    cadence_kind: Mapped[str] = mapped_column(Text, server_default="daily")
+    cron_expr: Mapped[str | None] = mapped_column(Text)
+    interval_seconds: Mapped[int | None] = mapped_column(Integer)
+    weekly_days: Mapped[str | None] = mapped_column(Text)
+    monthly_day: Mapped[int | None] = mapped_column(SmallInteger)
+    prompt: Mapped[str | None] = mapped_column(Text)
     next_fire_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True))
     last_fired_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     misfire_policy: Mapped[str] = mapped_column(Text)
@@ -75,6 +82,9 @@ class ScheduleFiring(Base):
             ["effect_invocations.tenant_id", "effect_invocations.invocation_id"],
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"], ["runs.tenant_id", "runs.id"], ondelete="SET NULL"
+        ),
         UniqueConstraint("tenant_id", "schedule_id", "firing_key", name="uq_schedule_firings_key"),
         UniqueConstraint(
             "tenant_id", "schedule_id", "scheduled_for", name="uq_schedule_firings_slot"
@@ -94,6 +104,7 @@ class ScheduleFiring(Base):
     delivery_outcome: Mapped[str | None] = mapped_column(Text)
     delivery_idempotency_key: Mapped[str] = mapped_column(Text)
     invocation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     attempts: Mapped[int] = mapped_column(Integer, server_default="0")
     available_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
