@@ -158,6 +158,8 @@ async def deliver_due_firings(
         schedule = await session.get(Schedule, (firing.tenant_id, firing.schedule_id))
         if schedule is None:
             continue
+        if schedule.kind == "agent_task":
+            continue  # dispatched as a run by the agent-task tick, not notified here
         settings = await ensure_settings(session, firing.tenant_id, schedule.user_id)
         outcome = await deliver_firing(
             session, firing=firing, schedule=schedule, settings=settings, sender=sender, now=now

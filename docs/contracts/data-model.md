@@ -2272,6 +2272,11 @@ ALTER TABLE schedule_firings ADD COLUMN run_id uuid;
 ALTER TABLE schedule_firings
     ADD CONSTRAINT fk_sf_run FOREIGN KEY (tenant_id, run_id)
         REFERENCES runs (tenant_id, id) ON DELETE SET NULL;
+
+-- Admit the autonomous run kind used by agent_task firings.
+ALTER TABLE runs DROP CONSTRAINT ck_runs_kind;
+ALTER TABLE runs ADD CONSTRAINT ck_runs_kind CHECK (run_kind IN (
+    'web_chat', 'gmail_sync', 'candidate_extraction', 'schedule_delivery', 'scheduled_task'));
 ```
 
 Notes:

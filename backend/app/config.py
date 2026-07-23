@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     drive_trash_retention_days: int = 30
     drive_blob_gc_retention_hours: int = 24
 
+    # Recurring scheduled agent tasks (ADR-031). Guardrails on autonomous runs.
+    scheduled_task_max_concurrency: int = 3
+    scheduled_task_min_interval_seconds: int = 300
+
     # Code execution sandbox (ADR-007/025). "disabled" (default) keeps dev/tests
     # offline; "docker" runs each snippet in a hardened ephemeral container
     # (no network, dropped caps, non-root, read-only rootfs, mem/pids/time caps).

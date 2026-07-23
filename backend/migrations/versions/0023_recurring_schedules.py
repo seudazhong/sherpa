@@ -84,8 +84,22 @@ def upgrade() -> None:
         "FOREIGN KEY (tenant_id, run_id) REFERENCES runs (tenant_id, id) ON DELETE SET NULL;"
     )
 
+    # Admit the new autonomous run kind used by agent_task firings.
+    op.execute("ALTER TABLE runs DROP CONSTRAINT ck_runs_kind;")
+    op.execute(
+        "ALTER TABLE runs ADD CONSTRAINT ck_runs_kind CHECK (run_kind IN ("
+        "'web_chat', 'gmail_sync', 'candidate_extraction', 'schedule_delivery', "
+        "'scheduled_task'));"
+    )
+
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE runs DROP CONSTRAINT ck_runs_kind;")
+    op.execute(
+        "ALTER TABLE runs ADD CONSTRAINT ck_runs_kind CHECK (run_kind IN ("
+        "'web_chat', 'gmail_sync', 'candidate_extraction', 'schedule_delivery'));"
+    )
+
     op.execute("ALTER TABLE schedule_firings DROP CONSTRAINT IF EXISTS fk_sf_run;")
     op.execute("ALTER TABLE schedule_firings DROP COLUMN IF EXISTS run_id;")
 

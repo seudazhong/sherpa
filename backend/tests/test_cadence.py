@@ -51,7 +51,10 @@ def test_cron_weekday_nine_am_in_tz() -> None:
     # Sat 2026-07-25 -> next weekday 09:00 Asia/Shanghai is Mon 2026-07-27 09:00 (+08:00).
     after = _dt(2026, 7, 25, 12, tz=UTC)
     nxt = cadence.compute_next(
-        cadence_kind="cron", after=after, anchor=after, timezone="Asia/Shanghai",
+        cadence_kind="cron",
+        after=after,
+        anchor=after,
+        timezone="Asia/Shanghai",
         cron_expr="0 9 * * 1-5",
     )
     assert nxt is not None
@@ -64,7 +67,10 @@ def test_daily_next_local_time() -> None:
     tz = "Asia/Shanghai"
     after = _dt(2026, 7, 23, 3, tz=UTC)  # 11:00 SH
     nxt = cadence.compute_next(
-        cadence_kind="daily", after=after, anchor=after, timezone=tz,
+        cadence_kind="daily",
+        after=after,
+        anchor=after,
+        timezone=tz,
         local_time=datetime.time(8, 0),
     )
     assert nxt is not None
@@ -78,8 +84,12 @@ def test_weekly_selected_days() -> None:
     # Thu 2026-07-23. weekly_days = Mon(0),Wed(2) at 09:00 → next is Mon 2026-07-27 09:00.
     after = _dt(2026, 7, 23, 10)
     nxt = cadence.compute_next(
-        cadence_kind="weekly", after=after, anchor=after, timezone=tz,
-        weekly_days="0,2", local_time=datetime.time(9, 0),
+        cadence_kind="weekly",
+        after=after,
+        anchor=after,
+        timezone=tz,
+        weekly_days="0,2",
+        local_time=datetime.time(9, 0),
     )
     assert nxt == _dt(2026, 7, 27, 9, 0)
     assert nxt.weekday() == 0
@@ -90,8 +100,12 @@ def test_monthly_skips_short_months() -> None:
     # day 31 at 09:00 starting 2026-02-15 → Feb has no 31st, next is 2026-03-31.
     after = _dt(2026, 2, 15, 10)
     nxt = cadence.compute_next(
-        cadence_kind="monthly", after=after, anchor=after, timezone=tz,
-        monthly_day=31, local_time=datetime.time(9, 0),
+        cadence_kind="monthly",
+        after=after,
+        anchor=after,
+        timezone=tz,
+        monthly_day=31,
+        local_time=datetime.time(9, 0),
     )
     assert nxt == _dt(2026, 3, 31, 9, 0)
 
@@ -103,7 +117,10 @@ def test_daily_dst_preserves_wall_clock() -> None:
     ny = cadence._tz(tz)
     after = _dt(2026, 3, 7, 20)  # 15:00 EST on 2026-03-07
     nxt = cadence.compute_next(
-        cadence_kind="daily", after=after, anchor=after, timezone=tz,
+        cadence_kind="daily",
+        after=after,
+        anchor=after,
+        timezone=tz,
         local_time=datetime.time(9, 0),
     )
     assert nxt is not None
@@ -115,23 +132,39 @@ def test_daily_dst_preserves_wall_clock() -> None:
 def test_validate_cadence_errors() -> None:
     with pytest.raises(cadence.CadenceError):
         cadence.validate_cadence(
-            "cron", cron_expr="not a cron", interval_seconds=None,
-            weekly_days=None, monthly_day=None, local_time=None,
+            "cron",
+            cron_expr="not a cron",
+            interval_seconds=None,
+            weekly_days=None,
+            monthly_day=None,
+            local_time=None,
         )
     with pytest.raises(cadence.CadenceError):
         cadence.validate_cadence(
-            "interval", cron_expr=None, interval_seconds=10,
-            weekly_days=None, monthly_day=None, local_time=None,
+            "interval",
+            cron_expr=None,
+            interval_seconds=10,
+            weekly_days=None,
+            monthly_day=None,
+            local_time=None,
         )
     with pytest.raises(cadence.CadenceError):
         cadence.validate_cadence(
-            "weekly", cron_expr=None, interval_seconds=None,
-            weekly_days="0", monthly_day=None, local_time=None,  # missing local_time
+            "weekly",
+            cron_expr=None,
+            interval_seconds=None,
+            weekly_days="0",
+            monthly_day=None,
+            local_time=None,  # missing local_time
         )
     # Valid ones do not raise.
     cadence.validate_cadence(
-        "cron", cron_expr="0 9 * * 1-5", interval_seconds=None,
-        weekly_days=None, monthly_day=None, local_time=None,
+        "cron",
+        cron_expr="0 9 * * 1-5",
+        interval_seconds=None,
+        weekly_days=None,
+        monthly_day=None,
+        local_time=None,
     )
 
 

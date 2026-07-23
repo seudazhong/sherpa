@@ -35,7 +35,7 @@ from app.notifications import build_email_sender, deliver_due_firings
 from app.observability import bind_context, configure_logging, project_run_trace
 from app.providers import build_provider
 from app.redis_client import client as redis_client
-from app.scheduler import fire_due_schedules, try_acquire_leader
+from app.scheduler import dispatch_due_agent_tasks, fire_due_schedules, try_acquire_leader
 from app.scheduler.pipeline import sync_and_analyze
 from app.services import channels as chan_svc
 from app.tools import build_default_registry
@@ -424,11 +424,29 @@ async def drive_maintenance(ctx: dict[str, Any]) -> str:
     return f"gc={gced} orphans={swept}"
 
 
+async def agent_task_tick(ctx: dict[str, Any]) -> str:
+    """Leader-gated: dispatch due `agent_task` firings as autonomous runs (ADR-031).
+
+    Admits an idempotent `run_kind='scheduled_task'` run per due firing (slot key →
+    admission id, so a replay never double-runs), then enqueues the run jobs. Result
+    delivery + firing settle happens when the run settles.
+    """
+    if not await try_acquire_leader("agent_task_tick", ttl_ms=55_000):
+        return "not_leader"
+    async with SessionLocal() as session:
+        run_ids = await dispatch_due_agent_tasks(session, datetime.datetime.now(datetime.UTC))
+        await session.commit()
+    for run_id in run_ids:
+        await queue.enqueue_run(run_id)
+    return f"dispatched={len(run_ids)}"
+
+
 class WorkerSettings:
     functions = [ping, run_job, gmail_sync_job, sync_and_analyze_job, approval_resume_job]
     cron_jobs = [
         cron(scheduler_tick, second=0),
         cron(delivery_tick, second=15),
+        cron(agent_task_tick, second={5, 35}),
         cron(periodic_connector_sync, minute=set(range(0, 60, 5))),
         cron(drive_maintenance, minute=set(range(0, 60, 10))),
     ]

@@ -91,6 +91,7 @@ async def admit_prompt(
     user_id: uuid.UUID,
     client_message_id: uuid.UUID,
     text: str,
+    run_kind: str = "web_chat",
 ) -> Admission:
     """Persist the prompt + a queued run. Caller owns the transaction (commit)."""
     existing = (
@@ -126,7 +127,7 @@ async def admit_prompt(
             tenant_id=tenant_id,
             id=run_id,
             session_id=session_id,
-            run_kind="web_chat",
+            run_kind=run_kind,
             status="queued",
             admitted_seq=seq,
             prompt_version=PROMPT_VERSION,
