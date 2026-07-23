@@ -25,7 +25,7 @@
 | 3 | **代码执行 / 沙箱**（gVisor/Firecracker） | agent 改/跑代码/跑测试（最危险，前置：后端中立执行契约 + 隔离 + 出口策略 + 聚合配额 + 威胁评审） | #3 · ADR-007 |
 | 4 | **QQ / IM bot 入站**（AstrBot/aiocqhttp）**+ QQ 审批/通知渲染器** | 在 QQ 等 IM 里跟 agent 对话、收通知、**在 QQ 上批准/拒绝**（复用 v1 审批基座） | #10 |
 | 5 | **agentic email**（agent 自有邮箱，ADR-013）**+ 邮件侧审批/确认渲染器** | agent 拥有独立邮箱身份，自主收发；**邮件里可确认外部动作** | #9 |
-| 6 | **通用定时任务 cron** | 任意周期性自主任务/工作流（不止提醒） | #7 |
+| 6 | **通用定时任务 cron** | 任意周期性自主任务/工作流（不止提醒）；**已出提案草案 ADR-031 + 任务拆解（IMPLEMENTATION「Phase CRON」），待批准落地** | #7 |
 | 7 | **GitHub 连接器** | 同步 issue/PR/repo → 候选/待办 →（后）代码动作 | #6 |
 | 8 | **多 provider failover + 子 agent / ensemble** | 模型容灾（带分类的 failover、共享预算）+ 子 agent 并行/隔离运行，承接更复杂的自主任务 | 手册#10 |
 | 9 | **插件 / skills / MCP 扩展** | 用插件/skills/MCP 无核心改动地扩能力；两遍信任 + footprint ladder | 手册#12 |

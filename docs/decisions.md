@@ -267,3 +267,30 @@
 8. **扫码一键（fast-follow，端点授权确认后）**：create_bind_task/poll + AES-GCM 解密 + 二维码 + 轮询 UI。
 9. **测试**：签名/解密单测、入站路由、配置/vault、回复投递（mock botpy，离线）；`uv run pytest`/`ruff`/`mypy` 全绿。
 10. **验证**：`/simulate` + Messaging 人工路径；真实 bot 端到端 → 手动验收。
+
+### ADR-031 · 通用定时任务 cron / Schedules 增强（**提案·草案**，源自 roadmap #6「通用定时任务 cron」）
+
+> **状态：提案（草案）。** 本 ADR 只记录方向与契约增量设计，供 owner 审阅；**尚未批准落地**。经批准后，冻结契约（data-model/api）与代码在同一批次内先契约后代码地推进（AGENTS.md §1）。**当前不改冻结契约、不写业务代码。**
+
+- **动机 / 现状痛点**：现有 Schedules 只是「每日提醒器」——`schedules.kind` 被冻结 CHECK 锁死为 `todo_reminder` / `daily_digest`；推进逻辑 `scheduler/tick.py:_advance` 写死「每天 +1 天」；触发只往 Web 收件箱/摘要邮件投一条**静态文本**（`delivery.py` 的 `"Reminder for {name}."`），**从不启动 agent**。无法表达「每周一 9 点」「每 2 小时」「工作日早上跑一个自主任务」。
+- **决策**：把 Schedules 升级为**面向 agent 的通用 cron**——「给 AI 助手用的 crontab」。三处通用化 + 一个新动作：
+  1. **通用重复规则（cadence）**：cron 表达式 / interval（每 N 秒-分-时）/ weekly / monthly / once；带时区（IANA）+ DST 正确;沿用现有 misfire（skip / fire_once）与 duplicate 策略。
+  2. **新动作类型 `agent_task`（最大变化）**：schedule 保存一段 **prompt**，到点由 worker **自动 enqueue 一个 run**、跑现有有界 agent 循环、产出结果并投递。让「每天 8 点：读未读邮件→列今日要回的→草拟回复」这类**自主任务**成为可能，而不只是提醒。
+  3. **通用投递目标**：结果按 `delivery_channel` 路由到 **web / email / qq / …**，复用现有 channels/notifications 层，而非锁死两个渠道。
+- **真相源 / 安全不变（复用 v1 基座）**：
+  - **触发幂等（ADR-016/017）**：仍是「先进游标再触发、每 slot 唯一 `schedule_firings` 行」的 at-most-once slot + outbox + 幂等投递。`agent_task` 的 run enqueue **必须**用 firing slot key 作幂等键，worker 崩溃/重放不重复跑。
+  - **定时 ≠ 放权**：`agent_task` 里的外部副作用（发邮件等）**仍走审批闸（ADR-019/020/021）**；无人值守时挂起为收件箱/渠道审批卡，绝不因为「是定时任务」而自动执行外部动作。
+  - **绝不盲重试**：run 失败/`effect_unknown` 沿用 ADR-017 语义，firing 以诚实的 `failed`/`needs_reconciliation` settle，收件箱可见。
+- **契约增量（经批准后写入 data-model/api；此处仅设计，不改冻结文件）**：
+  - `schedules` 放宽 `ck_schedules_kind` 增加 `agent_task`；新增 cadence 列：`cadence_kind`(daily/cron/interval/weekly/once)、`cron_expr text`、`interval_seconds int`、（可选）`rrule text`；`agent_task` 用 `prompt text`（有界长度）+ 可选 `session_binding`（专用 scheduled session 或每次新建）。
+  - 调整 `ck_schedules_kind_target`：`agent_task` 需 `prompt` 非空、`todo_id/reminder_kind` 为空、cadence 字段与 `cadence_kind` 自洽（cron 需 `cron_expr`，interval 需 `interval_seconds`）。
+  - `ck_schedules_delivery_channel` 扩展为 `web / digest_email / email / qq`（按已上线 channels）。
+  - `schedule_firings` 增加到 run 的关联（`run_id` 可空，agent_task 触发后回填），便于运行历史/结果展示。
+  - api.md §4.4 增补：新建/编辑通用排程、`run_now`（立即试跑一次）、运行历史。
+- **调度引擎**：`_advance` 从「每日」泛化为 cadence-aware「下一次严格晚于 now」的计算——cron 用 `croniter`（或等价库，走 uv 依赖 + ADR）、interval 用步进、weekly/monthly 用日历推进、once 触发后置 `completed`；DST 经时区换算。**护栏**：cron/interval 有**最小频率下限**（如 ≥1 分钟，可部署配置），创建时校验表达式合法性，防误配高频。
+- **`agent_task` 执行**：到点在专用 `run_kind='scheduled_task'` 下 enqueue run，seed 保存的 prompt（进一个「定时任务」系统会话或每次新建会话，绑定可配置）；复用 worker run 循环、事件流、trace。**成本护栏**：每用户并发上限 + 频率下限，避免定时任务把模型调用打爆。结果经 firing→delivery 投递到目标渠道。
+- **Agent 平权（ADR-023）**：`schedule_*` 工具泛化——agent 能建/列/暂停/恢复/立即试跑**通用**排程（含 `agent_task`），与 REST/UI 同一 service。
+- **前端**：Schedules 页（SPA 路由仍 `/reminders`，避开 API 前缀）从「提醒列表」升级为**调度台**：新建任务（选 cadence + 动作：提醒 / 摘要 / **跑 agent 任务**+ prompt + 投递渠道）、下次运行时间、**运行历史**（每次 slot 跑了什么/成败/产出）、暂停/恢复、**立即试跑**。
+- **本阶段明确不做**：多步工作流 / DAG 编排；外部事件（webhook）作触发器；跨任务依赖链；长运行/常驻服务。**只做「时间触发的单 prompt 自主任务」**，把工作流编排留后续 ADR。
+- **验收关键**：cron/interval/weekly 的下一次计算在 DST 边界正确；`agent_task` 每 slot **恰好跑一次**（firing 幂等，worker 重放不重复）；外部动作仍需审批；频率下限/并发上限生效；零跨租户/用户泄漏；`run_now` 可手动验证；双路径 Playwright（人工建一个 cron agent_task + agent 经工具建一个，观察到点自动跑并投递）。
+- **依赖 / 不改的**：不依赖 GitHub（roadmap #6 的「#7」是原需求编号非构建依赖）；不改 ADR-016/017 真相源与 effect 语义、ADR-019/020/021 审批与密钥边界、ADR-023 能力层双适配器；不引入独立工作流引擎。

@@ -118,6 +118,26 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
+## Phase CRON — 通用定时任务 cron / Schedules 增强 (roadmap #6, ADR-031) — **PROPOSED (draft, not yet approved to build)**
+
+> Turns Schedules from a reminder/digest-only feature into a general recurring scheduler ("crontab for the agent"): general recurrence (cron/interval/weekly/monthly/once), a new `agent_task` action that runs the agent with a saved prompt, and generalized delivery routing. **Planning only until owner approves.** Prereq: **ADR-031 accepted + contract changes written FIRST** (data-model `schedules`/`schedule_firings`, api.md §4.4). Then per task: backend gate (`alembic upgrade head` · `ruff` · `mypy app` · `pytest`) + frontend (`build`/`lint`) → commit → tick STATUS. Two-lane Playwright per phase.
+
+| # | Task | refs | AC |
+|---|---|---|---|
+| **CRON.0** | **ADR-031 accept + contract**: finalize ADR-031; write frozen-contract deltas — relax `ck_schedules_kind` (+`agent_task`), add cadence cols (`cadence_kind`/`cron_expr`/`interval_seconds`/optional `rrule`) + `prompt`, adjust `ck_schedules_kind_target`, expand `ck_schedules_delivery_channel` (web/digest_email/email/qq), add `schedule_firings.run_id`; api.md §4.4 (create/edit general schedule, `run_now`, run history). Add `croniter` (or equiv) dep + `uv.lock`. | ADR-031; data-model; api §4.4; AGENTS §1 | contract updated before code; ADR marked accepted; dep pinned |
+| **CRON.1** | **Schema `00xx` + recurrence engine**: migration for the schedules/firings changes + models; replace daily-only `scheduler/tick.py:_advance` with cadence-aware next-occurrence (cron via croniter, interval step, weekly/monthly calendar, once→completed), DST-correct via IANA tz; **guardrails**: min-frequency floor (deployment-config, e.g. ≥60s), cron-expression validation. | ADR-031; ADR-017 | migration clean; next-occurrence correct incl. DST + weekly/monthly; sub-floor cron rejected; unit tests per cadence |
+| **CRON.2** | **`agent_task` execution + cost guardrails**: on fire, enqueue a `run_kind='scheduled_task'` run seeded with the saved prompt (dedicated scheduled session or per-fire session, configurable), **using the firing slot key as the idempotency key** (worker replay never double-runs); reuse the bounded loop/events/trace; external side effects still approval-gated; per-user concurrency + frequency caps. Deliver the result via firing→delivery to the target channel. | ADR-031; ADR-016/017/019/020/021 | agent_task runs exactly once per slot (idempotent); crash/replay no double-run; approval-gated effect pauses; caps enforced; tests |
+| **CRON.3** | **Delivery routing generalization**: firing → route by `delivery_channel` to the channels/notifications layer (web inbox / email / qq); agent_task result body from the run output (not static text); honest `failed`/`missed`/`needs_reconciliation` settle + inbox visibility. | ADR-031; ADR-026/027 | each channel delivers; failures settle honestly + visible; test |
+| **CRON.4** | **Service + REST + tools (generalized)**: `services/schedules.create_schedule` accepts cadence + `agent_task` + prompt + channel with validation; REST create/edit/`run_now`/history; generalize `schedule_*` agent tools so the agent creates recurring tasks (incl. `agent_task`); own-tenant writes allowed, no external grant. | api §4.4; ADR-023 | service/REST/tool three-way parity; validation errors typed; cross-user isolation; tests |
+| **CRON.5** | **Frontend scheduler console**: upgrade the Schedules page (SPA route stays `/reminders`) from a reminder list into a scheduler console — new task (cadence picker + action: reminder / digest / **run agent task** + prompt + delivery channel), next-run time, **run history** (per-slot: what ran / success-fail / output), pause/resume, **Run now**; responsive desktop + 390px. | design; AGENTS §2 | build/lint green; renders; controls work |
+| **CRON.6** | **Verify CRON**: backend gate + frontend; Playwright two lanes — human (create a cron `agent_task` via UI, Run now, see it fire + deliver) + agent (create via `schedule_*` tool). | AGENTS §2 | verified both lanes; ready for owner acceptance |
+
+**CRON exit:** Schedules is a general recurring scheduler — cron/interval/weekly/monthly recurrence, a new `agent_task` action that autonomously runs the agent on schedule and delivers the result to web/email/qq, run history + Run-now, agent parity via tools; firing stays exactly-once/idempotent; external actions still approval-gated; frequency/concurrency guardrails; zero cross-tenant/user leakage; full gate + build/lint green; Playwright both lanes.
+
+**Explicitly out of scope (later ADR):** multi-step workflow/DAG orchestration, webhook/event triggers, cross-task dependency chains, long-running/resident services.
+
+---
+
 
 ## Cross-cutting (do continuously, not a separate phase)
 - **Tests with every task** — deterministic, mock provider, `pytest-asyncio`. No real model calls in tests.
