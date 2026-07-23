@@ -676,6 +676,7 @@ in an API response, event, log, or error.
 | `GET /schedules/{id}` | none → `Schedule` | Session | `200`, `401`, `404`, `503` |
 | `PATCH /schedules/{id}` | `SchedulePatch` → `Schedule` | Session + CSRF | `200`, `401`, `403`, `404`, `409`, `422`, `503` |
 | `DELETE /schedules/{id}` | none → empty | Session + CSRF | `204`, `401`, `403`, `404`, `409`, `503` |
+| `POST /schedules/{id}/run-now` | none → `ScheduleFiring` | Session + CSRF | `202`, `401`, `403`, `404`, `409`, `429`, `503` |
 | `GET /schedules/{id}/firings?status=&cursor=&limit=` | none → `CursorPage[ScheduleFiring]` | Session | `200`, `400`, `401`, `404`, `422`, `503` |
 
 ```json
@@ -696,6 +697,34 @@ in an API response, event, log, or error.
 Creating/updating a schedule persists its next firing state transactionally.
 Firings, outbox delivery, idempotency, `unknown`, and reconciliation follow
 `events-and-effects.md`; storage follows `data-model.md`.
+
+**General cron / recurring agent tasks (ADR-031).** `kind` additionally accepts
+`agent_task`, and `trigger.type` accepts `cron`, `interval`, `weekly`, `monthly`,
+and `once` beyond `daily`. `delivery_channel` additionally accepts `email` and
+`qq`. `POST /schedules/{id}/run-now` inserts an immediate firing without advancing
+the recurrence cursor (`202`; `429` if a per-user frequency/concurrency cap is
+hit). An `agent_task` firing enqueues a `run_kind='scheduled_task'` run seeded with
+`prompt`; its `run_id` is recorded on the `ScheduleFiring` for run history, and the
+delivered body is the run's output (not static text). External side effects inside
+the run remain approval-gated. Example `agent_task` create:
+
+```json
+{
+  "kind": "agent_task",
+  "name": "Weekday morning inbox triage",
+  "timezone": "Asia/Shanghai",
+  "trigger": {"type": "cron", "cron_expr": "0 9 * * 1-5"},
+  "prompt": "Summarize my unread email, list what needs a reply, and draft replies. Ask before sending anything.",
+  "delivery_channel": "qq",
+  "enabled": true
+}
+```
+
+`trigger` fields by `type`: `daily`/`weekly`/`monthly` use `local_time` (+
+`weekly_days` CSV of 0..6, or `monthly_day` 1..31); `cron` uses `cron_expr`
+(5-field); `interval` uses `interval_seconds` (≥ 60); `once` uses an absolute
+`at`. `ScheduleFiring` gains `run_id` (nullable) and, for `agent_task`, a bounded
+result reference.
 
 ### 4.6 Settings
 

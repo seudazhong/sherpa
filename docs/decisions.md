@@ -269,9 +269,9 @@
 9. **测试**：签名/解密单测、入站路由、配置/vault、回复投递（mock botpy，离线）；`uv run pytest`/`ruff`/`mypy` 全绿。
 10. **验证**：`/simulate` + Messaging 人工路径；真实 bot 端到端 → 手动验收。
 
-### ADR-031 · 通用定时任务 cron / Schedules 增强（**提案·草案**，源自 roadmap #6「通用定时任务 cron」）
+### ADR-031 · 通用定时任务 cron / Schedules 增强（**已接受**，源自 roadmap #6「通用定时任务 cron」）
 
-> **状态：提案（草案）。** 本 ADR 只记录方向与契约增量设计，供 owner 审阅；**尚未批准落地**。经批准后，冻结契约（data-model/api）与代码在同一批次内先契约后代码地推进（AGENTS.md §1）。**当前不改冻结契约、不写业务代码。**
+> **状态：已接受（owner 拍板 2026-07-23 开工）。** 契约增量已写入冻结契约（data-model「Recurring schedules / general cron」+ api §4.5，migration `0023`）；实现见 IMPLEMENTATION「Phase CRON」。先契约后代码（AGENTS.md §1）。
 
 - **动机 / 现状痛点**：现有 Schedules 只是「每日提醒器」——`schedules.kind` 被冻结 CHECK 锁死为 `todo_reminder` / `daily_digest`；推进逻辑 `scheduler/tick.py:_advance` 写死「每天 +1 天」；触发只往 Web 收件箱/摘要邮件投一条**静态文本**（`delivery.py` 的 `"Reminder for {name}."`），**从不启动 agent**。无法表达「每周一 9 点」「每 2 小时」「工作日早上跑一个自主任务」。
 - **决策**：把 Schedules 升级为**面向 agent 的通用 cron**——「给 AI 助手用的 crontab」。三处通用化 + 一个新动作：

@@ -2215,3 +2215,75 @@ Notes:
   blocks with a per-candidate idempotency key; conflict resolution is
   ADD/UPDATE/INVALIDATE/NOOP (ADR-032). All tables keep `tenant_id` + composite
   tenant-scoped keys (ADR-015).
+
+### Recurring schedules / general cron (ADR-031, migration `0023`)
+
+Generalize `schedules` from reminder/digest-only into a recurring scheduler. The
+new action `agent_task` runs the agent with a saved `prompt` on schedule; the
+firing enqueues a `run_kind='scheduled_task'` run keyed by the firing slot (so a
+worker replay never double-runs), and its result is delivered to the target
+channel. Firing/outbox/idempotency/`unknown`/reconciliation are unchanged
+(events-and-effects). External side effects inside an `agent_task` remain
+approval-gated (ADR-019/020/021).
+
+```sql
+-- New cadence + action columns (backfilled by 0023: daily_digest -> 'daily',
+-- todo_reminder -> 'once').
+ALTER TABLE schedules ADD COLUMN cadence_kind text NOT NULL DEFAULT 'daily'; -- daily|cron|interval|weekly|monthly|once
+ALTER TABLE schedules ADD COLUMN cron_expr text;            -- 5-field cron, when cadence_kind='cron'
+ALTER TABLE schedules ADD COLUMN interval_seconds integer;  -- when cadence_kind='interval'
+ALTER TABLE schedules ADD COLUMN weekly_days text;          -- CSV of 0..6 (Mon=0), when cadence_kind='weekly'
+ALTER TABLE schedules ADD COLUMN monthly_day smallint;      -- 1..31, when cadence_kind='monthly'
+ALTER TABLE schedules ADD COLUMN prompt text;               -- agent_task instruction (bounded)
+
+-- Relax the frozen v1 CHECKs (drop + re-add) to admit the general scheduler.
+ALTER TABLE schedules DROP CONSTRAINT ck_schedules_kind;
+ALTER TABLE schedules ADD CONSTRAINT ck_schedules_kind
+    CHECK (kind IN ('todo_reminder', 'daily_digest', 'agent_task'));
+
+ALTER TABLE schedules DROP CONSTRAINT ck_schedules_delivery_channel;
+ALTER TABLE schedules ADD CONSTRAINT ck_schedules_delivery_channel
+    CHECK (delivery_channel IN ('web', 'digest_email', 'email', 'qq'));
+
+-- Widen kind_target for agent_task (carries a bounded prompt, no todo/reminder).
+ALTER TABLE schedules DROP CONSTRAINT ck_schedules_kind_target;
+ALTER TABLE schedules ADD CONSTRAINT ck_schedules_kind_target CHECK (
+    (kind = 'todo_reminder' AND todo_id IS NOT NULL AND reminder_kind IS NOT NULL
+        AND local_time IS NULL AND prompt IS NULL)
+ OR (kind = 'daily_digest'  AND todo_id IS NULL AND reminder_kind IS NULL
+        AND local_time IS NOT NULL AND prompt IS NULL)
+ OR (kind = 'agent_task'    AND todo_id IS NULL AND reminder_kind IS NULL
+        AND prompt IS NOT NULL AND char_length(prompt) BETWEEN 1 AND 8000)
+);
+
+-- Cadence self-consistency + hard min-frequency floor (finer floor in service).
+ALTER TABLE schedules ADD CONSTRAINT ck_schedules_cadence
+    CHECK (cadence_kind IN ('daily', 'cron', 'interval', 'weekly', 'monthly', 'once'));
+ALTER TABLE schedules ADD CONSTRAINT ck_schedules_cadence_fields CHECK (
+    (cadence_kind = 'cron'     AND cron_expr IS NOT NULL)
+ OR (cadence_kind = 'interval' AND interval_seconds IS NOT NULL AND interval_seconds >= 60)
+ OR (cadence_kind = 'weekly'   AND weekly_days IS NOT NULL AND local_time IS NOT NULL)
+ OR (cadence_kind = 'monthly'  AND monthly_day BETWEEN 1 AND 31 AND local_time IS NOT NULL)
+ OR (cadence_kind IN ('daily', 'once'))
+);
+
+-- Link a firing to the run it triggered (agent_task) for run history + result.
+ALTER TABLE schedule_firings ADD COLUMN run_id uuid;
+ALTER TABLE schedule_firings
+    ADD CONSTRAINT fk_sf_run FOREIGN KEY (tenant_id, run_id)
+        REFERENCES runs (tenant_id, id) ON DELETE SET NULL;
+```
+
+Notes:
+
+- The existing partial unique indexes (`ux_schedules_active_todo_channel`,
+  `ux_schedules_active_digest_channel`) are unchanged; `agent_task` has no active
+  uniqueness constraint (multiple recurring tasks are allowed).
+- `cadence_kind='cron'`/`'interval'` schedules have no `local_time`; their
+  `next_fire_at` is computed by the cadence engine (croniter / interval step).
+  `weekly`/`monthly` combine `local_time` + `timezone` for the fire moment.
+- `run_now` (api §4.5) inserts an immediate firing at the current slot without
+  advancing the recurrence cursor; it reuses the same idempotent firing path.
+- Guardrails: the DB enforces `interval_seconds >= 60`; the service enforces a
+  deployment-configurable min-frequency floor and per-user concurrency/frequency
+  caps for `agent_task` runs (ADR-031).
