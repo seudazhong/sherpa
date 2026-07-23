@@ -182,6 +182,7 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 列连接器 | ✅ | GET /connectors ✅ | `list_connectors` ✅ | ⬜(侧栏占位) | read_only | allow |
 | 触发同步分析 | ✅ | POST …/sync ✅ | `sync_connector` ✅ | ⬜ | idempotent_write | allow |
 | 建提醒/日程 | ✅ | POST /schedules ✅ | `create_reminder`/`create_daily_digest` ✅ | Schedules(/reminders)✅ | idempotent_write | allow |
+| 通用定时任务 cron（agent_task，ADR-031） | ✅ schedules（cadence 引擎+护栏） | POST /schedules · /run-now · /status · GET …/firings ✅ | `create_scheduled_task` ✅ | Schedules 调度台（建/试跑/暂停/历史）✅ | idempotent_write（run 内外部动作仍 ask） | allow |
 | 列/取消日程 | ✅ | GET /schedules · /cancel ✅ | `list_schedules`/`cancel_schedule` ✅ | Schedules ✅ | idempotent_write | allow |
 | 列通知 | ✅ | GET /notifications ✅ | `list_notifications` ✅ | Inbox ✅ | read_only | allow |
 | 读/改通知设置 | ✅ | GET·PATCH /settings ✅ | `get_settings`/`update_settings` ✅ | Settings(/preferences)✅ | idempotent_write | allow |

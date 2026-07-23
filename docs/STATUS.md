@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-23 · Phase: **Milestones 1–5 complete + browser-verified**; **post-v1 P0–P2 (Session Library + content search + Personal Drive/W1) complete + Playwright-verified, awaiting unified owner acceptance**. The shipped RAG is archival semantic notes, not a source-backed document knowledge base. v1 + v1 wrap-up + UI/UX backlog + the responsive **Quiet Work** redesign are done.
+> Last updated: 2026-07-23 · Phase: **Milestones 1–5 complete + browser-verified**; **post-v1 P0–P2 (Session Library + content search + Personal Drive/W1) complete + Playwright-verified**; **Phase CRON (general cron / recurring agent tasks, ADR-031) complete + two-lane verified**. The shipped RAG is archival semantic notes, not a source-backed document knowledge base. v1 + v1 wrap-up + UI/UX backlog + the responsive **Quiet Work** redesign are done.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -12,7 +12,7 @@ The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) 
 The **design + contracts + runnable skeleton** are done, and the **v1 durable spine (M1) is complete and verified end-to-end**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, the REST auth + session/message surface, the credential vault (AEAD/KEK), run traces + structured logging, and the web chat client (#1–#13) are all implemented and green. A live smoke (login → session → prompt → real arq worker loop → outbox relay → SSE `run.settled` → persisted transcript) passes. Next: **M2 — Personal Inbox-to-Action (Gmail → candidate → todo → reminder)**.
 
 ## Verified state
-- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` green (needs Postgres+Redis up; MinIO for file/drive tests) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic **`0022`** (0019 run lease · 0020 session search · 0021 personal drive · 0022 files→drive).
+- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` green (needs Postgres+Redis up; MinIO for file/drive tests) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic **`0023`** (0019 run lease · 0020 session search · 0021 personal drive · 0022 files→drive · 0023 recurring schedules/general cron).
 - **Frontend** (`frontend/`): Vite+React+TS SPA with the responsive `Quiet Work` design system across login, chat, inbox, activity, schedules, settings, memory, **sessions (/history)**, **drive (/workspace)**, messaging, and connectors. `npm run build` + `npm run lint` green. `package-lock.json` committed.
 - **Runtime**: web (`uv run uvicorn app.main:app`) + worker (`uv run arq app.worker.WorkerSettings`, runs the run loop + outbox relay) verified live against docker Postgres+Redis.
 - **Infra**: `infra/docker-compose.yml` (postgres+redis+web+worker+frontend) defined. **CI**: `.github/workflows/ci.yml` (backend uv lint/type/test + frontend build).
@@ -47,6 +47,18 @@ Sequenced implementation of the two completed research lines, through **P2**, th
 **Verified P2:** backend gate green (ruff/mypy/pytest, incl. `test_drive*`), frontend build/lint green, Playwright human lane all-pass (create folder → upload → rename → versions → trash → restore → 390px no-overflow). **→ Ready for unified owner acceptance.**
 
 Deferred within these lines: session semantic search + branch/lineage (Phase C); Projects/sandbox/GitHub (W2–W4).
+
+## ▶▶▶ Phase CRON (owner-approved 2026-07-23): 通用定时任务 cron — ✅ **COMPLETE + two-lane verified**
+
+**ADR-031** upgrades Schedules from reminder/digest-only into a general recurring scheduler ("crontab for the agent"). Schema at **`0023`**. Shipped:
+- **Cadence engine** (`app/scheduler/cadence.py`, croniter): cron/interval/weekly/monthly/daily/once, DST-correct via IANA tz; min-frequency floor + validation. Replaces the daily-only tick `_advance`; `once` → completed.
+- **`agent_task` action**: a schedule saves a prompt; on fire the worker admits an idempotent `run_kind='scheduled_task'` run (firing slot key → admission id, so replay never double-runs) into a dedicated per-schedule session; per-user concurrency cap. External effects inside the run stay approval-gated.
+- **Result delivery**: on run settle, output is delivered (always visible in the schedule's session + web inbox; best-effort email/qq push) and the firing settles delivered/failed.
+- **Service/REST/tools**: general `create_schedule` (cadence + agent_task), `run-now`, `status` (pause/resume), `firings` history; agent tool `create_scheduled_task`.
+- **Scheduler-console UI** at `/reminders`: Scheduled-task card (prompt + cadence picker + channel), Run now, Pause/Resume, run history; responsive.
+- **Verify**: full backend gate green (ruff/mypy/pytest), frontend build/lint green, Playwright human lane (create → Run now → history → pause/resume → 390px) + agent lane (real model created a cron task via the tool) both pass.
+
+Deferred (later ADR): multi-step workflow/DAG orchestration, webhook/event triggers, cross-task dependency chains.
 
 ## In progress
 _Nothing in progress._ **M-tools shipped** (ADR-023, [`11-agent-tool-surface.md`](11-agent-tool-surface.md)): app/services/ capability layer + REST/Tool dual adapters; the agent tools = list/accept/edit/dismiss candidates, create/update/complete/list todos (+ POST /todos, migration 0014 for standalone agent todos), list/sync connectors, create/list/cancel reminders + digests (+ /schedules REST), list notifications/activity + get/update settings; ALLOWED policy engine (own-data writes allowed, external actions ask); tool output spill.

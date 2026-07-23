@@ -118,9 +118,11 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
-## Phase CRON — 通用定时任务 cron / Schedules 增强 (roadmap #6, ADR-031) — **ACCEPTED, in progress (2026-07-23)**
+## Phase CRON — 通用定时任务 cron / Schedules 增强 (roadmap #6, ADR-031) — ✅ **COMPLETE + two-lane verified (2026-07-23)**
 
 > Turns Schedules from a reminder/digest-only feature into a general recurring scheduler ("crontab for the agent"): general recurrence (cron/interval/weekly/monthly/once), a new `agent_task` action that runs the agent with a saved prompt, and generalized delivery routing. Prereq done: **ADR-031 accepted + contract deltas written** (data-model «Recurring schedules / general cron», api §4.5, migration `0023`). Per task: backend gate (`alembic upgrade head` · `ruff` · `mypy app` · `pytest`) + frontend (`build`/`lint`) → commit → tick STATUS. Two-lane Playwright per phase.
+>
+> **Status:** CRON.0–CRON.6 ✅. Cadence engine (croniter, DST-correct) · idempotent `agent_task` runs (slot-key admission, concurrency cap) · result delivery + firing settle · generalized service/REST/tools · scheduler-console UI at `/reminders`. Playwright human lane (create agent_task → Run now → history → pause/resume → 390px) + agent lane (real model created a cron task via `create_scheduled_task`) both pass. Migration `0023`.
 
 | # | Task | refs | AC |
 |---|---|---|---|
