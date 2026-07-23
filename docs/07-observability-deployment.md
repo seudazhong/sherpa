@@ -19,7 +19,7 @@ TRACE(一次 run: tenant_id·user_id·session_id·tags)
 | trace/observation | 从事件流投影（`traces` / `generations` 表） |
 | 成本核算 | 滚进 `sessions.cost_rollup`；子 agent 成本→父 |
 | 评估（练手够用） | 先攒 trace → 挑失败案例 → 回归数据集；judge/断言后加 |
-| 可观测后端 | **先用自己的 events 表**；专业化再接 **Langfuse**（TS+docker，同栈） |
+| 可观测后端 | **先用自己的 events 表**；专业化再接 OTLP 后端。**[ADR-033](decisions.md) 修订默认：自托管 Phoenix**（单容器、复用现有 Postgres、OTLP 原生）优先于 Langfuse（现为 6 服务含 ClickHouse，单用户过重）；线格式用 **OpenTelemetry `gen_ai`**，后端可换。 |
 
 > **评审修订（2026-07-19）**：按 [ADR-016](decisions.md)，上文「事件流 / events 表」在 v1 特指 PostgreSQL 有序 append-only event journal + 事务性 outbox；Redis Streams 只加速投递，pub/sub 不承担正确性。
 

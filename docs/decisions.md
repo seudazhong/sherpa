@@ -20,6 +20,7 @@
 | 2026-07-22 | agentic email 如何落地 + 统一发信接缝 | ✅ AgentMail 自有邮箱：单一 `build_email_sender()` 发信接缝（`send_email` 工具 + 日报都走它，真实发信）；入站 email(Svix 验签+owner allowlist) 复用同一有界循环 + 审批基座 | 新增 ADR-027；实现 roadmap 统一发信 note |
 | 2026-07-22 | QQ 用官方平台还是 OneBot | ✅ **改用腾讯官方 api-v2（qq-botpy / WebSocket），弃用 OneBot**（自建 bridge + 非官方登录，封号/合规风险）；复用现有入站管线+审批基座；配置进复活的 Connectors 页 | 新增 ADR-028（**部分取代 ADR-026**）|
 | 2026-07-23 | 记忆机制重构 + embedding 用自带 ollama | ✅ **分层记忆**（核心 blocks + 自动形成语义层 + 会话搜索情景层）+ **确定性 ADD/UPDATE/INVALIDATE/NOOP 写合并** + **双时态软失效** + **缓存稳定注入**；embedding 走**自带 ollama**(bge-m3 1024d)，与聊天 provider 解耦 | 新增 ADR-032（扩展 ADR-004、修订 ADR-012；源自 R-MEMORY）|
+| 2026-07-23 | Agent 可观测性 + 是否用 OpenTelemetry | ✅ 用 **OTel `gen_ai` span** 作 ADR-016 日志之上的**薄诊断层**（日志仍真相源；内容默认不采集；`InMemorySpanExporter` 确定性测试）；后端首选自托管 **Phoenix**（复用现有 Postgres），**修订 docs/07 的 Langfuse 默认**；补上 STATUS item0 的 LLM 调用级观测 | 新增 ADR-033（源自 R-OBSERVABILITY）|
 
 ---
 
@@ -328,3 +329,32 @@
 - **验收关键**：写 `personal.email` 后**新会话直接可用**（不再 miss）；core 记忆**不破坏缓存前缀**；后台形成在 mock 下**确定性可回归**；embedding **全本地、维度=1024、零残留**；`user_memory` 迁移后旧事实在 `profile` 可见；UI Memory 页展示 blocks + archival 来源(你/自动) + 失效历史。契约**先于代码**（本 ADR 同批）。
 
 - **来源**：R-MEMORY 调研 [`research/memory.md`](research/memory.md)（Letta/MemGPT · Hermes · Sydney · Mem0 · Zep/Graphiti · Generative Agents · LangMem · Anthropic/OpenAI）；用户输入「我倾向先用ollama」「3」（先起草 ADR + 契约再定实现顺序）；bug 实锤见本会话 journal+DB 反推。
+
+### ADR-033 · Agent 可观测性 = OpenTelemetry `gen_ai` span（ADR-016 日志之上的薄诊断层）+ 可选自托管 Phoenix 后端（源自 R-OBSERVABILITY）
+
+> **状态：方向待 owner 拍板；本批次先契约后代码——只写 ADR + 契约增量（config/events），不写业务代码，落地顺序待定（AGENTS.md §1）。** 完整调研见 [`research/observability.md`](research/observability.md)。
+
+- **背景**：Sherpa 已有很强的**领域级**可观测（ADR-016 事件日志=真相源；`traces`/`generations` 投影；结构化日志 + 关联 id）。但**缺 LLM 调用级**观测：chat 循环不写 `generations`，没有"装配后的真实 prompt"、没有 per-call token/延迟（现 token 靠 ~4 字符估算、cost=0）。这正是 STATUS item0 推迟的一半，也是本会话查 memory bug 时只能靠时间戳反推的盲点。docs/07 早已预留"专业化再接 Langfuse"。
+
+- **决策**：引入 **OpenTelemetry GenAI 语义约定（`gen_ai.*`）作为线格式的薄诊断层**，而**非**新平台：
+  1. **打点有界循环**（`core/loop.py`）：每 run 一个 `invoke_agent` 根 span；每次模型调用一个 `chat` span（provider/model、temperature/max_tokens、`response.finish_reasons`=循环 `stop_reason`、`usage.input/output_tokens`、延迟）；每个工具一个子 `execute_tool` span（`gen_ai.tool.name`、`gen_ai.tool.call.id`；工具返回错误观测时 `status=ERROR`+`success=false`——**错误即观测**，契合铁律）。根 span 带 `agent.loop_count`/`agent.total_cost_usd`/`agent.stop_reason`。
+  2. **日志仍是真相源（ADR-016/021）**：OTel span 是**派生、易失、可采样**的诊断面，用 `run_id`/`session_id` 关联，**绝不替代**日志；后端挂了不影响 run，span 可日后从日志重投。
+  3. **补上 STATUS item0**：`chat` span 即"generation record"（model/prompt_version/tokens/stop_reason）；可选再落一条**有界、脱敏的 `model.request`/`model.response` 日志事件**（durability=debug；ADR-021 有界脱敏；只存装配输入的 **sha-256 摘要**、不存内容）作耐久记录，而**完整装配 prompt 只进 span**、受内容开关控制、短保留。
+  4. **内容默认不采集**（隐私，ADR-019）：`gen_ai.input/output.messages`、`tool.call.arguments/result` 等内容属性 opt-in，由 `OTEL_CAPTURE_MESSAGE_CONTENT`（默认 false）控制；开启也经 `security/redaction.py` 脱敏，密钥永不入 span。
+  5. **确定性测试**（铁律：测试不调真模型）：`InMemorySpanExporter` + mock provider，断言 span 树结构/属性/错误状态，快照回归。
+
+- **后端选型**：**首选自托管 Arize Phoenix**——单容器、OTLP 原生（gRPC+HTTP）、**复用现有 Postgres**（单独 db/schema，不新增数据库）、自动把 `gen_ai.*` 转 OpenInference。**修订 docs/07 的"接 Langfuse"默认**：Langfuse 现为 6 服务栈（含 ClickHouse ≥4G），对单用户过重；因线格式是 OTLP，后端可随时换回 Langfuse（若要其 prompt 管理/评估 DX）。**后端默认关闭、可选**；无后端时 SDK 用 console/in-memory exporter 即可。
+
+- **与 ADR-032 协同**：与记忆的 `core_memory.loaded` 事件互补——那是领域事件，这是 span 树 + `model.request/response` 耐久记录。
+
+- **契约先行（本 ADR 同批）**：`config`（`OTEL_*` 键）、`events`（可选 `model.request`/`model.response` debug 事件）。`generations` 表已存在，Phase A 让 chat 循环也写它即可，**无需新表**——span 后端持有树。均带 `tenant_id`（ADR-015）。
+
+- **分阶段**：**Phase A**=OTel SDK + `gen_ai` 属性包一层（隔离 semconv 改名）+ 循环打点（chat/execute_tool）+ 真实 per-call token 取代字符估算 + `InMemorySpanExporter` 测试；补上 item0；**无新基座**。**Phase B**=可选 Phoenix 容器（复用 Postgres）+ OTLP exporter（config 开关）+ 保留期。**Phase C**=评估/飞轮（judge + 人工分；失败 run（`stop_reason=error`/`loop_count>N`）导出 `datasets/regression.jsonl`，CI 跑 mock）——**证据门**，比照 ADR-029 Phase C。
+
+- **护栏**：单用户 **100% 采样、无需 Collector**（SDK 直连本地后端）；span 名**低基数**（`chat gpt-4o`，高基数值进属性）；GenAI semconv 处 **Development** 状态、会改名（`gen_ai.system`→`gen_ai.provider.name` 已发生）→ 所有 `set_attribute` 收拢进**一个 wrapper 模块**隔离变动。
+
+- **取代/修订关系**：**修订 docs/07** 可观测后端默认（Langfuse→Phoenix，footprint 理由）；**落实 STATUS item0** 推迟的 LLM 调用级观测。**不改**：ADR-016 日志真相源、ADR-021 审计/调试事件边界（内容进 span 非审计）、ADR-019 密钥脱敏、ADR-015 租户键。
+
+- **验收关键**：每次 LLM 调用可见装配输入/token/finish_reason（不再靠反推）；默认无内容泄漏、无密钥进 span；日志仍是真相源、后端挂不丢 run；测试用 `InMemorySpanExporter` 确定性通过；Phoenix 复用现有 Postgres、默认关闭、一开关接通。
+
+- **来源**：R-OBSERVABILITY 调研 [`research/observability.md`](research/observability.md)（OTel GenAI semconv · Langfuse · Arize Phoenix/OpenInference · OpenLLMetry · landscape）；用户输入「起草 ADR-033 + 契约 diff」；STATUS item0 推迟的可观测记录。

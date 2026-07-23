@@ -574,6 +574,49 @@ carries an `idempotency_key` so replay after a worker crash is safe (ADR-017).
 end. `invalidate` sets `memory_passages.invalid_at` (soft-invalidation), never a
 delete.
 
+### 2.7 Model I/O (ADR-033, post-v1 — optional, durability `debug`, additive)
+
+Optional durable per-LLM-call records, complementing the ephemeral OpenTelemetry
+`gen_ai` spans (ADR-033). Emitted only when observability is enabled. Bounded and
+redacted per ADR-021: they carry **no prompt/completion content** — the full
+assembled prompt lives only in the span, behind the content-capture opt-in. The
+span backend holds the trace tree; these events give a durable, replayable record
+correlated by `run_id`.
+
+#### `model.request`
+
+```text
+{
+  call_index: integer,          // turn index within the run
+  provider: string,             // e.g. "openai_compatible"
+  model: string,
+  prompt_version: string | null,
+  input_tokens: integer | null,
+  input_chars: integer,         // bounded size of the assembled input
+  input_digest: string,         // sha-256 of the assembled input (verify/correlate, no content)
+  tools_offered: integer,
+  sampled: boolean              // whether the correlated span was exported
+}
+```
+
+#### `model.response`
+
+```text
+{
+  call_index: integer,
+  model: string,
+  finish_reason: string,        // stop | tool_calls | length | ...
+  output_tokens: integer | null,
+  output_chars: integer,
+  tool_calls: integer,
+  latency_ms: integer,
+  error_type: string | null
+}
+```
+
+`input_digest` lets you verify/correlate an exact assembled input without
+persisting its text. Content capture is span-only and opt-in (ADR-033/ADR-019).
+
 ## 3. Delivery and SSE
 
 ### 3.1 Required path

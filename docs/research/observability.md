@@ -1,9 +1,9 @@
 # R-OBSERVABILITY — Agent observability for Sherpa, and whether to adopt OpenTelemetry
 
-**Status:** research and design complete; implementation **not** approved. Answers
-four questions the owner asked: *what is agent observability, how do you do it,
-what is OpenTelemetry, should Sherpa use it (and how)*. Approving means authoring
-**ADR-033** plus small config/events contract additions before code.
+**Status:** research and design complete. Answers four questions the owner asked:
+*what is agent observability, how do you do it, what is OpenTelemetry, should Sherpa
+use it (and how)*. **ADR-033 + config/events contract diffs are now drafted in the
+same batch; implementation order is TBD (no business code yet).**
 
 **Recommendation:** **GO** — but as a **thin, additive diagnostic layer, not a new
 platform**. (1) Adopt **OpenTelemetry GenAI semantic conventions** (`gen_ai.*`) as

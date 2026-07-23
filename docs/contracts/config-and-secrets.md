@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     memory_autoform_enabled: bool = False
     memory_autoform_every_turns: int = Field(default=0, ge=0)  # 0 = on run settle
 
+    # Agent observability (ADR-033): OpenTelemetry gen_ai spans, off by default.
+    # A derived diagnostic layer over the ADR-016 journal — never a source of truth.
+    otel_enabled: bool = False
+    otel_exporter_otlp_endpoint: AnyHttpUrl | None = None    # e.g. http://phoenix:4317; unset = console/in-memory
+    otel_capture_message_content: bool = False               # opt-in prompt/tool content into spans (PII; redacted)
+    otel_traces_sampler: str = Field(default="always_on", min_length=1)  # 100% is fine at single-user scale
+
     # Gmail OAuth and retained Gmail data
     gmail_client_id: str | None = Field(default=None, min_length=1)
     gmail_client_secret: SecretStr | None = None
@@ -301,6 +308,10 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Embeddings | `EMBEDDING_API_KEY` | `SecretStr` | None | when `openai_compatible` | **Yes** | Only for the external-provider embedding override. |
 | Memory | `MEMORY_AUTOFORM_ENABLED` | `bool` | `false` | No | No | Background memory-formation kill-switch (ADR-032). |
 | Memory | `MEMORY_AUTOFORM_EVERY_TURNS` | `int` ≥ 0 | `0` | No | No | `0` = form on run settle; `N` = every N user turns. |
+| Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
+| Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | `AnyHttpUrl` | None | No | No | OTLP endpoint (e.g. self-hosted Phoenix `http://phoenix:4317`); unset = console/in-memory exporter only. |
+| Observability | `OTEL_CAPTURE_MESSAGE_CONTENT` | `bool` | `false` | No | No | Opt-in capture of prompt/completion/tool content into spans (PII); redacted when on. Also set the upstream `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` if using OTel auto-instrumentation. |
+| Observability | `OTEL_TRACES_SAMPLER` | `str` | `always_on` | No | No | 100% sampling is fine at single-user scale. |
 | Gmail OAuth | `GMAIL_CLIENT_ID` | `str` | None | `web`, `worker` | No | OAuth client identifier. |
 | Gmail OAuth | `GMAIL_CLIENT_SECRET` | `SecretStr` | None | `web`, `worker` | **Yes** | OAuth code exchange and refresh only. |
 | Gmail OAuth | `GMAIL_REDIRECT` | `AnyHttpUrl` | None | `web` | No | Exact registered URL: configurable origin plus fixed `/connectors/gmail/oauth/callback`; HTTPS in production. |
@@ -395,6 +406,13 @@ EMBEDDING_DIM=1024
 # EMBEDDING_API_KEY=REPLACE_WITH_EMBEDDING_API_KEY  # SECRET
 MEMORY_AUTOFORM_ENABLED=false
 MEMORY_AUTOFORM_EVERY_TURNS=0
+
+# Agent observability (ADR-033). OpenTelemetry gen_ai spans; off by default.
+OTEL_ENABLED=false
+OTEL_CAPTURE_MESSAGE_CONTENT=false
+OTEL_TRACES_SAMPLER=always_on
+# For OTEL_ENABLED=true with a backend (e.g. self-hosted Phoenix), set:
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317
 
 # Gmail OAuth. The operating mode remains open in review §5.
 GMAIL_OAUTH_MODE=per_deployment
@@ -559,7 +577,7 @@ Compose MUST map explicit keys per service; it MUST NOT pass the complete `.env`
 | Service | Receives |
 |---|---|
 | `web` | `SERVICE_ROLE=web`; app/session/log and tool-output keys; `DATABASE_URL`; `REDIS_URL`; active `KEK`/ID/version for callback sealing; Gmail OAuth keys including redirect/mode; Gmail retention and notification defaults. It receives no previous KEKs and no `PROVIDER_API_KEY`. |
-| `worker` | `SERVICE_ROLE=worker`; `APP_ENV`, `LOG_LEVEL`, `WORKSPACE_ROOT`, and tool-output keys; `DATABASE_URL`; `REDIS_URL`; active/previous KEK keys; Gmail client ID/secret and data policy; all provider and embedding keys; memory-formation settings; notification defaults. It does **not** receive `APP_SECRET`. |
+| `worker` | `SERVICE_ROLE=worker`; `APP_ENV`, `LOG_LEVEL`, `WORKSPACE_ROOT`, and tool-output keys; `DATABASE_URL`; `REDIS_URL`; active/previous KEK keys; Gmail client ID/secret and data policy; all provider and embedding keys; memory-formation settings; observability/OTel settings; notification defaults. It does **not** receive `APP_SECRET`. |
 | one-shot `migration` | `SERVICE_ROLE=migration`; `APP_ENV`, `LOG_LEVEL`, and `DATABASE_URL` only. |
 | `frontend` | No key from this contract and no backend secret. Public API origin, if needed at build time, is a separate public frontend setting. |
 | `postgres` | No Sherpa application secret and no KEK. Image bootstrap credentials come from deployment-managed Docker secrets and must match `DATABASE_URL`; they are not application `Settings`. |
