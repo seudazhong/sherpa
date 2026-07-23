@@ -29,7 +29,7 @@ from app.core import execute_run, resume_approval
 from app.core.lease import claim_run_lease, run_heartbeat, worker_identity
 from app.db import SessionLocal
 from app.events import append_event, relay_once
-from app.models import ApprovalEnvelope, Connector, Run
+from app.models import ApprovalEnvelope, Connector, Run, Schedule, ScheduleFiring
 from app.models import Session as SessionModel
 from app.notifications import build_email_sender, deliver_due_firings
 from app.observability import bind_context, configure_logging, project_run_trace
@@ -168,6 +168,78 @@ async def _deliver_qq_reply(
     await sender.send_private(sess.external_scope_id, body, msg_id)
 
 
+async def _deliver_scheduled_task(run_id: uuid.UUID) -> None:
+    """Settle a scheduled_task firing + deliver its output (worker wrapper).
+
+    Runs in a fresh session after the run commits so a delivery failure never affects
+    run durability.
+    """
+    try:
+        async with SessionLocal() as session:
+            await settle_scheduled_firing(session, run_id)
+            await session.commit()
+    except Exception:
+        return
+
+
+async def settle_scheduled_firing(session: Any, run_id: uuid.UUID) -> str | None:
+    """Settle the ``running`` firing for ``run_id`` and best-effort push its result.
+
+    The result is always durably visible in the schedule's dedicated session and, once
+    the firing settles, in the web inbox. Email/QQ delivery is a best-effort push on
+    top and never changes the firing outcome. Returns the outcome, or None if there is
+    no matching firing. Caller owns the transaction.
+    """
+    firing = (
+        await session.execute(
+            select(ScheduleFiring).where(
+                ScheduleFiring.run_id == run_id, ScheduleFiring.status == "running"
+            )
+        )
+    ).scalar_one_or_none()
+    if firing is None:
+        return None
+    schedule = await session.get(Schedule, (firing.tenant_id, firing.schedule_id))
+    run = await session.get(Run, (firing.tenant_id, run_id))
+    if schedule is None or run is None:
+        return None
+
+    text = await final_assistant_text(session, firing.tenant_id, run_id)
+    approval = await pending_approval_for_run(session, firing.tenant_id, run_id)
+    failed = run.status in ("failed", "needs_reconciliation") or (
+        text is None and approval is None
+    )
+    outcome = "failed" if failed else "delivered"
+
+    if not failed:
+        await _push_scheduled_result(session, schedule, compose_reply(text, approval))
+
+    now = datetime.datetime.now(datetime.UTC)
+    firing.status = "settled"
+    firing.delivery_outcome = outcome
+    firing.settled_at = now
+    firing.updated_at = now
+    await session.flush()
+    return outcome
+
+
+async def _push_scheduled_result(session: Any, schedule: Schedule, body: str) -> None:
+    """Best-effort out-of-app push for a scheduled task result (email/qq)."""
+    try:
+        if schedule.delivery_channel in ("email", "digest_email"):
+            await build_email_sender().send(
+                to="owner", subject=f"Sherpa: {schedule.name}", body=body
+            )
+        elif schedule.delivery_channel == "qq":
+            config = await chan_svc.get_config(session, schedule.tenant_id, schedule.user_id, "qq")
+            secret = chan_svc.reveal_secret(config) if config else None
+            owner = getattr(config, "owner_external_id", None) if config else None
+            if config and config.enabled and config.app_id and secret and owner:
+                await build_qq_sender(config.app_id, secret).send_private(owner, body, None)
+    except Exception:
+        return
+
+
 async def run_job(ctx: dict[str, Any], run_id: str) -> str:
     """Execute one durable run. v1 commits at settle; per-turn commit is a later refinement."""
     rid = uuid.UUID(run_id)
@@ -198,10 +270,12 @@ async def run_job(ctx: dict[str, Any], run_id: str) -> str:
                 await project_run_trace(session, tenant_id=tenant_id, run_id=rid)
                 await session.commit()
                 await _deliver_im_reply(rid)
+                await _deliver_scheduled_task(rid)
                 return reason
             except Exception:
                 await session.rollback()
                 await _settle_failed(tenant_id, rid, session_id)
+                await _deliver_scheduled_task(rid)
                 return "failed"
 
 
