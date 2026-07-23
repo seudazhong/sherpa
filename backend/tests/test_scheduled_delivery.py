@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.core import execute_run
 from app.db import SessionLocal, ping_db
 from app.models import Run, Schedule, ScheduleFiring, Tenant, User
+from app.observability import project_run_trace
 from app.providers import Finish, MockProvider, TextDelta
 from app.scheduler import dispatch_due_agent_tasks, fire_due_schedules
 from app.tools import build_default_registry
@@ -96,6 +97,36 @@ async def test_scheduled_task_run_delivers_and_settles(channel: str) -> None:
                 )
             )
             assert visible == created[0]
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_task_trace_projects() -> None:
+    # Regression: ck_traces_kind must admit 'scheduled_task' (else the trace insert
+    # on commit rolls back the whole run and marks it failed).
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            tid, uid = await _seed(s)
+            now = datetime.datetime.now(_UTC)
+            sched = _agent_task(tid, uid, now - datetime.timedelta(minutes=1))
+            s.add(sched)
+            await s.flush()
+            await fire_due_schedules(s, now)
+            run_ids = await dispatch_due_agent_tasks(s, now)
+            run = await s.get(Run, (tid, run_ids[0]))
+            assert run is not None
+
+            provider = MockProvider(script=[[TextDelta("done"), Finish("stop")]])
+            await execute_run(
+                s, run=run, provider=provider, registry=build_default_registry(), tier="full"
+            )
+            # The trace projector copies run_kind='scheduled_task' into traces.trace_kind;
+            # this must not violate ck_traces_kind (else the whole run rolls back → failed).
+            await project_run_trace(s, tenant_id=tid, run_id=run_ids[0])
+            await s.flush()
         finally:
             await s.rollback()
 

@@ -91,9 +91,21 @@ def upgrade() -> None:
         "'web_chat', 'gmail_sync', 'candidate_extraction', 'schedule_delivery', "
         "'scheduled_task'));"
     )
+    # The trace projector copies run_kind into traces.trace_kind — admit it too.
+    op.execute("ALTER TABLE traces DROP CONSTRAINT ck_traces_kind;")
+    op.execute(
+        "ALTER TABLE traces ADD CONSTRAINT ck_traces_kind CHECK (trace_kind IN ("
+        "'web_chat', 'gmail_sync', 'candidate_extraction', 'schedule_delivery', "
+        "'scheduled_task'));"
+    )
 
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE traces DROP CONSTRAINT ck_traces_kind;")
+    op.execute(
+        "ALTER TABLE traces ADD CONSTRAINT ck_traces_kind CHECK (trace_kind IN ("
+        "'web_chat', 'gmail_sync', 'candidate_extraction', 'schedule_delivery'));"
+    )
     op.execute("ALTER TABLE runs DROP CONSTRAINT ck_runs_kind;")
     op.execute(
         "ALTER TABLE runs ADD CONSTRAINT ck_runs_kind CHECK (run_kind IN ("
