@@ -1477,3 +1477,49 @@ class NodeMove(StrictModel):
 - The agent drives every non-purge capability through the same service layer
   (ADR-023): `drive_list`, `drive_search`, `drive_make_folder`, `drive_write`,
   `drive_read`, `drive_move`, `drive_trash`, `drive_restore`.
+
+### 10.3 Core memory blocks (ADR-032)
+
+Named, bounded, always-in-context core-memory blocks replace the free-form
+`user_memory` KV as the primary core tier. Mirrors the `memory_core_*` agent tools
+(ADR-023 dual adapter). The legacy `PUT/GET/DELETE /memory` KV endpoints remain but
+become read-only during Phase A; archival `/memory/passages` is unchanged except
+results now carry `origin`/`importance`/validity.
+
+```python
+class MemoryBlock(StrictModel):
+    label: str                 # profile|preferences|agent_notes
+    value: str
+    char_limit: int
+    chars_used: int
+    version: int
+    updated_at: datetime
+
+class MemoryBlockEdit(StrictModel):
+    op: Literal["set", "append", "replace", "remove"]
+    value: str | None = None   # set/append
+    old: str | None = None     # replace/remove — must match a unique substring
+    new: str | None = None     # replace
+    if_version: int            # optimistic CAS
+
+class MemoryBlockHistoryItem(StrictModel):
+    version: int
+    op: Literal["set", "append", "replace", "remove", "formed"]
+    value_before: str
+    edited_at: datetime
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /memory/blocks` | none → `list[MemoryBlock]` | Session | `200`, `401` |
+| `GET /memory/blocks/{label}` | none → `MemoryBlock` | Session | `200`, `401`, `404` |
+| `PUT /memory/blocks/{label}` | `MemoryBlockEdit` → `MemoryBlock` | Session + CSRF | `200`, `401`, `404`, `409`, `422` |
+| `GET /memory/blocks/{label}/history` | none → `CursorPage[MemoryBlockHistoryItem]` | Session | `200`, `401`, `404` |
+
+- `409 char_limit_exceeded` when an edit would exceed `char_limit` — the caller
+  (human or agent) must consolidate first; the write path never silently truncates.
+- `409 version_conflict` when `if_version` does not match (concurrent edit /
+  background formation); the caller re-reads and retries.
+- `replace`/`remove` require `old` to match **exactly one** substring, else `422`.
+- Both the block value and its history are escaped on render; content may originate
+  from untrusted email and is threat-scanned before injection (ADR-009/019).

@@ -535,6 +535,45 @@ durable `run_id`, so the originating run's `run.settled` remains its last
 event. If the result remains indeterminate, the firing remains unknown and
 visible to the user/operator.
 
+### 2.6 Core memory and formation (ADR-032, post-v1 — additive, not part of the frozen v1 catalog)
+
+#### `core_memory.loaded`
+
+Emitted once per run at prompt assembly, recording which core-memory blocks were
+injected. Makes each run self-document what memory it saw (today this must be
+reconstructed from `memory_blocks.updated_at` vs `run.started`). Durability may be
+`debug` (observability, not an audit fact).
+
+```text
+{
+  labels: string[],                 // e.g. ["profile","preferences"]
+  chars: integer,                   // total injected characters
+  block_versions: { string: integer }
+}
+```
+
+#### `memory.formed`
+
+One event per applied memory write (hot-path or background formation), carrying the
+conflict-resolution decision. Background formation is a run side-effect: each op
+carries an `idempotency_key` so replay after a worker crash is safe (ADR-017).
+
+```text
+{
+  scope: core | archival,
+  op: add | update | invalidate | noop,
+  target_label: string | null,      // core block label (scope=core)
+  passage_id: uuid | null,          // archival row (scope=archival)
+  origin: user | agent_auto,
+  idempotency_key: string,
+  source_run_id: uuid | null
+}
+```
+
+`noop` is emitted (not suppressed) so the formation pipeline is observable end to
+end. `invalidate` sets `memory_passages.invalid_at` (soft-invalidation), never a
+delete.
+
 ## 3. Delivery and SSE
 
 ### 3.1 Required path

@@ -19,6 +19,7 @@
 | 2026-07-22 | QQ/IM 入站如何接入 + 审批如何渲染 | ✅ 通道适配器（OneBot v11/aiocqhttp）：webhook(HMAC+owner allowlist) → 复用 admit_prompt 有界循环 → 出站回推；审批复用 v1 基座（IM `approve/reject` → 同一信封） | 新增 ADR-026 |
 | 2026-07-22 | agentic email 如何落地 + 统一发信接缝 | ✅ AgentMail 自有邮箱：单一 `build_email_sender()` 发信接缝（`send_email` 工具 + 日报都走它，真实发信）；入站 email(Svix 验签+owner allowlist) 复用同一有界循环 + 审批基座 | 新增 ADR-027；实现 roadmap 统一发信 note |
 | 2026-07-22 | QQ 用官方平台还是 OneBot | ✅ **改用腾讯官方 api-v2（qq-botpy / WebSocket），弃用 OneBot**（自建 bridge + 非官方登录，封号/合规风险）；复用现有入站管线+审批基座；配置进复活的 Connectors 页 | 新增 ADR-028（**部分取代 ADR-026**）|
+| 2026-07-23 | 记忆机制重构 + embedding 用自带 ollama | ✅ **分层记忆**（核心 blocks + 自动形成语义层 + 会话搜索情景层）+ **确定性 ADD/UPDATE/INVALIDATE/NOOP 写合并** + **双时态软失效** + **缓存稳定注入**；embedding 走**自带 ollama**(bge-m3 1024d)，与聊天 provider 解耦 | 新增 ADR-032（扩展 ADR-004、修订 ADR-012；源自 R-MEMORY）|
 
 ---
 
@@ -294,3 +295,36 @@
 - **本阶段明确不做**：多步工作流 / DAG 编排；外部事件（webhook）作触发器；跨任务依赖链；长运行/常驻服务。**只做「时间触发的单 prompt 自主任务」**，把工作流编排留后续 ADR。
 - **验收关键**：cron/interval/weekly 的下一次计算在 DST 边界正确；`agent_task` 每 slot **恰好跑一次**（firing 幂等，worker 重放不重复）；外部动作仍需审批；频率下限/并发上限生效；零跨租户/用户泄漏；`run_now` 可手动验证；双路径 Playwright（人工建一个 cron agent_task + agent 经工具建一个，观察到点自动跑并投递）。
 - **依赖 / 不改的**：不依赖 GitHub（roadmap #6 的「#7」是原需求编号非构建依赖）；不改 ADR-016/017 真相源与 effect 语义、ADR-019/020/021 审批与密钥边界、ADR-023 能力层双适配器；不引入独立工作流引擎。
+
+### ADR-032 · 记忆机制重构：分层记忆 + 确定性写合并 + 自带 ollama embedding（源自 R-MEMORY；扩展/部分取代 ADR-004，修订 ADR-012）
+
+> **状态：方向已由 owner 拍板（2026-07-23）；本批次先契约后代码——只写 ADR + 冻结契约增量（data-model/api/events/config），不写业务代码，落地顺序待定（AGENTS.md §1）。** 完整调研见 [`research/memory.md`](research/memory.md)。
+
+- **背景（触发）**：复现到一个记忆 bug——`user_memory` 是**自由命名 key 的精确匹配 KV**，整表拼进 system prompt；`personal.email` 写入、后续按 `personal_email` 读取，`.`≠`_` 精确不匹配 → miss，模型反而否认已注入的事实。**已从 journal + DB 实锤**：失败会话 `f04f8b3f` / run `c31b69b3`（02:48:05Z 启动），三条记忆（含 `personal.email` @ 02:46:58Z）在启动前均已存在且 `session.user_id`=owner ⇒ `_load_core_memory` 必然注入——**问题不是"没加载"，是"自由 key 精确匹配 + 冗余查找覆盖了已注入上下文"**，且记忆被塞进缓存前缀违反 docs/04 铁律⑤。
+
+- **决策（用户拍板 2026-07-23）**：把记忆做成**能力维度分层**（与 ADR-004 的"归属维度两层 user/tenant"正交；tenant 共享层继续后置）：
+  1. **核心记忆 core = 命名、有界、恒在上下文的 blocks**（取代 `user_memory` 整表注入）。固定少量 block：`profile`（身份：姓名/邮箱/时区/角色）、`preferences`（行为偏好）、`agent_notes`（可选）。每块 free-text（markdown），字符上限**写时**强制（超限返回"先整合"结构化错误，Hermes 式），agent 用 `append/replace/remove` 外科式编辑；乐观 `version` 并发锁。**永远整块注入 ⇒ 无 key 可猜、无查找会 miss**，从根上消除该 bug。
+  2. **语义记忆 archival = 复用 `memory_passages` + pgvector + FTS + RRF**，新增**自动形成**与写入去重（SHA-256 精确 + 语义近重 → NOOP/UPDATE）。
+  3. **情景记忆 episodic = 复用 Session Library 搜索（ADR-029）**，作为"相关历史对话"按需召回，**不新建并行存储**。
+
+- **写入两路**：① **热路径**——agent 工具轮内显式写（core block 编辑 / archival note）；② **后台形成**（新，异步于回复之后，复用 arq + event journal）——读完结 run 的 transcript，抽取候选事实，跑**确定性合并**写回 core+archival；可配触发节奏（run settle / 每 N 轮）+ kill-switch。**mock 模式必须走确定性分支**（铁律：测试不调真模型，一如 `embeddings._fake_embedding`）。
+
+- **冲突消解（本 bug 的根治）**：每次写入（热/后台）对既有记忆判定 **ADD / UPDATE / INVALIDATE / NOOP**（Mem0 双阶段 + Sydney 增量合并）。core 每主题单块 ⇒ 无 key 冲突；**变化型事实用双时态软失效**（Zep）：新事实置旧行 `invalid_at`、不硬删——保留历史 + 可时点查询 + 测试确定。mock 下合并退化为规则（规范化匹配→UPDATE、hash 重复→NOOP、否则 ADD）。
+
+- **缓存稳定注入（修 docs/04 铁律⑤）**：core 记忆**移出静态 `SYSTEM_PROMPT` 缓存前缀**，作为独立层、**run 开始快照**、run 内不变（Hermes 冻结快照）。archival/episodic 不预注入——按需 `memory_search` 或 top-k 拼到消息**尾部**（Mem0），绝不进前缀。注入前对 block 内容做**威胁扫描**（记忆可能源自不可信邮件，ADR-009/019）。纠正 docs/02「`<memory-context>` 注入用户消息、绝不进 system prompt」被实现偏离的问题。
+
+- **embedding = 自带 ollama 固定模型（用户拍板 2026-07-23）**：默认 **`ollama/bge-m3`（多语言含中文，1024 维）**，`infra/docker-compose.yml` 增 `ollama` 服务。理由：**维度稳定**（换模型=全量重建、非开关）、**隐私**（个人记忆不出机，ADR-019）、**可用性**（聊天 provider 未必供 `/v1/embeddings`）。故 `embedding_dim` 与 `memory_passages.embedding` 由 **1536 → 1024**；**现在做零成本**（`memory_passages` 实测 0 行，已核）。外部 provider embedding 降为**可选高级覆盖**，**与聊天 provider 解耦**。另记：聊天 provider 端点/密钥应转为用户 Setting（UI 已有模型选择器，端点/密钥配置尚无）。
+
+- **可观测性**：run 注入 core 记忆时发 `core_memory.loaded`（labels + 字符数 + block 版本），让每次运行**自证**"看到了哪些记忆"（今天只能靠时间戳反推）；与 STATUS item0 的 `model.request`/`generations` 捕获协同。
+
+- **契约先行（本 ADR 同批，仅改契约文档不写代码）**：`data-model`（新 `memory_blocks`；`memory_passages` 加 `origin/importance/valid_at/invalid_at` + embedding 1024；`user_memory` 处置；补 ADR-032 子节说明 supersede 冻结不变量#13）、`events`（`memory.formed` op 化 + `core_memory.loaded`）、`api`（core block CRUD + 历史，REST/Tool 双适配 ADR-023）、`config`（`EMBEDDING_*` + 形成节奏 + kill-switch）。均带 `tenant_id` 复合键（ADR-015）。
+
+- **`user_memory` 处置**：迁移现有行 → 种入 `profile` block；表**保留为遗留只读**（Phase A 兼容，写入改走 blocks），后续迁移可移除。REST/Tool 双适配同步改，不破坏 ADR-023。
+
+- **分阶段**：Phase 0=（暂缓的）最小补丁（key 规范化 + get 回退 + 写合并去重 + "core 已在上下文、勿重查"提示）；**Phase A**=core blocks + run 快照 + 缓存稳定层 + 外科编辑工具 + ollama/1024 切换 + Memory UI blocks；**Phase B**=后台形成 + importance/recency 评分；**Phase C**=证据门（双时态历史 UI、混合评分检索、reflection；需 golden 集 MRR/答准提升≥10% 才留，比照 ADR-029 Phase C）。
+
+- **取代/修订关系**：**扩展 ADR-004**（user 私有记忆升级为分层；tenant 共享层仍后置）；**修订 ADR-012**（pgvector 已部分落地，此处确立 embedding 走自带 ollama、**不引入独立向量库**）；纠正 docs/02 注入点偏差。**不改**：ADR-015 租户键、ADR-016/017 真相源与 effect 语义、ADR-019 密钥、ADR-023 能力层双适配。
+
+- **验收关键**：写 `personal.email` 后**新会话直接可用**（不再 miss）；core 记忆**不破坏缓存前缀**；后台形成在 mock 下**确定性可回归**；embedding **全本地、维度=1024、零残留**；`user_memory` 迁移后旧事实在 `profile` 可见；UI Memory 页展示 blocks + archival 来源(你/自动) + 失效历史。契约**先于代码**（本 ADR 同批）。
+
+- **来源**：R-MEMORY 调研 [`research/memory.md`](research/memory.md)（Letta/MemGPT · Hermes · Sydney · Mem0 · Zep/Graphiti · Generative Agents · LangMem · Anthropic/OpenAI）；用户输入「我倾向先用ollama」「3」（先起草 ADR + 契约再定实现顺序）；bug 实锤见本会话 journal+DB 反推。

@@ -20,7 +20,7 @@
 
 | 序 | 里程碑 | 能实现什么 | 原需求 |
 |---|---|---|---|
-| 1 | **两层记忆 + RAG(pgvector)** | agent 跨会话长期记忆（user 私有；tenant 共享待多用户）+ 手工语义笔记混合检索 | 铁律#6 |
+| 1 | **两层记忆 + RAG(pgvector)** | agent 跨会话长期记忆（user 私有；tenant 共享待多用户）+ 手工语义笔记混合检索 · **重构见 ADR-032（分层记忆核心 blocks + 自动形成 + 确定性写合并 + 自带 ollama embedding；源自 [`research/memory.md`](research/memory.md)）** | 铁律#6 |
 | 2 | **个人文件存储 / MinIO** | 每用户持久 workspace，上传/同步文件与代码，agent 读写 | #4 |
 | 3 | **代码执行 / 沙箱**（gVisor/Firecracker） | agent 改/跑代码/跑测试（最危险，前置：后端中立执行契约 + 隔离 + 出口策略 + 聚合配额 + 威胁评审） | #3 · ADR-007 |
 | 4 | **QQ / IM bot 入站**（AstrBot/aiocqhttp）**+ QQ 审批/通知渲染器** | 在 QQ 等 IM 里跟 agent 对话、收通知、**在 QQ 上批准/拒绝**（复用 v1 审批基座） | #10 |

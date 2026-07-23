@@ -2137,3 +2137,81 @@ MinIO object for a new hash is written **before** commit, but object deletion is
 never inline — a reconciliation/GC worker removes objects only for blobs whose
 `ref_count = 0` past retention. Trash is `trashed_at`/`purge_after`; permanent
 purge is human-only/approval-gated (ADR-030).
+
+### Memory redesign (ADR-032, migrations `0023+`)
+
+Tiered memory. **Core** memory becomes named, bounded, always-in-context
+**blocks** (this supersedes v1 invariant #13's "`user_memory` is the only memory
+store" for post-v1: `user_memory` becomes a legacy read-only KV, its rows migrated
+into the `profile` block). **Archival** `memory_passages` gains provenance,
+importance, and bi-temporal validity, and its embedding dimension moves to 1024
+for the bundled local model. **Episodic** recall reuses `session_search_entries`
+(ADR-029) — no new store.
+
+```sql
+-- Core memory: one bounded, always-injected block per (user, label).
+CREATE TABLE memory_blocks (
+    tenant_id  uuid NOT NULL,
+    user_id    uuid NOT NULL,
+    label      text NOT NULL,              -- profile|preferences|agent_notes (extensible)
+    value_text text NOT NULL DEFAULT '',
+    char_limit integer NOT NULL,           -- enforced at write time (no silent truncation)
+    version    integer NOT NULL DEFAULT 1, -- optimistic lock / CAS
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_memory_blocks PRIMARY KEY (tenant_id, user_id, label),
+    CONSTRAINT fk_memory_blocks_tenant
+        FOREIGN KEY (tenant_id) REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_memory_blocks_user
+        FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_memory_blocks_label CHECK (label ~ '^[a-z][a-z0-9_]{0,31}$'),
+    CONSTRAINT ck_memory_blocks_bound CHECK (octet_length(value_text) <= char_limit),
+    CONSTRAINT ck_memory_blocks_limit CHECK (char_limit BETWEEN 1 AND 16384),
+    CONSTRAINT ck_memory_blocks_version CHECK (version > 0)
+);
+
+-- Optional per-block edit history (bounded, for the UI "superseded" view + audit).
+CREATE TABLE memory_block_history (
+    tenant_id   uuid NOT NULL,
+    id          uuid NOT NULL,
+    user_id     uuid NOT NULL,
+    label       text NOT NULL,
+    value_text  text NOT NULL,             -- the value BEFORE this edit
+    version     integer NOT NULL,          -- the version being replaced
+    op          text NOT NULL,             -- set|append|replace|remove|formed
+    edited_at   timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_memory_block_history PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_mbh_tenant
+        FOREIGN KEY (tenant_id) REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT ck_mbh_op CHECK (op IN ('set','append','replace','remove','formed'))
+);
+
+-- Archival memory: provenance, importance, and bi-temporal validity (Zep-style
+-- soft invalidation — a superseding fact sets invalid_at, never deletes).
+ALTER TABLE memory_passages ADD COLUMN origin     text     NOT NULL DEFAULT 'user';   -- user|agent_auto
+ALTER TABLE memory_passages ADD COLUMN importance smallint NOT NULL DEFAULT 5;        -- 1..10
+ALTER TABLE memory_passages ADD COLUMN valid_at   timestamptz NOT NULL DEFAULT now();
+ALTER TABLE memory_passages ADD COLUMN invalid_at timestamptz;                        -- NULL = currently valid
+ALTER TABLE memory_passages
+    ADD CONSTRAINT ck_mp_origin CHECK (origin IN ('user','agent_auto')),
+    ADD CONSTRAINT ck_mp_importance CHECK (importance BETWEEN 1 AND 10);
+
+-- Embedding dimension 1536 -> 1024 for the bundled ollama model (bge-m3).
+-- Free re-type while memory_passages has 0 rows; otherwise a full re-embed/re-index.
+-- EMBEDDING_DIM (config) MUST equal this column width or writes fail.
+ALTER TABLE memory_passages ALTER COLUMN embedding TYPE vector(1024);
+```
+
+Notes:
+
+- `user_memory` (v1) is **not dropped by this migration**; it becomes legacy
+  read-only. A data migration seeds the `profile`/`preferences` blocks from its
+  rows (e.g. `name`, `work.email`, `personal.email`); a later migration may remove
+  it. The `memory_user_*` tools/REST keep working read-only during Phase A.
+- Core memory is snapshotted into a **cache-stable layer** at run start (never the
+  static system-prompt prefix) — see [events-and-effects.md](events-and-effects.md)
+  `core_memory.loaded` and ADR-032.
+- Background formation (`origin='agent_auto'`) writes archival passages and core
+  blocks with a per-candidate idempotency key; conflict resolution is
+  ADD/UPDATE/INVALIDATE/NOOP (ADR-032). All tables keep `tenant_id` + composite
+  tenant-scoped keys (ADR-015).

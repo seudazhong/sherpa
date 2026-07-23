@@ -87,6 +87,19 @@ class Settings(BaseSettings):
     provider_model: str = Field(default="mock-v1", min_length=1)
     provider_timeout_seconds: int = Field(default=60, ge=1, le=600)
 
+    # Embeddings (ADR-032): a Sherpa-bundled local model by default, decoupled
+    # from the chat provider. EMBEDDING_DIM MUST equal the memory_passages vector
+    # column width; changing the model/dim is a full re-embed, not a toggle.
+    embedding_kind: Literal["mock", "ollama", "openai_compatible"] = "mock"
+    embedding_base_url: AnyHttpUrl | None = None       # e.g. http://ollama:11434
+    embedding_model: str = Field(default="bge-m3", min_length=1)
+    embedding_dim: int = Field(default=1024, ge=1, le=4096)
+    embedding_api_key: SecretStr | None = None         # only for the openai_compatible override
+
+    # Background memory formation (ADR-032): off by default (privacy/cost).
+    memory_autoform_enabled: bool = False
+    memory_autoform_every_turns: int = Field(default=0, ge=0)  # 0 = on run settle
+
     # Gmail OAuth and retained Gmail data
     gmail_client_id: str | None = Field(default=None, min_length=1)
     gmail_client_secret: SecretStr | None = None
@@ -231,6 +244,12 @@ class Settings(BaseSettings):
             if self.provider_model == "mock-v1":
                 raise ValueError("real provider requires an explicit PROVIDER_MODEL")
 
+        if self.embedding_kind in ("ollama", "openai_compatible"):
+            if self.embedding_base_url is None:
+                raise ValueError("real embeddings require EMBEDDING_BASE_URL")
+            if self.embedding_kind == "openai_compatible" and self.embedding_api_key is None:
+                raise ValueError("openai_compatible embeddings require EMBEDDING_API_KEY")
+
         try:
             ZoneInfo(self.notification_timezone)
         except ZoneInfoNotFoundError as exc:
@@ -275,6 +294,13 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Provider | `PROVIDER_API_KEY` | `SecretStr` | None | `worker` when real | **Yes** | Sent only to the selected provider origin. |
 | Provider | `PROVIDER_MODEL` | `str` | `mock-v1` | Explicit when real | No | Persisted with generation telemetry. |
 | Provider | `PROVIDER_TIMEOUT_SECONDS` | `int`, 1–600 | `60` | No | No | Whole outbound provider request timeout. |
+| Embeddings | `EMBEDDING_KIND` | `mock \| ollama \| openai_compatible` | `mock` | `worker` when real | No | Embedding backend; **decoupled** from `PROVIDER_KIND` (ADR-032). |
+| Embeddings | `EMBEDDING_BASE_URL` | `AnyHttpUrl` | None | `worker` when ollama/openai | No | e.g. `http://ollama:11434` (bundled) or an external `/v1` root. |
+| Embeddings | `EMBEDDING_MODEL` | `str` | `bge-m3` | No | No | Persisted per passage; a change requires re-embedding all passages. |
+| Embeddings | `EMBEDDING_DIM` | `int`, 1–4096 | `1024` | No | No | MUST equal the `memory_passages.embedding` column width. |
+| Embeddings | `EMBEDDING_API_KEY` | `SecretStr` | None | when `openai_compatible` | **Yes** | Only for the external-provider embedding override. |
+| Memory | `MEMORY_AUTOFORM_ENABLED` | `bool` | `false` | No | No | Background memory-formation kill-switch (ADR-032). |
+| Memory | `MEMORY_AUTOFORM_EVERY_TURNS` | `int` ≥ 0 | `0` | No | No | `0` = form on run settle; `N` = every N user turns. |
 | Gmail OAuth | `GMAIL_CLIENT_ID` | `str` | None | `web`, `worker` | No | OAuth client identifier. |
 | Gmail OAuth | `GMAIL_CLIENT_SECRET` | `SecretStr` | None | `web`, `worker` | **Yes** | OAuth code exchange and refresh only. |
 | Gmail OAuth | `GMAIL_REDIRECT` | `AnyHttpUrl` | None | `web` | No | Exact registered URL: configurable origin plus fixed `/connectors/gmail/oauth/callback`; HTTPS in production. |
@@ -358,6 +384,17 @@ PROVIDER_TIMEOUT_SECONDS=60
 # For PROVIDER_KIND=openai_compatible, uncomment and replace:
 # PROVIDER_BASE_URL=https://api.example.com/v1
 # PROVIDER_API_KEY=REPLACE_WITH_PROVIDER_API_KEY  # SECRET
+
+# Embeddings (ADR-032). Default = bundled local ollama; decoupled from the chat provider.
+EMBEDDING_KIND=mock
+EMBEDDING_MODEL=bge-m3
+EMBEDDING_DIM=1024
+# For EMBEDDING_KIND=ollama (bundled) set the service URL:
+# EMBEDDING_BASE_URL=http://ollama:11434
+# For EMBEDDING_KIND=openai_compatible (external override) also set:
+# EMBEDDING_API_KEY=REPLACE_WITH_EMBEDDING_API_KEY  # SECRET
+MEMORY_AUTOFORM_ENABLED=false
+MEMORY_AUTOFORM_EVERY_TURNS=0
 
 # Gmail OAuth. The operating mode remains open in review §5.
 GMAIL_OAUTH_MODE=per_deployment
@@ -522,7 +559,7 @@ Compose MUST map explicit keys per service; it MUST NOT pass the complete `.env`
 | Service | Receives |
 |---|---|
 | `web` | `SERVICE_ROLE=web`; app/session/log and tool-output keys; `DATABASE_URL`; `REDIS_URL`; active `KEK`/ID/version for callback sealing; Gmail OAuth keys including redirect/mode; Gmail retention and notification defaults. It receives no previous KEKs and no `PROVIDER_API_KEY`. |
-| `worker` | `SERVICE_ROLE=worker`; `APP_ENV`, `LOG_LEVEL`, `WORKSPACE_ROOT`, and tool-output keys; `DATABASE_URL`; `REDIS_URL`; active/previous KEK keys; Gmail client ID/secret and data policy; all provider keys; notification defaults. It does **not** receive `APP_SECRET`. |
+| `worker` | `SERVICE_ROLE=worker`; `APP_ENV`, `LOG_LEVEL`, `WORKSPACE_ROOT`, and tool-output keys; `DATABASE_URL`; `REDIS_URL`; active/previous KEK keys; Gmail client ID/secret and data policy; all provider and embedding keys; memory-formation settings; notification defaults. It does **not** receive `APP_SECRET`. |
 | one-shot `migration` | `SERVICE_ROLE=migration`; `APP_ENV`, `LOG_LEVEL`, and `DATABASE_URL` only. |
 | `frontend` | No key from this contract and no backend secret. Public API origin, if needed at build time, is a separate public frontend setting. |
 | `postgres` | No Sherpa application secret and no KEK. Image bootstrap credentials come from deployment-managed Docker secrets and must match `DATABASE_URL`; they are not application `Settings`. |

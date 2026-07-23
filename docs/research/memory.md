@@ -1,9 +1,10 @@
 # R-MEMORY — Agent memory: survey and a redesign for Sherpa
 
-**Status:** research and design complete; implementation **not** approved. Written
-after a live failure was observed (see §1). This document supersedes nothing yet;
-approving it means authoring **ADR-031** (extends/supersedes ADR-004, revisits the
-ADR-012 deferral) plus post-v1 contract edits before any code.
+**Status:** research and design complete. Written after a live failure was observed
+(see §1). **Owner approved the direction (2026-07-23);** **ADR-032** (extends/supersedes
+ADR-004, revisits the ADR-012 deferral) plus the post-v1 contract diffs
+(data-model / api / events / config) are now **drafted in the same batch** —
+implementation order is still TBD and no business code has been written yet.
 
 **Recommendation:** **GO** for a **tiered memory redesign** on the existing
 Postgres + pgvector + Redis stack — no new datastore. Replace the free-form
@@ -298,7 +299,7 @@ backend that ships.
   canonicalization + `get` list/fuzzy fallback + write-merge dedup + reliable
   always-injection + a system-prompt line "core memory is already in context; do not
   re-look-up known facts." Would alone have prevented §1.
-- **Phase A — core-memory redesign (ADR-031 + contracts).** `memory_blocks`,
+- **Phase A — core-memory redesign (ADR-032 + contracts).** `memory_blocks`,
   run-start snapshot, cache-stable layer, surgical edit tools + dedup, migration from
   `user_memory`, Memory-page blocks. No new infra.
 - **Phase B — background formation.** Async post-run extraction + deterministic merge
@@ -311,7 +312,7 @@ backend that ships.
 
 ## 8. Contract / ADR work before code
 
-- **ADR-031** — "Tiered agent memory (blocks + async formation + deterministic
+- **ADR-032** — "Tiered agent memory (blocks + async formation + deterministic
   merge)"; extends/supersedes **ADR-004**, revisits the **ADR-012** pgvector
   deferral (already partly landed for `memory_passages`).
 - **data-model.md** — add `memory_blocks`; add `origin`, `importance`, `valid_at`,
@@ -336,7 +337,7 @@ backend that ships.
 5. **Importance:** LLM poignancy vs deterministic heuristic for v1? (Heuristic first;
    LLM behind the mock seam.)
 6. **Reflection:** defer to Phase C? (Recommend yes.)
-7. **Embedding provider — user-configured vs Sherpa-bundled fixed model?** Options: (1) reuse the user's model provider (the litellm/Copilot proxy — **verified live** serving `text-embedding-3-small`, 1536-d); (2) ship a **fixed local embedding** via a bundled `ollama` container (e.g. `bge-m3` 1024-d / `nomic-embed` 768-d; the proxy config already references `ollama/bge-m3`). Three constraints push toward **decoupling embeddings from the chat provider** and toward a **fixed** model: (a) `memory_passages.embedding` is a fixed-dim `Vector(1536)` and cosine only compares one vector space, so changing model ⇒ **full re-index**, not a casual toggle; (b) a chat-only provider may not serve `/v1/embeddings`, silently breaking RAG; (c) **privacy** — embedding personal memory via an external API ships private content off-box, whereas local ollama keeps it on-box (self-hosted ethos + ADR-019). **Lean:** default to a **bundled local embedding** (deterministic dims, private, always available); expose the embedding endpoint as a *separate advanced setting*, not tied to chat-provider selection; make the vector dim deploy-time configurable (or pad to a max dim, Letta-style); treat any model change as an explicit reindex op. **Related:** the **chat** provider endpoint/key is today hardcoded via compose env and should become a user Setting — the model *picker* already exists in the UI, but provider endpoint/key config does not. **Owner decision (2026-07-23): start with a bundled `ollama` local embedding.** Implementation note — a natural default is `bge-m3` (multilingual incl. CJK, **1024-d**; already referenced in the litellm proxy config). That means `embedding_dim` and the `memory_passages.embedding Vector(1536)` column must move to **1024** and re-embed — but that is **free right now** because `memory_passages` has 0 rows; do the dim change + `ollama` service before any auto-formation writes real vectors. Fold into ADR-031 (add the `ollama` container to `infra/docker-compose.yml` + `embedding_base_url`/model config; keep the external-proxy embedding as an optional advanced override).
+7. **Embedding provider — user-configured vs Sherpa-bundled fixed model?** Options: (1) reuse the user's model provider (the litellm/Copilot proxy — **verified live** serving `text-embedding-3-small`, 1536-d); (2) ship a **fixed local embedding** via a bundled `ollama` container (e.g. `bge-m3` 1024-d / `nomic-embed` 768-d; the proxy config already references `ollama/bge-m3`). Three constraints push toward **decoupling embeddings from the chat provider** and toward a **fixed** model: (a) `memory_passages.embedding` is a fixed-dim `Vector(1536)` and cosine only compares one vector space, so changing model ⇒ **full re-index**, not a casual toggle; (b) a chat-only provider may not serve `/v1/embeddings`, silently breaking RAG; (c) **privacy** — embedding personal memory via an external API ships private content off-box, whereas local ollama keeps it on-box (self-hosted ethos + ADR-019). **Lean:** default to a **bundled local embedding** (deterministic dims, private, always available); expose the embedding endpoint as a *separate advanced setting*, not tied to chat-provider selection; make the vector dim deploy-time configurable (or pad to a max dim, Letta-style); treat any model change as an explicit reindex op. **Related:** the **chat** provider endpoint/key is today hardcoded via compose env and should become a user Setting — the model *picker* already exists in the UI, but provider endpoint/key config does not. **Owner decision (2026-07-23): start with a bundled `ollama` local embedding.** Implementation note — a natural default is `bge-m3` (multilingual incl. CJK, **1024-d**; already referenced in the litellm proxy config). That means `embedding_dim` and the `memory_passages.embedding Vector(1536)` column must move to **1024** and re-embed — but that is **free right now** because `memory_passages` has 0 rows; do the dim change + `ollama` service before any auto-formation writes real vectors. Fold into ADR-032 (add the `ollama` container to `infra/docker-compose.yml` + `embedding_base_url`/model config; keep the external-proxy embedding as an optional advanced override).
 
 ---
 
