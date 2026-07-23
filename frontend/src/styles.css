@@ -2885,3 +2885,26 @@ div.run-log {
     justify-content: flex-start;
   }
 }
+
+/* Scheduler console (Phase CRON) */
+.form-card-wide {
+  grid-column: 1 / -1;
+}
+.form-card textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+}
+.schedule-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+@media (max-width: 760px) {
+  .schedule-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

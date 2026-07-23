@@ -236,11 +236,34 @@ export interface Schedule {
   delivery_channel: string;
   timezone: string;
   local_time: string | null;
+  cadence_kind: string;
+  cron_expr: string | null;
+  interval_seconds: number | null;
+  weekly_days: string | null;
+  monthly_day: number | null;
+  prompt: string | null;
   next_fire_at: string;
+  last_fired_at: string | null;
   status: string;
   version: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface ScheduleFiring {
+  id: string;
+  schedule_id: string;
+  scheduled_for: string;
+  status: string;
+  delivery_outcome: string | null;
+  run_id: string | null;
+  settled_at: string | null;
+  created_at: string;
+}
+
+export interface ScheduleFiringPage {
+  items: ScheduleFiring[];
+  next_cursor: string | null;
 }
 
 export interface SchedulePage {
@@ -628,6 +651,39 @@ export const api = {
       `/schedules/${id}/cancel`,
       jsonInit("POST", csrf, { if_version: ifVersion }),
     ),
+  createScheduledTask: (
+    csrf: string,
+    body: {
+      name: string;
+      prompt: string;
+      cadence_kind: string;
+      cron_expr?: string;
+      interval_seconds?: number;
+      local_time?: string;
+      weekly_days?: string;
+      monthly_day?: number;
+      timezone: string;
+      delivery_channel: string;
+    },
+  ) =>
+    req<Schedule>(
+      "/schedules",
+      jsonInit("POST", csrf, { kind: "agent_task", ...body }),
+    ),
+  runScheduleNow: (csrf: string, id: string) =>
+    req<ScheduleFiring>(`/schedules/${id}/run-now`, jsonInit("POST", csrf)),
+  setScheduleStatus: (
+    csrf: string,
+    id: string,
+    ifVersion: number,
+    status: "active" | "paused",
+  ) =>
+    req<Schedule>(
+      `/schedules/${id}/status`,
+      jsonInit("POST", csrf, { if_version: ifVersion, status }),
+    ),
+  listScheduleFirings: (id: string) =>
+    req<ScheduleFiringPage>(`/schedules/${id}/firings`),
   getSettings: () => req<Settings>("/settings"),
   updateSettings: (csrf: string, patch: Record<string, unknown>) =>
     req<Settings>("/settings", jsonInit("PATCH", csrf, patch)),
