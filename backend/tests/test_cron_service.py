@@ -70,25 +70,45 @@ async def test_agent_task_validation_errors() -> None:
             # No prompt.
             with pytest.raises(Invalid):
                 await svc.create_schedule(
-                    s, ctx, kind="agent_task", name="x", prompt="", cadence_kind="daily",
+                    s,
+                    ctx,
+                    kind="agent_task",
+                    name="x",
+                    prompt="",
+                    cadence_kind="daily",
                     local_time=datetime.time(9, 0),
                 )
             # Interval below the service min-frequency floor (300s).
             with pytest.raises(Invalid):
                 await svc.create_schedule(
-                    s, ctx, kind="agent_task", name="x", prompt="do it",
-                    cadence_kind="interval", interval_seconds=60,
+                    s,
+                    ctx,
+                    kind="agent_task",
+                    name="x",
+                    prompt="do it",
+                    cadence_kind="interval",
+                    interval_seconds=60,
                 )
             # Daily without a local_time.
             with pytest.raises(Invalid):
                 await svc.create_schedule(
-                    s, ctx, kind="agent_task", name="x", prompt="do it", cadence_kind="daily",
+                    s,
+                    ctx,
+                    kind="agent_task",
+                    name="x",
+                    prompt="do it",
+                    cadence_kind="daily",
                 )
             # Invalid cron expression.
             with pytest.raises(Invalid):
                 await svc.create_schedule(
-                    s, ctx, kind="agent_task", name="x", prompt="do it",
-                    cadence_kind="cron", cron_expr="not a cron",
+                    s,
+                    ctx,
+                    kind="agent_task",
+                    name="x",
+                    prompt="do it",
+                    cadence_kind="cron",
+                    cron_expr="not a cron",
                 )
         finally:
             await s.rollback()
@@ -103,8 +123,13 @@ async def test_run_now_and_pause_resume() -> None:
             tid, uid = await _seed(s)
             ctx = _ctx(tid, uid)
             sched = await svc.create_schedule(
-                s, ctx, kind="agent_task", name="Task", prompt="do it",
-                cadence_kind="interval", interval_seconds=600,
+                s,
+                ctx,
+                kind="agent_task",
+                name="Task",
+                prompt="do it",
+                cadence_kind="interval",
+                interval_seconds=600,
             )
 
             firing = await svc.run_now(s, ctx, schedule_id=sched.id)
@@ -124,9 +149,7 @@ async def test_run_now_and_pause_resume() -> None:
             assert resumed.status == "active"
 
             with pytest.raises(VersionConflict):
-                await svc.set_status(
-                    s, ctx, schedule_id=sched.id, if_version=999, status="paused"
-                )
+                await svc.set_status(s, ctx, schedule_id=sched.id, if_version=999, status="paused")
         finally:
             await s.rollback()
 
@@ -151,9 +174,7 @@ async def test_create_scheduled_task_tool() -> None:
                 },
             )
             assert "scheduled task" in res.llm_content
-            row = (
-                await s.execute(select(Schedule).where(Schedule.tenant_id == tid))
-            ).scalar_one()
+            row = (await s.execute(select(Schedule).where(Schedule.tenant_id == tid))).scalar_one()
             assert row.kind == "agent_task" and row.cadence_kind == "cron"
             assert row.prompt == "Summarize today's activity."
         finally:
