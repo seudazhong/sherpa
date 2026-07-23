@@ -145,10 +145,70 @@ class CancelScheduleTool:
         return ToolResult(llm_content=f"cancelled schedule {sched.id}")
 
 
+class CreateScheduledTaskTool:
+    name = "create_scheduled_task"
+    description = (
+        "Schedule a recurring autonomous task: at each occurrence Sherpa runs the "
+        "given prompt and delivers the result. Specify exactly one cadence: cron (a "
+        "5-field cron expression), daily_time (HH:MM), or interval_minutes. External "
+        "actions inside the task still require your approval."
+    )
+    input_schema: dict[str, object] = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "prompt": {"type": "string", "description": "what to do each run"},
+            "cron": {"type": "string", "description": "5-field cron, e.g. 0 9 * * 1-5"},
+            "daily_time": {"type": "string", "description": "HH:MM local time"},
+            "interval_minutes": {"type": "integer", "description": "run every N minutes (>=5)"},
+            "timezone": {"type": "string", "description": "IANA tz, e.g. Asia/Shanghai"},
+            "delivery_channel": {"type": "string", "enum": ["web", "email", "qq"]},
+        },
+        "required": ["name", "prompt"],
+    }
+    flags = _WRITE
+
+    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
+        validate_args(self.input_schema, args)
+        db, cc = require_session(ctx), to_caller(ctx)
+        kwargs: dict[str, object] = {}
+        if args.get("cron"):
+            kwargs = {"cadence_kind": "cron", "cron_expr": str(args["cron"])}
+        elif args.get("daily_time"):
+            kwargs = {"cadence_kind": "daily", "local_time": _parse_time(args["daily_time"])}
+        elif args.get("interval_minutes"):
+            kwargs = {
+                "cadence_kind": "interval",
+                "interval_seconds": int(arg_int(args["interval_minutes"])) * 60,
+            }
+        else:
+            raise ToolError("specify one cadence: cron, daily_time, or interval_minutes")
+        try:
+            sched = await schedules.create_schedule(
+                db,
+                cc,
+                kind="agent_task",
+                name=str(args["name"]),
+                prompt=str(args["prompt"]),
+                timezone=str(args.get("timezone", "UTC")),
+                delivery_channel=str(args.get("delivery_channel", "web")),
+                **kwargs,  # type: ignore[arg-type]
+            )
+        except ServiceError as e:
+            raise as_tool_error(e) from None
+        return ToolResult(
+            llm_content=(
+                f"scheduled task {sched.id} ({sched.cadence_kind}); "
+                f"next run {sched.next_fire_at.isoformat()}"
+            )
+        )
+
+
 def schedule_tools() -> list[object]:
     return [
         CreateReminderTool(),
         CreateDigestTool(),
+        CreateScheduledTaskTool(),
         ListSchedulesTool(),
         CancelScheduleTool(),
     ]

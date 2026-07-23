@@ -676,6 +676,8 @@ in an API response, event, log, or error.
 | `GET /schedules/{id}` | none → `Schedule` | Session | `200`, `401`, `404`, `503` |
 | `PATCH /schedules/{id}` | `SchedulePatch` → `Schedule` | Session + CSRF | `200`, `401`, `403`, `404`, `409`, `422`, `503` |
 | `DELETE /schedules/{id}` | none → empty | Session + CSRF | `204`, `401`, `403`, `404`, `409`, `503` |
+| `POST /schedules/{id}/cancel` | `{if_version}` → `Schedule` | Session + CSRF | `200`, `401`, `403`, `404`, `409`, `503` |
+| `POST /schedules/{id}/status` | `{if_version, status}` (active\|paused) → `Schedule` | Session + CSRF | `200`, `401`, `403`, `404`, `409`, `422`, `503` |
 | `POST /schedules/{id}/run-now` | none → `ScheduleFiring` | Session + CSRF | `202`, `401`, `403`, `404`, `409`, `429`, `503` |
 | `GET /schedules/{id}/firings?status=&cursor=&limit=` | none → `CursorPage[ScheduleFiring]` | Session | `200`, `400`, `401`, `404`, `422`, `503` |
 

@@ -292,9 +292,10 @@ class TodoCreate(StrictModel):
 
 
 # --- Schedules (api.md §4.4) ---
-ScheduleKind = Literal["todo_reminder", "daily_digest"]
+ScheduleKind = Literal["todo_reminder", "daily_digest", "agent_task"]
 ReminderKind = Literal["due_soon", "overdue"]
-DeliveryChannel = Literal["web", "digest_email"]
+DeliveryChannel = Literal["web", "digest_email", "email", "qq"]
+CadenceKind = Literal["daily", "cron", "interval", "weekly", "monthly", "once"]
 
 
 class Schedule(StrictModel):
@@ -307,7 +308,14 @@ class Schedule(StrictModel):
     delivery_channel: DeliveryChannel
     timezone: str
     local_time: datetime.time | None
+    cadence_kind: CadenceKind
+    cron_expr: str | None
+    interval_seconds: int | None
+    weekly_days: str | None
+    monthly_day: int | None
+    prompt: str | None
     next_fire_at: datetime.datetime
+    last_fired_at: datetime.datetime | None
     status: str
     version: int
     created_at: datetime.datetime
@@ -323,6 +331,34 @@ class ScheduleCreate(StrictModel):
     todo_id: uuid.UUID | None = None
     reminder_kind: ReminderKind | None = None
     next_fire_at: datetime.datetime | None = None
+    # General cron / agent_task fields (ADR-031).
+    cadence_kind: CadenceKind | None = None
+    cron_expr: Annotated[str, Field(max_length=200)] | None = None
+    interval_seconds: Annotated[int, Field(ge=60)] | None = None
+    weekly_days: Annotated[str, Field(max_length=32)] | None = None
+    monthly_day: Annotated[int, Field(ge=1, le=31)] | None = None
+    prompt: Annotated[str, Field(min_length=1, max_length=8000)] | None = None
+
+
+class ScheduleFiringItem(StrictModel):
+    id: uuid.UUID
+    schedule_id: uuid.UUID
+    scheduled_for: datetime.datetime
+    status: str
+    delivery_outcome: str | None
+    run_id: uuid.UUID | None
+    settled_at: datetime.datetime | None
+    created_at: datetime.datetime
+
+
+class ScheduleFiringPage(StrictModel):
+    items: list[ScheduleFiringItem]
+    next_cursor: str | None
+
+
+class ScheduleStatusUpdate(StrictModel):
+    if_version: int
+    status: Literal["active", "paused"]
 
 
 class SchedulePage(StrictModel):

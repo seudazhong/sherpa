@@ -206,9 +206,7 @@ async def settle_scheduled_firing(session: Any, run_id: uuid.UUID) -> str | None
 
     text = await final_assistant_text(session, firing.tenant_id, run_id)
     approval = await pending_approval_for_run(session, firing.tenant_id, run_id)
-    failed = run.status in ("failed", "needs_reconciliation") or (
-        text is None and approval is None
-    )
+    failed = run.status in ("failed", "needs_reconciliation") or (text is None and approval is None)
     outcome = "failed" if failed else "delivered"
 
     if not failed:

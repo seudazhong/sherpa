@@ -17,7 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import Schedule as ScheduleSchema
 from app.api.schemas import SchedulePage
-from app.models import Schedule, Todo
+from app.config import settings
+from app.models import Schedule, ScheduleFiring, Todo
+from app.scheduler.cadence import CadenceError, first_fire_at, validate_cadence
 from app.services.context import CallerContext
 from app.services.errors import Conflict, Invalid, NotFound, VersionConflict
 
@@ -37,7 +39,14 @@ def schedule_schema(row: Schedule) -> ScheduleSchema:
         delivery_channel=row.delivery_channel,  # type: ignore[arg-type]
         timezone=row.timezone,
         local_time=row.local_time,
+        cadence_kind=row.cadence_kind,  # type: ignore[arg-type]
+        cron_expr=row.cron_expr,
+        interval_seconds=row.interval_seconds,
+        weekly_days=row.weekly_days,
+        monthly_day=row.monthly_day,
+        prompt=row.prompt,
         next_fire_at=row.next_fire_at,
+        last_fired_at=row.last_fired_at,
         status=row.status,
         version=row.version,
         created_at=row.created_at,
@@ -76,6 +85,12 @@ async def create_schedule(
     todo_id: uuid.UUID | None = None,
     reminder_kind: str | None = None,
     next_fire_at: datetime.datetime | None = None,
+    cadence_kind: str | None = None,
+    cron_expr: str | None = None,
+    interval_seconds: int | None = None,
+    weekly_days: str | None = None,
+    monthly_day: int | None = None,
+    prompt: str | None = None,
 ) -> ScheduleSchema:
     _tz(timezone)  # validate
     if kind == "todo_reminder":
@@ -88,12 +103,44 @@ async def create_schedule(
         local_time = None
         fire_at = next_fire_at
         cadence_kind = "once"
+        cron_expr = interval_seconds = weekly_days = monthly_day = prompt = None
     elif kind == "daily_digest":
         if local_time is None:
             raise Invalid("daily_digest needs local_time")
         todo_id, reminder_kind = None, None
         fire_at = _next_daily(local_time, timezone)
         cadence_kind = "daily"
+        cron_expr = interval_seconds = weekly_days = monthly_day = prompt = None
+    elif kind == "agent_task":
+        if not prompt or not prompt.strip():
+            raise Invalid("agent_task needs a prompt")
+        if len(prompt) > 8000:
+            raise Invalid("prompt too long")
+        cadence_kind = cadence_kind or "daily"
+        try:
+            validate_cadence(
+                cadence_kind,
+                cron_expr=cron_expr,
+                interval_seconds=interval_seconds,
+                weekly_days=weekly_days,
+                monthly_day=monthly_day,
+                local_time=local_time,
+                min_interval_seconds=settings.scheduled_task_min_interval_seconds,
+            )
+            fire_at = first_fire_at(
+                cadence_kind=cadence_kind,
+                now=_now(),
+                timezone=timezone,
+                local_time=local_time,
+                cron_expr=cron_expr,
+                interval_seconds=interval_seconds,
+                weekly_days=weekly_days,
+                monthly_day=monthly_day,
+                once_at=next_fire_at,
+            )
+        except CadenceError as e:
+            raise Invalid(str(e)) from None
+        todo_id, reminder_kind = None, None
     else:
         raise Invalid("invalid kind")
     if fire_at.tzinfo is None:
@@ -113,6 +160,11 @@ async def create_schedule(
         timezone=timezone,
         local_time=local_time,
         cadence_kind=cadence_kind,
+        cron_expr=cron_expr,
+        interval_seconds=interval_seconds,
+        weekly_days=weekly_days,
+        monthly_day=monthly_day,
+        prompt=prompt,
         next_fire_at=fire_at,
         misfire_policy="fire_once",
         duplicate_policy="prefer_no_duplicate",
@@ -154,3 +206,78 @@ async def cancel_schedule(
     row.updated_at = _now()
     await db.flush()
     return schedule_schema(row)
+
+
+async def set_status(
+    db: AsyncSession, ctx: CallerContext, *, schedule_id: uuid.UUID, if_version: int, status: str
+) -> ScheduleSchema:
+    """Pause (active -> paused) or resume (paused -> active) a schedule."""
+    if status not in ("active", "paused"):
+        raise Invalid("status must be active or paused")
+    row = await db.get(Schedule, (ctx.tenant_id, schedule_id))
+    if row is None or row.user_id != ctx.user_id:
+        raise NotFound("schedule not found")
+    if row.version != if_version:
+        raise VersionConflict("stale schedule version")
+    if row.status in ("disabled", "completed"):
+        raise Conflict("schedule already inactive")
+    row.status = status
+    row.version += 1
+    row.updated_at = _now()
+    await db.flush()
+    return schedule_schema(row)
+
+
+async def run_now(
+    db: AsyncSession, ctx: CallerContext, *, schedule_id: uuid.UUID
+) -> ScheduleFiring:
+    """Insert an immediate firing for a schedule without advancing its cursor.
+
+    The firing is picked up by the delivery tick (reminder/digest) or the agent-task
+    tick (agent_task) on the next pass, exactly like a scheduled slot.
+    """
+    row = await db.get(Schedule, (ctx.tenant_id, schedule_id))
+    if row is None or row.user_id != ctx.user_id:
+        raise NotFound("schedule not found")
+    if row.status in ("disabled", "completed"):
+        raise Conflict("schedule is inactive")
+    now = _now()
+    # Microsecond-precise slot so a manual run never collides with a scheduled slot.
+    key = f"{schedule_id}:manual:{int(now.timestamp() * 1_000_000)}"
+    firing = ScheduleFiring(
+        tenant_id=ctx.tenant_id,
+        id=uuid.uuid4(),
+        schedule_id=schedule_id,
+        firing_key=key,
+        scheduled_for=now,
+        status="pending",
+        delivery_idempotency_key=f"firing:{key}",
+        available_at=now,
+    )
+    db.add(firing)
+    await db.flush()
+    return firing
+
+
+async def list_firings(
+    db: AsyncSession, ctx: CallerContext, *, schedule_id: uuid.UUID, limit: int = 50
+) -> list[ScheduleFiring]:
+    row = await db.get(Schedule, (ctx.tenant_id, schedule_id))
+    if row is None or row.user_id != ctx.user_id:
+        raise NotFound("schedule not found")
+    rows = (
+        (
+            await db.execute(
+                select(ScheduleFiring)
+                .where(
+                    ScheduleFiring.tenant_id == ctx.tenant_id,
+                    ScheduleFiring.schedule_id == schedule_id,
+                )
+                .order_by(ScheduleFiring.scheduled_for.desc())
+                .limit(max(1, min(limit, 100)))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
