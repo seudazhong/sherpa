@@ -162,6 +162,24 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
+## Phase SCHED-FIX — 定时任务修复 (ADR-031 amendment) — **ACCEPTED (2026-07-24, from owner testing feedback)**
+
+> Fixes found by owner testing the CRON phase + the R-SCHED-CONTEXT research: (P1) each cron firing must be a **fresh isolated context** — the shared per-schedule session accumulated history and caused a provider **400** on the 2nd run + polluted Chat/Sessions; (P2) **Run Now latency** — it waits up to 30s for the periodic tick; (P3) schedules have **no edit / no real delete** in the UI. Per task: backend gate + frontend → commit → tick STATUS. Playwright verify with the owner's real email.
+
+| # | Task | refs | AC |
+|---|---|---|---|
+| **SF.0** | **Docs**: amend ADR-031 (per-firing fresh session, Session Library exclusion, run-now immediate, edit/delete); record P4 pre-permission-hint simple design (deferred); this task table. | ADR-031; research/scheduled-permission-prehint | ADR amended; P4 noted |
+| **SF.1** | **Fresh per-firing session (fixes the 400 + pollution)**: `_ensure_session` keyed per firing slot (`scheduled:{id}:{firing_key}`, lookup-then-create for idempotency), `scope_type='scheduled_task'`; exclude `scope_type='scheduled_task'` from Session Library browse (+ search). Each firing loads no prior transcript. Firing history still opens the run. | ADR-031 amend; R-SCHED-CONTEXT | 2nd run no 400 (fresh context); scheduled runs absent from Sessions; firing→run transcript still viewable; tests |
+| **SF.2** | **Run Now immediate dispatch**: run-now enqueues an idempotent agent_task dispatch job (no ~30s tick wait); periodic tick still a safety net. | ADR-031 amend | run-now dispatches within ~1–2s; no double-run; test |
+| **SF.3** | **Edit + hard delete**: `PATCH /schedules/{id}` (edit name/prompt/cadence/channel; revalidate cadence + recompute `next_fire_at`; optimistic `if_version`) + `DELETE /schedules/{id}` (hard: firings then schedule). Frontend: edit form + Delete button (distinct from Cancel). | api §4.5 | edit persists + reschedules; delete removes it; version conflict → 409; build/lint green; tests |
+| **SF.V** | **Verify SCHED-FIX**: backend gate + frontend; Playwright with the owner's real email — a schedule runs twice with fresh context (no 400), Run Now is fast, edit + delete work, scheduled runs not in the Sessions library. | AGENTS §2 | verified; ready for owner acceptance |
+
+**SCHED-FIX exit:** each cron firing runs in a fresh isolated session (no cross-run context, no 400), hidden from Chat/Sessions but inspectable via the schedule's firing history; Run Now dispatches immediately; schedules are editable + deletable in the UI; full gate + build/lint green; Playwright verified.
+
+**Deferred:** P4 (create-time permission pre-hint) — simple design recorded in `research/scheduled-permission-prehint.md`; ADR-033 (observability) is the next phase.
+
+---
+
 
 ## Cross-cutting (do continuously, not a separate phase)
 - **Tests with every task** — deterministic, mock provider, `pytest-asyncio`. No real model calls in tests.

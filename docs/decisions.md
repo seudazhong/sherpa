@@ -296,6 +296,8 @@
 - **本阶段明确不做**：多步工作流 / DAG 编排；外部事件（webhook）作触发器；跨任务依赖链；长运行/常驻服务。**只做「时间触发的单 prompt 自主任务」**，把工作流编排留后续 ADR。
 - **验收关键**：cron/interval/weekly 的下一次计算在 DST 边界正确；`agent_task` 每 slot **恰好跑一次**（firing 幂等，worker 重放不重复）；外部动作仍需审批；频率下限/并发上限生效；零跨租户/用户泄漏；`run_now` 可手动验证；双路径 Playwright（人工建一个 cron agent_task + agent 经工具建一个，观察到点自动跑并投递）。
 - **依赖 / 不改的**：不依赖 GitHub（roadmap #6 的「#7」是原需求编号非构建依赖）；不改 ADR-016/017 真相源与 effect 语义、ADR-019/020/021 审批与密钥边界、ADR-023 能力层双适配器；不引入独立工作流引擎。
+- **修订（2026-07-24，源自 owner 实测反馈 + R-SCHED-CONTEXT 调研）**：`agent_task` 的会话模型从"每 schedule 一个长期会话"改为**每次触发一个全新会话**（per-firing）。**动机**：原实现让同一 cron 的多次触发累积到同一会话，`assemble_provider_history` 把全量历史（含上次的 `tool_calls` / 审批占位）当 provider 消息回放 → 第二次起 provider **400 Bad Request**（同一 `tool_call_id` 出现两条 tool result + 重复 user 消息），且污染 Chat/Sessions。**调研印证**：ChatGPT Tasks / OpenHands Automations / n8n / CrewAI / Hermes 均为"每次触发全新上下文";AstrBot 甚至把历史渲染成 system-prompt 文本后 `req.contexts=[]` 清空 provider 消息。**决策**：每次触发新建会话，key=firing slot（`scheduled:{id}:{firing_key}`），`scope_type='scheduled_task'`；**Session Library / Chat 排除 `scheduled_task`**，仍可经 `/reminders`→firing 历史（`schedule_firings.run_id`）查该次 transcript。跨 run 若要传状态，走 memory block（ADR-032）而非裸 transcript。ADR-031 原文已列"每次新建 session（可配置）"为选项,此为落实正确默认。**run_now** 改为**立即派发**(不等周期 tick)。**编辑/删除**:`agent_task` 支持 UI 编辑(名/prompt/cadence/渠道,乐观版本)与真删(硬删 firings+schedule)。
+- **P4 预授权预检(简单设计,已记录,深入留后续)**：见 [`research/scheduled-permission-prehint.md`](research/scheduled-permission-prehint.md)——建定时任务时预检将用的外部权限并提示"是否加入预授权";首版倾向轻量启发式(扫 prompt 里的邮箱地址→提示加 send_email 白名单),精确的模型 dry-run 分析留后续调研。
 
 ### ADR-032 · 记忆机制重构：分层记忆 + 确定性写合并 + 自带 ollama embedding（源自 R-MEMORY；扩展/部分取代 ADR-004，修订 ADR-012）
 
