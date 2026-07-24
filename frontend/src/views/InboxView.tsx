@@ -263,8 +263,8 @@ export default function InboxView() {
                   </div>
                 </div>
                 <div className="cand-actions">
-                  <Link className="btn btn-primary" to="/">
-                    Review in chat
+                  <Link className="btn btn-primary" to="/approvals">
+                    Review
                   </Link>
                 </div>
               </article>

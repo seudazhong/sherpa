@@ -281,7 +281,7 @@ export interface ApprovalEnvelopeBody {
   human_readable_preview: ApprovalPreview;
   policy_version: string;
   expires_at: string;
-  nonce: string;
+  nonce?: string;
   authorized_actor: { type: "user"; id: string };
   decision: {
     actor: { type: "user"; id: string };
@@ -568,7 +568,7 @@ export const api = {
   resolvePermission: (
     csrf: string,
     p: PendingApproval,
-    nonce: string,
+    nonce: string | null,
     choice: string,
   ) =>
     req<ApprovalResolution>(
@@ -591,7 +591,7 @@ export const api = {
         human_readable_preview: p.human_readable_preview,
         policy_version: p.policy_version,
         expires_at: p.expires_at,
-        nonce,
+        ...(nonce ? { nonce } : {}),
         authorized_actor: { type: "user", id: p.authorized_actor.id },
         decision: {
           actor: { type: "user", id: p.authorized_actor.id },

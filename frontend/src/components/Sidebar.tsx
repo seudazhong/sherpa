@@ -1,10 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 
+import { api } from "../api";
 import { useAuth } from "../auth";
 
 type IconName =
   | "activity"
+  | "approvals"
   | "chat"
   | "connectors"
   | "files"
@@ -28,6 +30,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
       { label: "Chat", path: "/", icon: "chat" },
       { label: "Sessions", path: "/history", icon: "sessions" },
       { label: "Inbox", path: "/inbox", icon: "inbox" },
+      { label: "Approvals", path: "/approvals", icon: "approvals" },
       { label: "Activity", path: "/data", icon: "activity" },
     ],
   },
@@ -80,6 +83,12 @@ function NavIcon({ name }: { name: IconName }) {
         <path d="M8 8h8M8 12h8M8 16h5" />
       </>
     ),
+    approvals: (
+      <>
+        <path d="M12 3 5 6v5c0 4 3 7 7 8 4-1 7-4 7-8V6z" />
+        <path d="m9 12 2 2 4-4" />
+      </>
+    ),
     schedules: (
       <>
         <circle cx="12" cy="12" r="8.5" />
@@ -130,12 +139,29 @@ export default function Sidebar() {
   const { email, logout } = useAuth();
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
+  const [approvalCount, setApprovalCount] = useState(0);
   const allItems = [...navGroups.flatMap((group) => group.items), settingsItem];
   const currentPage =
     allItems.find((item) => item.path === pathname)?.label ?? "Sherpa";
 
   useEffect(() => {
     setOpen(false);
+  }, [pathname]);
+
+  // Keep the Approvals badge fresh (pending external actions incl. from scheduled tasks).
+  useEffect(() => {
+    let active = true;
+    const refresh = () =>
+      api
+        .listPermissions()
+        .then((p) => active && setApprovalCount(p.items.length))
+        .catch(() => {});
+    void refresh();
+    const t = setInterval(refresh, 20000);
+    return () => {
+      active = false;
+      clearInterval(t);
+    };
   }, [pathname]);
 
   useEffect(() => {
@@ -156,6 +182,9 @@ export default function Sidebar() {
     >
       <NavIcon name={item.icon} />
       <span>{item.label}</span>
+      {item.path === "/approvals" && approvalCount > 0 && (
+        <span className="nav-badge">{approvalCount}</span>
+      )}
     </NavLink>
   );
 

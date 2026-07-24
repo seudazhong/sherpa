@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { useAuth } from "./auth";
 import ActivityView from "./views/ActivityView";
+import ApprovalsView from "./views/ApprovalsView";
 import ChatView from "./views/ChatView";
 import ConnectorsView from "./views/ConnectorsView";
 import InboxView from "./views/InboxView";
@@ -40,6 +41,14 @@ export default function App() {
         element={
           <Protected>
             <InboxView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/approvals"
+        element={
+          <Protected>
+            <ApprovalsView />
           </Protected>
         }
       />
