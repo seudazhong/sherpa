@@ -334,7 +334,9 @@
 
 ### ADR-033 · Agent 可观测性 = OpenTelemetry `gen_ai` span（ADR-016 日志之上的薄诊断层）+ 可选自托管 Phoenix 后端（源自 R-OBSERVABILITY）
 
-> **状态：方向待 owner 拍板；本批次先契约后代码——只写 ADR + 契约增量（config/events），不写业务代码，落地顺序待定（AGENTS.md §1）。** 完整调研见 [`research/observability.md`](research/observability.md)。
+> **状态：已接受（owner 拍板 2026-07-24）。** 5 个开放问题按推荐锁定（见下）。先契约后代码:契约(config/events)已写;实现从 **Phase A** 起(AGENTS.md §1)。完整调研见 [`research/observability.md`](research/observability.md)。
+>
+> **锁定的 5 个决策**:①后端=**自托管 Phoenix**(复用现有 Postgres,可选、默认关);②耐久记录=**span + 有界脱敏 `model.request/response` 事件**都要(span 深度、事件耐久 ADR-021);③内容采集=**默认全关**,dev flag 打开且脱敏;④打点=**手写**循环/工具/chat span(Sherpa 用原生 httpx 流式 + 自研循环/工具,主流 auto-instrumentation 覆盖不到,OpenLLMetry 留作未来引入主流 SDK 时的备选);⑤排序=**独立先做**(与 ADR-032 协同但不互相阻塞;它正好帮调试包括记忆在内的一切)。
 
 - **背景**：Sherpa 已有很强的**领域级**可观测（ADR-016 事件日志=真相源；`traces`/`generations` 投影；结构化日志 + 关联 id）。但**缺 LLM 调用级**观测：chat 循环不写 `generations`，没有"装配后的真实 prompt"、没有 per-call token/延迟（现 token 靠 ~4 字符估算、cost=0）。这正是 STATUS item0 推迟的一半，也是本会话查 memory bug 时只能靠时间戳反推的盲点。docs/07 早已预留"专业化再接 Langfuse"。
 

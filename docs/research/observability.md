@@ -233,20 +233,13 @@ to the journal.
   (it already exists); no new table strictly required — the span backend holds the
   tree.
 
-## 9. Open questions
+## 9. Open questions — ✅ RESOLVED (owner-locked 2026-07-24, per the recommendations; see ADR-033)
 
-1. **Backend:** Phoenix (lightest, reuse Postgres) vs Langfuse (richer, heavier) vs
-   raw Jaeger vs none-yet? (Recommend Phoenix, optional/off by default.)
-2. **Durable per-call record:** OTel span only, or *also* a bounded redacted
-   `model.request` journal event for audit/replay? (Recommend both — span for depth,
-   journal event for the durable, ADR-021-bounded record.)
-3. **Content capture default:** off everywhere, or on in a local dev profile only?
-   (Recommend off by default; on behind a dev flag with masking.)
-4. **Instrumentation:** hand-rolled OTel spans vs OpenLLMetry auto-instrumentation of
-   the provider client? (Recommend hand-rolled for the loop/tools + optional
-   OpenLLMetry for the HTTP call; both emit `gen_ai.*`.)
-5. **Do it before or after the memory redesign (ADR-032)?** The `core_memory.loaded`
-   event and this layer are synergistic; sequence TBD.
+1. **Backend:** → **Phoenix** (self-hosted, reuse Postgres, optional/off by default). Phase B.
+2. **Durable per-call record:** → **both** — OTel span (depth) + a bounded, redacted `model.request`/`model.response` journal event (durable, ADR-021).
+3. **Content capture default:** → **off by default**; on behind a dev flag with masking.
+4. **Instrumentation:** → **hand-rolled** OTel spans for the loop/tools/chat span (Sherpa uses raw-httpx streaming + a bespoke loop/tools, so provider auto-instrumentation like OpenLLMetry does not apply; keep it as a future option if Sherpa adopts mainstream SDKs/frameworks).
+5. **Sequencing vs ADR-032:** → **do it independently first** (synergistic but non-blocking; it helps debug everything, memory included).
 
 ## 10. Primary sources
 
