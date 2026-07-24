@@ -28,6 +28,7 @@ from app.events import append_event
 from app.models import Message, Part, Run, Session
 from app.permissions import policy as perm_policy
 from app.permissions import request_approval
+from app.permissions.grants import find_matching_grant
 from app.providers import Finish, Provider, TextDelta, ToolCall
 from app.services import CallerContext
 from app.services import memory as memory_service
@@ -148,61 +149,95 @@ async def _run_tool(  # type: ignore[no-untyped-def]
 
     # Permission gate (api.md §7.1 ALLOWED): evaluate policy, then dispatch.
     #   allow → execute;  ask → approval envelope (not performed);  deny → refuse.
+    # Pre-authorization (ADR-034): a matching owner grant flips `ask` → auto-allow;
+    # the action still records its effect + an audit receipt (auto_approved_by_grant).
     decision = perm_policy.evaluate(tool)
     if decision == "ask" and decider_user_id is not None:
-        created = await request_approval(
+        grant = await find_matching_grant(
             session,
             tenant_id=run.tenant_id,
-            run_id=run.id,
-            session_id=run.session_id,  # type: ignore[arg-type]
-            invocation_id=handle.invocation_id,
+            user_id=decider_user_id,
             tool_name=tool.name,
-            effect_class=effect_class,
             args=call.args,
-            decider_user_id=decider_user_id,
         )
-        env = created.envelope
-        observation = (
-            f"permission_required: approval requested for {tool.name} "
-            f"(correlation {env.correlation_id}); the action was NOT performed and awaits "
-            "the user's decision."
-        )
-        await append_event(
-            session,
-            tenant_id=run.tenant_id,
-            run_id=run.id,
-            session_id=run.session_id,
-            event_type="permission.asked",
-            payload={
-                "id": call.id,
-                "observation": observation,
-                "correlation_id": str(env.correlation_id),
-                "tool_name": env.tool_name,
-                "permission_scope": env.permission_scope,
-                "effect_class": env.effect_class,
-                "preview": env.preview_redacted,
-                "expires_at": env.expires_at.isoformat(),
-                "nonce": created.nonce,
-            },
-        )
+        if grant is None:
+            created = await request_approval(
+                session,
+                tenant_id=run.tenant_id,
+                run_id=run.id,
+                session_id=run.session_id,  # type: ignore[arg-type]
+                invocation_id=handle.invocation_id,
+                tool_name=tool.name,
+                effect_class=effect_class,
+                args=call.args,
+                decider_user_id=decider_user_id,
+            )
+            env = created.envelope
+            observation = (
+                f"permission_required: approval requested for {tool.name} "
+                f"(correlation {env.correlation_id}); the action was NOT performed and awaits "
+                "the user's decision."
+            )
+            await append_event(
+                session,
+                tenant_id=run.tenant_id,
+                run_id=run.id,
+                session_id=run.session_id,
+                event_type="permission.asked",
+                payload={
+                    "id": call.id,
+                    "observation": observation,
+                    "correlation_id": str(env.correlation_id),
+                    "tool_name": env.tool_name,
+                    "permission_scope": env.permission_scope,
+                    "effect_class": env.effect_class,
+                    "preview": env.preview_redacted,
+                    "expires_at": env.expires_at.isoformat(),
+                    "nonce": created.nonce,
+                },
+            )
+            await record_receipt(
+                session,
+                tenant_id=run.tenant_id,
+                receipt_type=ACTION,
+                actor_type="system",
+                trigger_type="agent",
+                action=tool.name,
+                outcome="awaiting_approval",
+                run_id=run.id,
+                invocation_id=handle.invocation_id,
+                approval_envelope_id=env.id,
+                subject_type="approval_envelope",
+                subject_id=env.id,
+                summary={"permission_scope": env.permission_scope},
+                reversible=True,
+            )
+            provider_messages.append(
+                {"role": "tool", "tool_call_id": call.id, "content": observation}
+            )
+            return
+        # Grant matched → auto-allow. Record the pre-authorized decision for audit,
+        # then fall through to execute exactly like a normal allow.
         await record_receipt(
             session,
             tenant_id=run.tenant_id,
             receipt_type=ACTION,
             actor_type="system",
-            trigger_type="agent",
+            trigger_type="grant",
             action=tool.name,
-            outcome="awaiting_approval",
+            outcome="auto_approved",
             run_id=run.id,
             invocation_id=handle.invocation_id,
-            approval_envelope_id=env.id,
-            subject_type="approval_envelope",
-            subject_id=env.id,
-            summary={"permission_scope": env.permission_scope},
+            subject_type="permission_grant",
+            subject_id=grant.id,
+            summary={
+                "auto_approved_by_grant": True,
+                "grant_id": str(grant.id),
+                "permission_scope": perm_policy.permission_scope(tool.name),
+            },
             reversible=True,
         )
-        provider_messages.append({"role": "tool", "tool_call_id": call.id, "content": observation})
-        return
+        decision = "allow"
 
     if decision != "allow":
         # deny, or ask without a decider → refuse; never execute.

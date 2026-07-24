@@ -20,6 +20,7 @@ from app.models.drive import DriveNode, DriveVersion, StorageAccount, StorageBlo
 from app.models.effects import ApprovalEnvelope, EffectInvocation
 from app.models.events import EventJournal, Outbox
 from app.models.files import File
+from app.models.grants import PermissionGrant
 from app.models.memory import MemoryPassage, UserMemory
 from app.models.observability import Trace
 from app.models.schedules import Schedule, ScheduleFiring
@@ -60,4 +61,5 @@ __all__ = [
     "StorageBlob",
     "DriveNode",
     "DriveVersion",
+    "PermissionGrant",
 ]
