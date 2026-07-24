@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-24 · Phase: **Milestones 1–5 complete + browser-verified**; **post-v1 P0–P2 (Session Library + content search + Personal Drive/W1), Phase CRON (general cron / recurring agent tasks, ADR-031), and Phase APPROVALS (pending-approvals surface + pre-authorization grants, ADR-034) all complete + two-lane Playwright-verified**. The shipped RAG is archival semantic notes, not a source-backed document knowledge base. v1 + v1 wrap-up + UI/UX backlog + the responsive **Quiet Work** redesign are done.
+> Last updated: 2026-07-24 · Phase: **Milestones 1–5 complete**; **post-v1 P0–P2, Phase CRON (ADR-031), Phase APPROVALS (ADR-034), and Phase SCHED-FIX (ADR-031 amendment: fresh per-firing context, immediate Run Now, edit/delete) all complete + verified**. Next: **ADR-033 observability**. The shipped RAG is archival semantic notes, not a source-backed document knowledge base. v1 + v1 wrap-up + UI/UX backlog + the responsive **Quiet Work** redesign are done.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -71,6 +71,16 @@ Deferred (later ADR): multi-step workflow/DAG orchestration, webhook/event trigg
 - **Verify** (APR.V): full backend gate green (ruff/mypy/pytest 177), frontend build/lint green. **Playwright two lanes with the real model:** a scheduled email to a whitelisted recipient **auto-sent (no approval)**; a non-whitelisted one **asked** and was **approved from the `/approvals` UI (no nonce)**; add/remove trusted recipient; 390px no overflow.
 
 Deferred (later ADR): wildcard/regex grants, cross-user shared grants, time-window/quota-limited grants, per-session `always`, agent-created grants.
+
+## ▶▶▶▶▶ Phase SCHED-FIX (owner testing feedback 2026-07-24): 定时任务修复 — ✅ **COMPLETE + verified**
+
+**ADR-031 amendment** from owner testing + R-SCHED-CONTEXT research (AstrBot/ChatGPT Tasks/OpenHands/n8n/CrewAI/Hermes all use fresh context per fire). Fixed:
+- **Fresh per-firing session** (P1): each cron firing runs in its own session (`scope_type='scheduled_task'`), so history never accumulates → the **2nd-run provider 400 disappears structurally** (root cause was a shared session replaying a prior run's `tool_calls` + duplicate user messages). Scheduled sessions are excluded from the Session Library (browse + search); still inspectable via `/reminders` firing history.
+- **Run Now immediate dispatch** (P2): run-now enqueues a one-shot dispatch job (idempotent) instead of waiting ~30s for `agent_task_tick`.
+- **Edit + hard delete** (P3): `PATCH /schedules/{id}` (revalidate cadence + recompute `next_fire_at`, optimistic version) + `DELETE /schedules/{id}` (firings then schedule); UI edit form + Delete button.
+- **Verify** (SF.V): full backend gate green (179), frontend green. **Playwright with the owner's real email:** run #1 + run #2 **both delivered (no 400)**, dispatch latency **~2s**, isolated runs, scheduled runs absent from Sessions (API + UI), edit + delete work.
+
+**Deferred:** P4 (create-time permission pre-hint) — simple design in `research/scheduled-permission-prehint.md`; **next: ADR-033 observability phase**.
 
 ## In progress
 _Nothing in progress._ **M-tools shipped** (ADR-023, [`11-agent-tool-surface.md`](11-agent-tool-surface.md)): app/services/ capability layer + REST/Tool dual adapters; the agent tools = list/accept/edit/dismiss candidates, create/update/complete/list todos (+ POST /todos, migration 0014 for standalone agent todos), list/sync connectors, create/list/cancel reminders + digests (+ /schedules REST), list notifications/activity + get/update settings; ALLOWED policy engine (own-data writes allowed, external actions ask); tool output spill.

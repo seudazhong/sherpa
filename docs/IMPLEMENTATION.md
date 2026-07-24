@@ -162,9 +162,11 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
-## Phase SCHED-FIX — 定时任务修复 (ADR-031 amendment) — **ACCEPTED (2026-07-24, from owner testing feedback)**
+## Phase SCHED-FIX — 定时任务修复 (ADR-031 amendment) — ✅ **COMPLETE + verified (2026-07-24)**
 
 > Fixes found by owner testing the CRON phase + the R-SCHED-CONTEXT research: (P1) each cron firing must be a **fresh isolated context** — the shared per-schedule session accumulated history and caused a provider **400** on the 2nd run + polluted Chat/Sessions; (P2) **Run Now latency** — it waits up to 30s for the periodic tick; (P3) schedules have **no edit / no real delete** in the UI. Per task: backend gate + frontend → commit → tick STATUS. Playwright verify with the owner's real email.
+>
+> **Status:** SF.0–SF.V ✅. Fresh per-firing session (`scope_type='scheduled_task'`, excluded from Session Library browse+search) · Run Now enqueues an immediate one-shot dispatch job · edit (PATCH, revalidate+recompute) + hard delete. **Verified with the owner's real email:** run #1 and run #2 **both delivered (no 400 — fresh context)**, dispatch latency **~2s** (was ~30s), two runs isolated, scheduled runs **absent from Sessions** (API + UI), edit + delete work.
 
 | # | Task | refs | AC |
 |---|---|---|---|
