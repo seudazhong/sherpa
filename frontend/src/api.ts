@@ -202,6 +202,18 @@ export interface PendingApprovalPage {
   next_cursor: string | null;
 }
 
+export interface Grant {
+  id: string;
+  tool_name: string;
+  match_json: Record<string, unknown>;
+  created_via: string;
+  created_at: string;
+}
+
+export interface GrantPage {
+  items: Grant[];
+}
+
 export interface ActivityReceipt {
   id: string;
   receipt_type: string;
@@ -600,6 +612,18 @@ export const api = {
         },
       } satisfies ApprovalEnvelopeBody),
     ),
+  listGrants: () => req<GrantPage>("/grants"),
+  createGrant: (
+    csrf: string,
+    toolName: string,
+    matchJson: Record<string, unknown>,
+  ) =>
+    req<Grant>(
+      "/grants",
+      jsonInit("POST", csrf, { tool_name: toolName, match_json: matchJson }),
+    ),
+  deleteGrant: (csrf: string, id: string) =>
+    req<void>(`/grants/${id}`, jsonInit("DELETE", csrf)),
   listActivity: (type?: string) =>
     req<ActivityPage>(
       `/activity${type ? `?type=${encodeURIComponent(type)}` : ""}`,

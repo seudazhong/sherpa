@@ -200,6 +200,58 @@ async def test_grant_from_action_creates_and_merges() -> None:
 
 
 @pytest.mark.asyncio
+async def test_grants_rest_end_to_end() -> None:
+    import httpx
+    from httpx import ASGITransport
+    from sqlalchemy import text
+
+    from app.auth import owner_ids
+    from app.config import settings
+    from app.main import app
+    from app.redis_client import ping_redis
+
+    if not await ping_db() or not await ping_redis():
+        pytest.skip("database or redis not reachable")
+
+    async def drop_owner() -> None:
+        tid, _ = owner_ids()
+        async with SessionLocal() as s:
+            await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
+            await s.commit()
+
+    await drop_owner()
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        login = await client.post(
+            "/auth/login",
+            json={"email": settings.owner_email, "password": settings.owner_password},
+        )
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
+
+        created = await client.post(
+            "/grants",
+            json={"tool_name": "send_email", "match_json": {"recipients": ["me@x.com"]}},
+            headers=headers,
+        )
+        assert created.status_code == 201, created.text
+        gid = created.json()["id"]
+
+        listing = await client.get("/grants")
+        assert any(g["id"] == gid for g in listing.json()["items"])
+
+        # A non-grantable tool is rejected (422).
+        bad = await client.post(
+            "/grants", json={"tool_name": "list_todos", "match_json": {"x": 1}}, headers=headers
+        )
+        assert bad.status_code == 422
+
+        gone = await client.request("DELETE", f"/grants/{gid}", headers=headers)
+        assert gone.status_code == 204
+        listing2 = await client.get("/grants")
+        assert not any(g["id"] == gid for g in listing2.json()["items"])
+
+
+@pytest.mark.asyncio
 async def test_grants_are_owner_only() -> None:
     if not await ping_db():
         pytest.skip("database not reachable")

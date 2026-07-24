@@ -25,6 +25,7 @@ export default defineConfig({
       "/activity": target,
       "/files": target,
       "/drive": target,
+      "/grants": target,
       "/memory": target,
       "/channels": target,
       "/meta": target,

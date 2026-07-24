@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { api, type PendingApproval } from "../api";
+import { api, type Grant, type PendingApproval } from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
 
@@ -12,15 +12,31 @@ function expiresLabel(iso: string): { text: string; overdue: boolean } {
   return { text: `expires ${new Date(iso).toLocaleString()}`, overdue: false };
 }
 
+function grantLabel(g: Grant): string {
+  if (g.tool_name === "send_email") {
+    const r = g.match_json.recipients;
+    const list = Array.isArray(r) ? r.join(", ") : "";
+    return `Send email to ${list}`;
+  }
+  return `${g.tool_name}: ${JSON.stringify(g.match_json)}`;
+}
+
 export default function ApprovalsView() {
   const { csrf } = useAuth();
   const [items, setItems] = useState<PendingApproval[]>([]);
+  const [grants, setGrants] = useState<Grant[]>([]);
+  const [newEmail, setNewEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setItems((await api.listPermissions()).items);
+      const [perms, gr] = await Promise.all([
+        api.listPermissions(),
+        api.listGrants(),
+      ]);
+      setItems(perms.items);
+      setGrants(gr.items);
     } catch {
       setError("Could not load approvals. Is the backend running?");
     }
@@ -44,6 +60,37 @@ export default function ApprovalsView() {
       await load();
     } catch {
       setError("Could not resolve this approval (it may have expired).");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const addEmailGrant = async () => {
+    if (!csrf || !newEmail.trim()) return;
+    setBusy("grant");
+    setError(null);
+    try {
+      await api.createGrant(csrf, "send_email", {
+        recipients: [newEmail.trim().toLowerCase()],
+      });
+      setNewEmail("");
+      await load();
+    } catch {
+      setError("Could not add the trusted recipient.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeGrant = async (g: Grant) => {
+    if (!csrf) return;
+    setBusy(g.id);
+    setError(null);
+    try {
+      await api.deleteGrant(csrf, g.id);
+      await load();
+    } catch {
+      setError("Could not remove the grant.");
     } finally {
       setBusy(null);
     }
@@ -151,8 +198,69 @@ export default function ApprovalsView() {
               );
             })}
           </section>
+
+          <section className="content-section">
+            <div className="section-head">
+              <span>Pre-authorized (no approval needed)</span>
+              <span className="count">{grants.length}</span>
+            </div>
+            <p className="page-sub small" style={{ marginTop: 0 }}>
+              Trusted email recipients: Sherpa sends to these without asking —
+              handy for scheduled emails to yourself.
+            </p>
+            <label className="session-search-box drive-search">
+              <span aria-hidden="true">@</span>
+              <input
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                placeholder="Add a trusted email recipient…"
+                aria-label="Trusted email recipient"
+                type="email"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void addEmailGrant();
+                }}
+              />
+              <button
+                className="btn btn-primary"
+                disabled={busy === "grant" || !newEmail.trim()}
+                onClick={() => void addEmailGrant()}
+              >
+                Add
+              </button>
+            </label>
+
+            {grants.length === 0 && (
+              <div className="empty-state compact">
+                <strong>No pre-authorizations</strong>
+                <span>
+                  Add a trusted recipient above, or choose “Always allow” on a
+                  pending approval.
+                </span>
+              </div>
+            )}
+            {grants.map((g) => (
+              <article className="todo-row file-row" key={g.id}>
+                <span className="todo-title">
+                  {grantLabel(g)}
+                  <span className="item-subtitle">
+                    {g.created_via === "always"
+                      ? "from an approval"
+                      : "added manually"}
+                  </span>
+                </span>
+                <button
+                  className="btn btn-quiet todo-action danger"
+                  disabled={busy === g.id}
+                  onClick={() => void removeGrant(g)}
+                >
+                  Remove
+                </button>
+              </article>
+            ))}
+          </section>
         </div>
       </main>
     </div>
   );
 }
+
