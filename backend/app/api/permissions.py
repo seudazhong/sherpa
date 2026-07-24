@@ -107,6 +107,13 @@ async def resolve_permission(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "approval_actor_mismatch")
 
     def verify(row: ApprovalEnvelope) -> None:
+        # Web owner resolution is authorized by session + CSRF + authorized-actor
+        # equality + the full immutable binding below; the single-use nonce is
+        # optional here (background/scheduled approvals have no live SSE to carry it)
+        # and is verified only when supplied (ADR-034). Non-web channels — rejected
+        # above for now — must still require it. Replay is prevented by the
+        # pending -> decided state transition in resolve_approval, not the nonce.
+        nonce_bad = body.nonce is not None and nonce_hash(body.nonce) != row.nonce_hash
         if (
             body.bound.tenant_id != row.tenant_id
             or body.bound.run_id != row.run_id
@@ -116,7 +123,7 @@ async def resolve_permission(
             or body.action.session_id != row.session_id
             or body.effect_class != row.effect_class
             or body.normalized_args_hash != row.args_hash.hex()
-            or nonce_hash(body.nonce) != row.nonce_hash
+            or nonce_bad
             or body.policy_version != row.policy_version
             or body.authorized_actor.id != row.authorized_decider_user_id
         ):

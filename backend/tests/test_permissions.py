@@ -137,16 +137,64 @@ async def test_loop_gates_send_email_without_executing() -> None:
             await s.rollback()
 
 
+@pytest.mark.asyncio
+async def test_resolve_web_without_nonce() -> None:
+    # ADR-034: a background/scheduled approval has no live SSE to carry the nonce;
+    # web owner resolution succeeds without it (session+CSRF+actor+binding).
+    if not await ping_db() or not await ping_redis():
+        pytest.skip("database or redis not reachable")
+    await _drop_owner()
+    try:
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            login = await client.post(
+                "/auth/login",
+                json={"email": settings.owner_email, "password": settings.owner_password},
+            )
+            headers = {"X-CSRF-Token": login.json()["csrf_token"]}
+
+            # A background/scheduled approval: resolve from the list WITHOUT the nonce.
+            d = await _seed_owner_envelope()
+            body = _envelope_body(
+                d["env"],
+                session_id=d["session_id"],
+                nonce=None,
+                choice="allow_once",
+                actor_id=d["actor_id"],
+            )
+            ok = await client.post(
+                f"/permissions/{d['correlation_id']}/resolve", json=body, headers=headers
+            )
+            assert ok.status_code == 200
+            assert ok.json()["winning_decision"]["choice"] == "allow_once"
+
+            # A WRONG nonce is still rejected (verified when supplied) -> 422.
+            d2 = await _seed_owner_envelope()
+            bad = _envelope_body(
+                d2["env"],
+                session_id=d2["session_id"],
+                nonce="A" * 43,
+                choice="allow_once",
+                actor_id=d2["actor_id"],
+            )
+            r = await client.post(
+                f"/permissions/{d2['correlation_id']}/resolve", json=bad, headers=headers
+            )
+            assert r.status_code == 422
+    finally:
+        await _drop_owner()
+
+
 def _envelope_body(
     env: ApprovalEnvelope,
     *,
     session_id: uuid.UUID,
-    nonce: str,
+    nonce: str | None,
     choice: str,
     actor_id: uuid.UUID,
     channel: str = "web",
 ) -> dict[str, object]:
-    return {
+    body: dict[str, object] = {
         "schema_version": "1.0",
         "correlation_id": str(env.correlation_id),
         "bound": {
@@ -164,7 +212,6 @@ def _envelope_body(
         "human_readable_preview": env.preview_redacted,
         "policy_version": env.policy_version,
         "expires_at": env.expires_at.isoformat(),
-        "nonce": nonce,
         "authorized_actor": {"type": "user", "id": str(actor_id)},
         "decision": {
             "actor": {"type": "user", "id": str(actor_id)},
@@ -172,6 +219,9 @@ def _envelope_body(
             "choice": choice,
         },
     }
+    if nonce is not None:
+        body["nonce"] = nonce
+    return body
 
 
 async def _seed_owner_envelope(ttl_seconds: int = 3600) -> dict[str, object]:

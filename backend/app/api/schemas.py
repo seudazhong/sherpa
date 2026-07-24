@@ -470,7 +470,13 @@ class ApprovalEnvelope(StrictModel):
     human_readable_preview: ApprovalPreview
     policy_version: Annotated[str, Field(min_length=1, max_length=200)]
     expires_at: datetime.datetime
-    nonce: Annotated[str, Field(min_length=43, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
+    # Single-use nonce delivered only on the permission.asked SSE event. Optional for
+    # web owner resolution (ADR-034): a background/scheduled approval has no live SSE,
+    # so it resolves via session+CSRF+authorized_actor+full binding; verified only
+    # when supplied. Non-web channels must still supply it.
+    nonce: (
+        Annotated[str, Field(min_length=43, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")] | None
+    ) = None
     authorized_actor: ApprovalActor
     decision: ApprovalDecision | None
 
