@@ -14,6 +14,7 @@ provider as synthesized `user` messages for continuation.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import uuid
 
@@ -51,6 +52,16 @@ SYSTEM_PROMPT = (
 
 def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
+
+
+def _input_digest(messages: list[dict[str, object]]) -> tuple[str, int]:
+    """Return (sha-256 hex, char length) of the assembled provider input.
+
+    Lets a model.request event verify/correlate the exact assembled input without
+    persisting its text (ADR-033/ADR-019: content is span-only + opt-in).
+    """
+    canonical = json.dumps(messages, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest(), len(canonical)
 
 
 async def _touch_session_activity(  # type: ignore[no-untyped-def]
@@ -476,18 +487,21 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
 
         # `chat` span (ADR-033): one per provider.stream call. Span duration is
         # the model latency; finish_reasons carry the structured stop reason.
+        schemas = registry.schemas(tier)
+        model_name = getattr(provider, "_model", None)
+        call_started = _now()
+        call_input_tokens: int | None = None
+        call_output_tokens: int | None = None
         with get_tracer().start_as_current_span(genai.SPAN_CHAT) as chat_span:
             genai.set_attrs(
                 chat_span,
                 {
                     genai.OPERATION_NAME: genai.OP_CHAT,
                     genai.SYSTEM: provider.name,
-                    genai.REQUEST_MODEL: getattr(provider, "_model", None),
+                    genai.REQUEST_MODEL: model_name,
                 },
             )
-            async for event in provider.stream(
-                messages=provider_messages, tools=registry.schemas(tier)
-            ):
+            async for event in provider.stream(messages=provider_messages, tools=schemas):
                 if isinstance(event, TextDelta):
                     text_chunks.append(event.text)
                 elif isinstance(event, ToolCall):
@@ -502,13 +516,64 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
                     )
                 elif isinstance(event, Finish):
                     stop_reason = event.stop_reason
+                    call_input_tokens = event.input_tokens
+                    call_output_tokens = event.output_tokens
             genai.set_attrs(
                 chat_span,
                 {
                     genai.RESPONSE_FINISH_REASONS: (stop_reason,)
                     if stop_reason is not None
-                    else None
+                    else None,
+                    genai.USAGE_INPUT_TOKENS: call_input_tokens,
+                    genai.USAGE_OUTPUT_TOKENS: call_output_tokens,
                 },
+            )
+
+        # Durable, redacted per-call record (events §2.7, durability=debug) — no
+        # prompt/tool content, only a sha-256 digest + counts. Gated on OTEL so the
+        # journal is untouched by default; project_run_trace derives generations +
+        # real token totals from these. Written post-call so real usage is present.
+        if settings.otel_enabled:
+            digest, input_chars = _input_digest(provider_messages)
+            latency_ms = int((_now() - call_started).total_seconds() * 1000)
+            output_chars = sum(len(c) for c in text_chunks)
+            model_label = model_name or provider.name
+            await append_event(
+                session,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                session_id=session_id,
+                event_type="model.request",
+                payload={
+                    "call_index": turn,
+                    "provider": provider.name,
+                    "model": model_label,
+                    "prompt_version": None,
+                    "input_tokens": call_input_tokens,
+                    "input_chars": input_chars,
+                    "input_digest": digest,
+                    "tools_offered": len(schemas),
+                    "sampled": True,
+                },
+                durability="debug",
+            )
+            await append_event(
+                session,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                session_id=session_id,
+                event_type="model.response",
+                payload={
+                    "call_index": turn,
+                    "model": model_label,
+                    "finish_reason": stop_reason or "stop",
+                    "output_tokens": call_output_tokens,
+                    "output_chars": output_chars,
+                    "tool_calls": len(tool_calls),
+                    "latency_ms": latency_ms,
+                    "error_type": None,
+                },
+                durability="debug",
             )
 
         assistant_text = "".join(text_chunks)

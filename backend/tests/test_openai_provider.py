@@ -59,3 +59,34 @@ async def test_tool_call_stream_assembles_and_maps_stop_reason() -> None:
     assert len(calls) == 1
     assert calls[0].id == "c1" and calls[0].name == "get_time" and calls[0].args == {}
     assert finishes[0].stop_reason == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_usage_chunk_populates_finish_tokens_and_requests_include_usage() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.update(json.loads(request.content))
+        body = _sse(
+            '{"choices":[{"delta":{"content":"hi"}}]}',
+            '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            '{"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":7,"total_tokens":49}}',
+        )
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    provider = OpenAICompatibleProvider(
+        base_url="http://proxy",
+        api_key="k",
+        model="claude-sonnet-4.6",
+        transport=httpx.MockTransport(handler),
+    )
+    events = [e async for e in provider.stream(messages=[{"role": "user", "content": "hi"}])]
+
+    finishes = [e for e in events if isinstance(e, Finish)]
+    assert len(finishes) == 1
+    assert finishes[0].stop_reason == "stop"
+    assert finishes[0].input_tokens == 42
+    assert finishes[0].output_tokens == 7
+    assert seen.get("stream_options") == {"include_usage": True}

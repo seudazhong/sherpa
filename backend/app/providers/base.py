@@ -40,6 +40,10 @@ class ToolCall:
 @dataclasses.dataclass(frozen=True)
 class Finish:
     stop_reason: StopReason
+    # Real usage when the provider reports it (OpenAI `stream_options.include_usage`);
+    # None for providers that do not (e.g. mock) — the projection then estimates.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     kind: Literal["finish"] = "finish"
 
 

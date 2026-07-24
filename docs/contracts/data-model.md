@@ -1168,7 +1168,7 @@ CREATE TABLE event_journal (
     CONSTRAINT ck_event_journal_envelope
         CHECK (envelope_version > 0),
     CONSTRAINT ck_event_journal_durability
-        CHECK (durability IN ('durable', 'presentation')),
+        CHECK (durability IN ('durable', 'presentation', 'debug')),
     CONSTRAINT ck_event_journal_payload
         CHECK (
             payload_size_bytes = octet_length(payload_redacted::text)

@@ -76,6 +76,8 @@ class OpenAICompatibleProvider:
             "model": model or self._model,
             "messages": messages,
             "stream": True,
+            # Ask the endpoint for a final usage chunk (choices: [], usage: {...}).
+            "stream_options": {"include_usage": True},
         }
         oa_tools = _to_openai_tools(tools)
         if oa_tools is not None:
@@ -83,7 +85,9 @@ class OpenAICompatibleProvider:
         headers = {"Authorization": f"Bearer {self._api_key}"}
 
         tool_acc: dict[int, dict[str, str]] = {}
-        emitted_finish = False
+        pending_stop: StopReason | None = None
+        input_tokens: int | None = None
+        output_tokens: int | None = None
 
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             async with client.stream(
@@ -103,6 +107,17 @@ class OpenAICompatibleProvider:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+
+                    # Usage arrives on its own chunk (usually choices: []); parse it
+                    # before the choices guard so the final usage chunk is not skipped.
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        pt, ct = usage.get("prompt_tokens"), usage.get("completion_tokens")
+                        if isinstance(pt, int):
+                            input_tokens = pt
+                        if isinstance(ct, int):
+                            output_tokens = ct
+
                     choices = chunk.get("choices") or []
                     if not choices:
                         continue
@@ -137,8 +152,12 @@ class OpenAICompatibleProvider:
                             yield ToolCall(
                                 id=acc["id"] or f"call_{idx}", name=acc["name"], args=args
                             )
-                        yield Finish(_FINISH.get(str(finish), "stop"))
-                        emitted_finish = True
+                        # Defer Finish until the stream ends so it carries the usage
+                        # chunk (which follows finish_reason).
+                        pending_stop = _FINISH.get(str(finish), "stop")
 
-        if not emitted_finish:
-            yield Finish("stop")
+        yield Finish(
+            pending_stop or "stop",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
