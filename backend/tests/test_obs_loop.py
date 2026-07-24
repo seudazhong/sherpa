@@ -209,6 +209,42 @@ async def test_loop_emits_span_tree_tokens_and_generations(
 
 
 @pytest.mark.asyncio
+async def test_tool_error_marks_execute_tool_span_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    from opentelemetry.trace import StatusCode
+
+    monkeypatch.setattr(settings, "otel_enabled", True)
+    exporter = InMemorySpanExporter()
+    configure_tracing(force=True, exporter=exporter)
+    async with SessionLocal() as s:
+        try:
+            _tid, _rid, run = await _seed(s)
+            # An unknown tool name -> registry.get raises ToolError -> error observation.
+            provider = MockProvider(
+                script=[
+                    [ToolCall(id="c1", name="no_such_tool", args={}), Finish("tool_use")],
+                    [TextDelta("done"), Finish("stop")],
+                ]
+            )
+            await execute_run(
+                s, run=run, provider=provider, registry=build_default_registry(), tier="full"
+            )
+            tool_spans = [
+                sp for sp in exporter.get_finished_spans() if sp.name == genai.SPAN_EXECUTE_TOOL
+            ]
+            assert len(tool_spans) == 1
+            span = tool_spans[0]
+            assert span.status.status_code == StatusCode.ERROR
+            assert span.attributes[genai.AGENT_TOOL_SUCCESS] is False
+        finally:
+            await s.rollback()
+            reset_tracing()
+
+
+@pytest.mark.asyncio
 async def test_disabled_otel_writes_no_model_events_and_estimates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
