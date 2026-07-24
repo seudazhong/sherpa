@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import queue
 from app.api.schemas import Schedule as ScheduleSchema
 from app.api.schemas import (
     ScheduleCancel,
@@ -133,9 +134,12 @@ async def run_now(
     try:
         firing = await svc.run_now(db, _caller(ctx), schedule_id=schedule_id)
         await db.commit()
-        return _firing_item(firing)
     except ServiceError as e:
         raise _http(e) from None
+    # Dispatch agent_task firings immediately instead of waiting for the periodic tick
+    # (ADR-031 amendment); idempotent, and a cheap no-op for reminder/digest firings.
+    await queue.enqueue_agent_task_dispatch()
+    return _firing_item(firing)
 
 
 @router.get("/schedules/{schedule_id}/firings")

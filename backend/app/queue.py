@@ -56,3 +56,17 @@ async def enqueue_approval_resume(correlation_id: uuid.UUID) -> None:
         await pool.enqueue_job("approval_resume_job", str(correlation_id))
     finally:
         await pool.aclose()
+
+
+async def enqueue_agent_task_dispatch() -> None:
+    """Enqueue an immediate agent_task dispatch (Run Now; ADR-031 amendment).
+
+    Dispatches due `agent_task` firings right away instead of waiting for the periodic
+    `agent_task_tick`. Idempotent (firing slot + run_id guard), so racing the tick is a
+    no-op.
+    """
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job("agent_task_dispatch_job")
+    finally:
+        await pool.aclose()

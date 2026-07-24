@@ -505,6 +505,20 @@ async def agent_task_tick(ctx: dict[str, Any]) -> str:
     """
     if not await try_acquire_leader("agent_task_tick", ttl_ms=55_000):
         return "not_leader"
+    return await _dispatch_agent_tasks()
+
+
+async def agent_task_dispatch_job(ctx: dict[str, Any]) -> str:
+    """One-shot immediate agent_task dispatch (Run Now; ADR-031 amendment).
+
+    Not leader-gated — it dispatches the just-created firing right away so Run Now
+    doesn't wait ~30s for the periodic tick. Idempotent (firing slot + run_id guard),
+    so racing the tick is a no-op.
+    """
+    return await _dispatch_agent_tasks()
+
+
+async def _dispatch_agent_tasks() -> str:
     async with SessionLocal() as session:
         run_ids = await dispatch_due_agent_tasks(session, datetime.datetime.now(datetime.UTC))
         await session.commit()
@@ -514,7 +528,14 @@ async def agent_task_tick(ctx: dict[str, Any]) -> str:
 
 
 class WorkerSettings:
-    functions = [ping, run_job, gmail_sync_job, sync_and_analyze_job, approval_resume_job]
+    functions = [
+        ping,
+        run_job,
+        gmail_sync_job,
+        sync_and_analyze_job,
+        approval_resume_job,
+        agent_task_dispatch_job,
+    ]
     cron_jobs = [
         cron(scheduler_tick, second=0),
         cron(delivery_tick, second=15),
