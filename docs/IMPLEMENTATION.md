@@ -140,9 +140,11 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
-## Phase APPROVALS — 待审批入口 + 可配置预授权 grants (ADR-034) — **ACCEPTED (2026-07-23)**
+## Phase APPROVALS — 待审批入口 + 可配置预授权 grants (ADR-034) — ✅ **COMPLETE + two-lane verified (2026-07-24)**
 
 > Two features that make background/scheduled external actions both safe and automatable (driven by the scheduled-email use case): **(A)** a standalone pending-approvals surface so background/scheduled approvals can be resolved (today the nonce is delivered only via chat SSE, so they can't be); **(B)** configurable pre-authorization **grants** (e.g., an email-recipient allowlist) so the loop auto-allows matching actions without an approval. Prereq: **ADR-034 accepted + contract deltas** (data-model `permission_grants`, api §4.7 + grants). Per task: backend gate + frontend → commit → tick STATUS. Two-lane Playwright per phase. Security invariants from ADR-019/020/021 are non-negotiable (see ADR-034).
+>
+> **Status:** APR.0–APR.V ✅. Web resolution nonce-optional (session+CSRF+actor+binding; non-web keeps nonce) · Approvals page at `/approvals` (resolves background approvals, sidebar pending badge) · `permission_grants` (migration `0024`) + per-tool matcher + loop auto-allow (records effect + `auto_approved_by_grant` receipt) · `always` persists a grant · owner-only grants REST/UI. **Playwright two lanes pass with the real model:** a scheduled email to a whitelisted recipient **auto-sent** (no approval), a non-whitelisted one **asked** and was **approved from the `/approvals` UI (no nonce)**; add/remove trusted recipient; 390px no overflow.
 
 | # | Task | refs | AC |
 |---|---|---|---|

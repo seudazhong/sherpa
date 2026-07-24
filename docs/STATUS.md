@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Last updated: 2026-07-23 · Phase: **Milestones 1–5 complete + browser-verified**; **post-v1 P0–P2 (Session Library + content search + Personal Drive/W1) complete + Playwright-verified**; **Phase CRON (general cron / recurring agent tasks, ADR-031) complete + two-lane verified**. The shipped RAG is archival semantic notes, not a source-backed document knowledge base. v1 + v1 wrap-up + UI/UX backlog + the responsive **Quiet Work** redesign are done.
+> Last updated: 2026-07-24 · Phase: **Milestones 1–5 complete + browser-verified**; **post-v1 P0–P2 (Session Library + content search + Personal Drive/W1), Phase CRON (general cron / recurring agent tasks, ADR-031), and Phase APPROVALS (pending-approvals surface + pre-authorization grants, ADR-034) all complete + two-lane Playwright-verified**. The shipped RAG is archival semantic notes, not a source-backed document knowledge base. v1 + v1 wrap-up + UI/UX backlog + the responsive **Quiet Work** redesign are done.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -12,7 +12,7 @@ The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) 
 The **design + contracts + runnable skeleton** are done, and the **v1 durable spine (M1) is complete and verified end-to-end**: persistence, event journal + outbox, Redis/SSE fan-out, effect idempotency, provider+tools, the bounded core loop, durable prompt admission, the REST auth + session/message surface, the credential vault (AEAD/KEK), run traces + structured logging, and the web chat client (#1–#13) are all implemented and green. A live smoke (login → session → prompt → real arq worker loop → outbox relay → SSE `run.settled` → persisted transcript) passes. Next: **M2 — Personal Inbox-to-Action (Gmail → candidate → todo → reminder)**.
 
 ## Verified state
-- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` green (needs Postgres+Redis up; MinIO for file/drive tests) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic **`0023`** (0019 run lease · 0020 session search · 0021 personal drive · 0022 files→drive · 0023 recurring schedules/general cron).
+- **Backend** (`backend/`, via `uv`): `uv sync` ok · `uv run pytest` green (needs Postgres+Redis up; MinIO for file/drive tests) · `ruff check`+`format --check` clean · `mypy app` clean. `uv.lock` committed. Schema at alembic **`0024`** (0019 run lease · 0020 session search · 0021 personal drive · 0022 files→drive · 0023 recurring schedules/general cron · 0024 pre-authorization grants).
 - **Frontend** (`frontend/`): Vite+React+TS SPA with the responsive `Quiet Work` design system across login, chat, inbox, activity, schedules, settings, memory, **sessions (/history)**, **drive (/workspace)**, messaging, and connectors. `npm run build` + `npm run lint` green. `package-lock.json` committed.
 - **Runtime**: web (`uv run uvicorn app.main:app`) + worker (`uv run arq app.worker.WorkerSettings`, runs the run loop + outbox relay) verified live against docker Postgres+Redis.
 - **Infra**: `infra/docker-compose.yml` (postgres+redis+web+worker+frontend) defined. **CI**: `.github/workflows/ci.yml` (backend uv lint/type/test + frontend build).
@@ -59,6 +59,18 @@ Deferred within these lines: session semantic search + branch/lineage (Phase C);
 - **Verify**: full backend gate green (ruff/mypy/pytest), frontend build/lint green, Playwright human lane (create → Run now → history → pause/resume → 390px) + agent lane (real model created a cron task via the tool) both pass.
 
 Deferred (later ADR): multi-step workflow/DAG orchestration, webhook/event triggers, cross-task dependency chains.
+
+## ▶▶▶▶ Phase APPROVALS (owner-approved 2026-07-23): 待审批入口 + 预授权 grants — ✅ **COMPLETE + two-lane verified**
+
+**ADR-034**, driven by the scheduled-email use case: make background/scheduled external actions both safe and automatable. Schema at **`0024`**. Shipped:
+- **Web resolution nonce-optional** (APR.A1): the single-use nonce is delivered only on the `permission.asked` SSE event, so background/scheduled approvals couldn't be resolved. For `channel=web` owner resolution the nonce is now optional — authorized by session cookie + CSRF + authorized-actor + full binding (replay prevented by `pending→decided`); non-web channels still require it. Reconciles ADR-020.
+- **Approvals page** at `/approvals` (APR.A2): lists pending approvals (incl. from scheduled tasks), Approve-once / Always-allow / Reject with no nonce; sidebar pending-count badge; Inbox links here.
+- **Pre-authorization grants** (APR.B1): `permission_grants` (owner-only, tool_name + bounded `match_json`, soft-revoke); per-tool matcher registry (send_email exact recipient allowlist); the loop auto-allows on a grant match — still records the effect + an audit receipt `auto_approved_by_grant`; unmatched actions still ask. Agent has **no** grant path.
+- **`always` persists a grant** (APR.B2): resolving with Always-allow derives + merges a grant from the action.
+- **Grants REST + UI** (APR.B3): `GET/POST/DELETE /grants`; Approvals page "Pre-authorized" section to add/remove trusted email recipients.
+- **Verify** (APR.V): full backend gate green (ruff/mypy/pytest 177), frontend build/lint green. **Playwright two lanes with the real model:** a scheduled email to a whitelisted recipient **auto-sent (no approval)**; a non-whitelisted one **asked** and was **approved from the `/approvals` UI (no nonce)**; add/remove trusted recipient; 390px no overflow.
+
+Deferred (later ADR): wildcard/regex grants, cross-user shared grants, time-window/quota-limited grants, per-session `always`, agent-created grants.
 
 ## In progress
 _Nothing in progress._ **M-tools shipped** (ADR-023, [`11-agent-tool-surface.md`](11-agent-tool-surface.md)): app/services/ capability layer + REST/Tool dual adapters; the agent tools = list/accept/edit/dismiss candidates, create/update/complete/list todos (+ POST /todos, migration 0014 for standalone agent todos), list/sync connectors, create/list/cancel reminders + digests (+ /schedules REST), list notifications/activity + get/update settings; ALLOWED policy engine (own-data writes allowed, external actions ask); tool output spill.

@@ -194,7 +194,8 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 个人网盘:永久删除(purge) | ✅ drive | DELETE /drive/nodes/{id} ✅ | ❌ **不给 agent**(人工/审批专属) | Drive(Delete forever + 确认)✅ | non_idempotent_write | user-only |
 | 发邮件(外部) | — | ❌(仅 Tool) | `send_email` ✅ | ⬜ 审批渲染器(v1 收尾) | non_idempotent_write | **ask** |
 | 连接 Gmail(OAuth) | — | connect/callback ✅ | ❌ | ⬜(需真实 Google 凭据) | — | — |
-| 列/解决审批 | — | GET /permissions·/resolve ✅ | ❌ **不给 agent**(不自批) | ⬜ 审批渲染器(v1 收尾) | — | user-only |
+| 列/解决审批 | — | GET /permissions·/resolve ✅ | ❌ **不给 agent**(不自批) | Approvals(/approvals，可解析后台/定时审批)✅ | — | user-only |
+| 预授权 grants(白名单自动放行，ADR-034) | ✅ grants | GET/POST/DELETE /grants ✅ | ❌ **不给 agent**(不能自发权限) | Approvals 页「Pre-authorized」增删 ✅ | idempotent_write(命中仍记 effect+审计) | user-only |
 | 导出/删除导入数据 | ✅ | ✅ | ❌(破坏性,不给 agent) | Activity(Export/Delete)✅ | non_idempotent_write | ask/human |
 | QQ/IM 入站对话 + IM 审批(post-v1 里程碑4) | channels ✅ | POST /channels/qq/webhook · GET /channels · /simulate · /threads ✅ | 复用有界循环(非独立 tool);审批复用 v1 基座 | Messaging(/messaging)✅ | idempotent_write | HMAC+owner allowlist |
 | agentic email 入站 + 邮件审批 + 统一发信(post-v1 里程碑5) | notifications(build_email_sender)✅ · channels ✅ | POST /channels/email/webhook · /simulate · GET /channels/threads ✅ | `send_email`(走统一发信接缝,真实 AgentMail)✅;入站复用有界循环;审批复用基座 | Messaging(email 段)✅ | non_idempotent_write | Svix+owner allowlist · **ask** |
