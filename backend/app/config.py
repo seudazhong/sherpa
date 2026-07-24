@@ -51,6 +51,17 @@ class Settings(BaseSettings):
     scheduled_task_max_concurrency: int = 3
     scheduled_task_min_interval_seconds: int = 300
 
+    # Agent observability (ADR-033): OpenTelemetry `gen_ai` spans over the bounded
+    # loop — a derived, ephemeral diagnostic layer over the ADR-016 journal, never a
+    # source of truth. Off by default (zero overhead). When otel_enabled and an OTLP
+    # endpoint is set, spans export there (Phase B); otherwise a console/in-memory
+    # exporter is used. Content capture is opt-in (PII) and redacted. 100% sampling
+    # is fine at single-user scale.
+    otel_enabled: bool = False
+    otel_exporter_otlp_endpoint: str | None = None
+    otel_capture_message_content: bool = False
+    otel_traces_sampler: str = "always_on"
+
     # Code execution sandbox (ADR-007/025). "disabled" (default) keeps dev/tests
     # offline; "docker" runs each snippet in a hardened ephemeral container
     # (no network, dropped caps, non-root, read-only rootfs, mem/pids/time caps).
