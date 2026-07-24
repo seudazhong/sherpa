@@ -31,14 +31,16 @@ from app.api.sse import router as sse_router
 from app.api.todos import router as todos_router
 from app.config import settings
 from app.db import ping_db
-from app.observability import configure_logging
+from app.observability import configure_logging, configure_tracing, shutdown_tracing
 from app.redis_client import ping_redis
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
+    configure_tracing()
     yield
+    shutdown_tracing()
 
 
 app = FastAPI(title="Sherpa", version=__version__, lifespan=lifespan)

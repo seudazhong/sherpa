@@ -32,7 +32,13 @@ from app.events import append_event, relay_once
 from app.models import ApprovalEnvelope, Connector, Run, Schedule, ScheduleFiring
 from app.models import Session as SessionModel
 from app.notifications import build_email_sender, deliver_due_firings
-from app.observability import bind_context, configure_logging, project_run_trace
+from app.observability import (
+    bind_context,
+    configure_logging,
+    configure_tracing,
+    project_run_trace,
+    shutdown_tracing,
+)
 from app.providers import build_provider
 from app.redis_client import client as redis_client
 from app.scheduler import dispatch_due_agent_tasks, fire_due_schedules, try_acquire_leader
@@ -402,6 +408,7 @@ async def _qq_gateway_loop() -> None:
 
 async def _startup(ctx: dict[str, Any]) -> None:
     configure_logging()
+    configure_tracing()
     ctx["relay_task"] = asyncio.create_task(_relay_loop())
     ctx["qq_gateway_task"] = asyncio.create_task(_qq_gateway_loop())
 
@@ -411,6 +418,7 @@ async def _shutdown(ctx: dict[str, Any]) -> None:
         task = ctx.get(key)
         if task is not None:
             task.cancel()
+    shutdown_tracing()
 
 
 async def sync_and_analyze_job(ctx: dict[str, Any], connector_id: str) -> str:

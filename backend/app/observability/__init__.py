@@ -11,12 +11,22 @@ from app.observability.logging import (
     session_id_var,
     tenant_id_var,
 )
+from app.observability.otel import (
+    configure_tracing,
+    get_tracer,
+    shutdown_tracing,
+    tracing_enabled,
+)
 from app.observability.projection import project_run_trace
 
 __all__ = [
     "JsonFormatter",
     "bind_context",
     "configure_logging",
+    "configure_tracing",
+    "get_tracer",
+    "shutdown_tracing",
+    "tracing_enabled",
     "tenant_id_var",
     "run_id_var",
     "session_id_var",
