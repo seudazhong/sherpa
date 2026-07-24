@@ -24,6 +24,7 @@ from app.effects import args_hash, mark_running, settle_failed, settle_succeeded
 from app.events import append_event
 from app.models import ApprovalEnvelope, EffectInvocation, EventJournal
 from app.observability import bind_context
+from app.services.grants import grant_from_action
 from app.tools import ToolContext, ToolError, bound_text, build_default_registry
 
 
@@ -186,4 +187,14 @@ async def resume_approval(session: AsyncSession, correlation_id: uuid.UUID) -> s
         summary={"decision": env.decision or ""},
         reversible=False,
     )
+    # `always` → persist a pre-authorization grant so matching actions auto-allow next
+    # time (ADR-034). Owner-only; grantable tools only; a no-op otherwise.
+    if env.decision == "always" and env.decided_by_user_id is not None:
+        await grant_from_action(
+            session,
+            tenant_id=env.tenant_id,
+            user_id=env.decided_by_user_id,
+            tool_name=env.tool_name,
+            args=args,
+        )
     return "resumed"

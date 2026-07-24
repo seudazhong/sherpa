@@ -87,9 +87,7 @@ async def test_loop_auto_allows_with_grant() -> None:
             assert reason == "completed"
 
             # No approval envelope — the grant pre-authorized it.
-            env = await s.scalar(
-                select(ApprovalEnvelope).where(ApprovalEnvelope.run_id == run.id)
-            )
+            env = await s.scalar(select(ApprovalEnvelope).where(ApprovalEnvelope.run_id == run.id))
             assert env is None
 
             # The effect actually ran (not left 'prepared').
@@ -135,9 +133,7 @@ async def test_loop_still_asks_without_matching_grant() -> None:
             await execute_run(
                 s, run=run, provider=_script(), registry=build_default_registry(), tier="full"
             )
-            env = await s.scalar(
-                select(ApprovalEnvelope).where(ApprovalEnvelope.run_id == run.id)
-            )
+            env = await s.scalar(select(ApprovalEnvelope).where(ApprovalEnvelope.run_id == run.id))
             assert env is not None and env.status == "pending"  # still asked
         finally:
             await s.rollback()
@@ -164,6 +160,38 @@ async def test_find_matching_grant_skips_revoked() -> None:
             assert (
                 await find_matching_grant(
                     s, tenant_id=tid, user_id=uid, tool_name="send_email", args=_ARGS
+                )
+                is None
+            )
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_grant_from_action_creates_and_merges() -> None:
+    # APR.B2: the `always` path persists a grant and merges new recipients into it.
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            tid, uid, _run = await _seed(s)
+            g1 = await grant_svc.grant_from_action(
+                s, tenant_id=tid, user_id=uid, tool_name="send_email", args={"to": "me@x.com"}
+            )
+            assert g1 is not None and g1.created_via == "always"
+            assert g1.match_json["recipients"] == ["me@x.com"]
+
+            # A second `always` for a different recipient merges into the same grant.
+            g2 = await grant_svc.grant_from_action(
+                s, tenant_id=tid, user_id=uid, tool_name="send_email", args={"to": "Work@Corp.com"}
+            )
+            assert g2 is not None and g2.id == g1.id
+            assert set(g2.match_json["recipients"]) == {"me@x.com", "work@corp.com"}
+
+            # A non-grantable tool derives nothing.
+            assert (
+                await grant_svc.grant_from_action(
+                    s, tenant_id=tid, user_id=uid, tool_name="list_todos", args={}
                 )
                 is None
             )
