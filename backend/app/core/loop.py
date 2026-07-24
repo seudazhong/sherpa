@@ -17,6 +17,7 @@ import datetime
 import json
 import uuid
 
+from opentelemetry.trace import Span
 from sqlalchemy import func, select
 
 from app.audit import ACTION, record_receipt
@@ -26,6 +27,7 @@ from app.core.history import assemble_provider_history
 from app.effects import begin_invocation, mark_running, settle_failed, settle_succeeded
 from app.events import append_event
 from app.models import Message, Part, Run, Session
+from app.observability import genai, get_tracer
 from app.permissions import policy as perm_policy
 from app.permissions import request_approval
 from app.permissions.grants import find_matching_grant
@@ -117,6 +119,44 @@ async def _run_tool(  # type: ignore[no-untyped-def]
     *,
     decider_user_id: uuid.UUID | None,
 ) -> None:
+    # `execute_tool` span (ADR-033): child of the run's `invoke_agent` span. An
+    # error observation marks the span ERROR + agent.tool.success=false; a tool
+    # gated on approval leaves success unset (it neither ran nor failed).
+    with get_tracer().start_as_current_span(genai.SPAN_EXECUTE_TOOL) as span:
+        genai.set_attrs(
+            span,
+            {
+                genai.OPERATION_NAME: genai.OP_EXECUTE_TOOL,
+                genai.TOOL_NAME: call.name,
+                genai.TOOL_CALL_ID: call.id,
+            },
+        )
+        outcome = await _run_tool_impl(
+            session,
+            run,
+            turn,
+            call,
+            registry,
+            provider_messages,
+            decider_user_id=decider_user_id,
+        )
+        if outcome == "ok":
+            genai.record_tool_result(span, success=True)
+        elif outcome == "error":
+            genai.record_tool_result(span, success=False)
+        # "gated" (awaiting approval) → success left unset.
+
+
+async def _run_tool_impl(  # type: ignore[no-untyped-def]
+    session,
+    run: Run,
+    turn: int,
+    call: ToolCall,
+    registry: ToolRegistry,
+    provider_messages: list[dict[str, object]],
+    *,
+    decider_user_id: uuid.UUID | None,
+) -> str:
     try:
         tool = registry.get(call.name)
     except ToolError as exc:
@@ -131,7 +171,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
         provider_messages.append(
             {"role": "tool", "tool_call_id": call.id, "content": f"error: {exc}"}
         )
-        return
+        return "error"
 
     effect_class = perm_policy.classify_effect(tool.flags)
     key = f"tool:{run.id}:{turn}:{call.id}"
@@ -215,7 +255,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
             provider_messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": observation}
             )
-            return
+            return "gated"
         # Grant matched → auto-allow. Record the pre-authorized decision for audit,
         # then fall through to execute exactly like a normal allow.
         await record_receipt(
@@ -258,7 +298,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
                 "content": f"error: {reason}: {tool.name} was not executed",
             }
         )
-        return
+        return "error"
 
     await mark_running(session, run.tenant_id, handle.invocation_id)
     tool_ctx = ToolContext(
@@ -304,6 +344,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
         payload={"id": call.id, "name": call.name, "ok": ok, "output": output[:4000]},
     )
     provider_messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
+    return "ok" if ok else "error"
 
 
 async def _load_core_memory(  # type: ignore[no-untyped-def]
@@ -338,7 +379,42 @@ async def execute_run(  # type: ignore[no-untyped-def]
     """Run the bounded loop to a named termination; returns the reason string."""
     if run.session_id is None:
         raise ValueError("execute_run requires a session-bound run")
+    # Root `invoke_agent` span (ADR-033): a derived diagnostic surface over the
+    # journal. No-op + zero overhead when OTEL is disabled. Child `chat` /
+    # `execute_tool` spans parent to this one via the active OTel context.
+    with get_tracer().start_as_current_span(genai.SPAN_INVOKE_AGENT) as root:
+        genai.set_attrs(
+            root,
+            {
+                genai.OPERATION_NAME: genai.OP_INVOKE_AGENT,
+                genai.AGENT_RUN_ID: str(run.id),
+                genai.AGENT_SESSION_ID: str(run.session_id),
+                genai.AGENT_TENANT_ID: str(run.tenant_id),
+            },
+        )
+        return await _run_agent_loop(
+            session,
+            run=run,
+            provider=provider,
+            registry=registry,
+            tier=tier,
+            max_turns=max_turns,
+            root_span=root,
+        )
+
+
+async def _run_agent_loop(  # type: ignore[no-untyped-def]
+    session,
+    *,
+    run: Run,
+    provider: Provider,
+    registry: ToolRegistry,
+    tier: str = FULL,
+    max_turns: int = 25,
+    root_span: Span,
+) -> str:
     tenant_id, run_id, session_id = run.tenant_id, run.id, run.session_id
+    assert session_id is not None  # execute_run guarantees a session-bound run
     decider_user_id = await session.scalar(
         select(Session.user_id).where(Session.tenant_id == tenant_id, Session.id == session_id)
     )
@@ -398,23 +474,42 @@ async def execute_run(  # type: ignore[no-untyped-def]
                     },
                 )
 
-        async for event in provider.stream(
-            messages=provider_messages, tools=registry.schemas(tier)
-        ):
-            if isinstance(event, TextDelta):
-                text_chunks.append(event.text)
-            elif isinstance(event, ToolCall):
-                tool_calls.append(event)
-                await append_event(
-                    session,
-                    tenant_id=tenant_id,
-                    run_id=run_id,
-                    session_id=session_id,
-                    event_type="tool-call",
-                    payload={"id": event.id, "name": event.name, "args": event.args},
-                )
-            elif isinstance(event, Finish):
-                stop_reason = event.stop_reason
+        # `chat` span (ADR-033): one per provider.stream call. Span duration is
+        # the model latency; finish_reasons carry the structured stop reason.
+        with get_tracer().start_as_current_span(genai.SPAN_CHAT) as chat_span:
+            genai.set_attrs(
+                chat_span,
+                {
+                    genai.OPERATION_NAME: genai.OP_CHAT,
+                    genai.SYSTEM: provider.name,
+                    genai.REQUEST_MODEL: getattr(provider, "_model", None),
+                },
+            )
+            async for event in provider.stream(
+                messages=provider_messages, tools=registry.schemas(tier)
+            ):
+                if isinstance(event, TextDelta):
+                    text_chunks.append(event.text)
+                elif isinstance(event, ToolCall):
+                    tool_calls.append(event)
+                    await append_event(
+                        session,
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        session_id=session_id,
+                        event_type="tool-call",
+                        payload={"id": event.id, "name": event.name, "args": event.args},
+                    )
+                elif isinstance(event, Finish):
+                    stop_reason = event.stop_reason
+            genai.set_attrs(
+                chat_span,
+                {
+                    genai.RESPONSE_FINISH_REASONS: (stop_reason,)
+                    if stop_reason is not None
+                    else None
+                },
+            )
 
         assistant_text = "".join(text_chunks)
         if assistant_text:
@@ -494,5 +589,9 @@ async def execute_run(  # type: ignore[no-untyped-def]
         session_id=session_id,
         event_type="run.settled",
         payload={"reason": reason, "status": run.status},
+    )
+    genai.set_attrs(
+        root_span,
+        {genai.AGENT_LOOP_COUNT: turn, genai.AGENT_STOP_REASON: reason},
     )
     return reason

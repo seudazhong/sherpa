@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from opentelemetry.trace import Status, StatusCode
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
@@ -65,3 +67,14 @@ def set_attrs(span: Span, attrs: dict[str, Any]) -> None:
     for key, value in attrs.items():
         if value is not None:
             span.set_attribute(key, value)
+
+
+def record_tool_result(span: Span, *, success: bool) -> None:
+    """Record a tool execution outcome: `agent.tool.success` + ERROR status on failure.
+
+    Only for tools that actually ran (or were refused). A gated tool awaiting
+    approval leaves `agent.tool.success` unset — it neither succeeded nor failed.
+    """
+    span.set_attribute(AGENT_TOOL_SUCCESS, success)
+    if not success:
+        span.set_status(Status(StatusCode.ERROR))
