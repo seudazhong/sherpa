@@ -2296,3 +2296,54 @@ Notes:
 - Guardrails: the DB enforces `interval_seconds >= 60`; the service enforces a
   deployment-configurable min-frequency floor and per-user concurrency/frequency
   caps for `agent_task` runs (ADR-031).
+
+### Pre-authorization grants (ADR-034, migration `0024`)
+
+Owner-configured rules that let the core loop **auto-allow** a matching external
+action instead of asking (e.g., a `send_email` recipient allowlist so mail to the
+owner's own addresses needs no approval). A grant is matched by a per-tool matcher
+against the tool's args; an auto-allowed action still records its `effect_invocation`
+and an audit receipt tagged `auto_approved_by_grant` (ADR-021) — nothing runs
+unlogged. Grants are **owner-only** (no agent tool, no agent-writable path) and are
+never widened by wildcards in v1. `match_json` is a bounded, secret-free rule; e.g.
+`{"recipients": ["me@x.com", "work@corp.com"]}` for `send_email` (exact, lowercased).
+
+```sql
+CREATE TABLE permission_grants (
+    tenant_id   uuid NOT NULL,
+    id          uuid NOT NULL,
+    user_id     uuid NOT NULL,
+    tool_name   text NOT NULL,               -- e.g. 'send_email'
+    match_json  jsonb NOT NULL,              -- tool-specific match rule (bounded, no secrets)
+    created_via text NOT NULL DEFAULT 'manual', -- manual | always (derived from an approval)
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    revoked_at  timestamptz,                 -- soft-delete; a revoked grant never matches
+    CONSTRAINT pk_permission_grants PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_pg_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pg_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_pg_tool CHECK (tool_name ~ '^[a-z][a-z0-9_]{0,63}$'),
+    CONSTRAINT ck_pg_created_via CHECK (created_via IN ('manual', 'always')),
+    CONSTRAINT ck_pg_match_bound CHECK (octet_length(match_json::text) <= 8192)
+);
+-- Active grants for a (user, tool) — the loop's hot lookup on an `ask` decision.
+CREATE INDEX ix_pg_active
+    ON permission_grants (tenant_id, user_id, tool_name)
+    WHERE revoked_at IS NULL;
+```
+
+Notes:
+
+- The loop checks matching **active** grants only when `evaluate(tool)` returns
+  `ask`; a match flips the decision to `allow` (still `begin_invocation` + execute +
+  audit), no `approval_envelope` and no pause. A miss falls through to the existing
+  approval path unchanged.
+- Resolving an approval with choice `always` derives + inserts a grant from the bound
+  action's args (e.g., `send_email` → add its `to` recipient), so subsequent matching
+  actions auto-allow. `allow_session`/`allow_once` do not persist a grant.
+- Matching is tool-specific and **conservative**: `send_email` matches on the exact,
+  lowercased recipient; no domain/regex/wildcard in v1 (deferred to a later ADR).
+- Grants carry no `policy_version` binding (they are durable rules); the action they
+  authorize is still classified and executed under the current policy + effect
+  semantics (ADR-020).

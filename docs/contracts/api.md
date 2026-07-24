@@ -761,14 +761,40 @@ result reference.
 }
 ```
 
-### 4.7 Permission resolution
+### 4.7 Permission resolution + pre-authorization grants
 
 | Method and path | Request → response | Auth | Status codes |
 |---|---|---|---|
+| `GET /permissions` | none → `PendingApprovalPage` | Session | `200`, `401`, `503` |
 | `POST /permissions/{id}/resolve` | resolved `ApprovalEnvelope` → `ApprovalResolution` | Session + CSRF; actor must match `authorized_actor` | `200`, `401`, `403`, `404`, `409`, `410`, `422`, `503` |
+| `GET /grants` | none → `GrantPage` | Session | `200`, `401`, `503` |
+| `POST /grants` | `GrantCreate` → `Grant` | Session + CSRF | `201`, `401`, `403`, `409`, `422`, `503` |
+| `DELETE /grants/{id}` | none → empty | Session + CSRF | `204`, `401`, `403`, `404`, `503` |
 
-`id` is the approval `correlation_id`. The route is part of the frozen contract,
-but no v1 renderer calls it and no v1 action emits `permission.asked`.
+`id` is the approval `correlation_id`.
+
+**Web resolution — `nonce` optional (ADR-034, reconciling ADR-020).** The single-use
+`nonce` is delivered only on the `permission.asked` SSE event, so a background /
+scheduled-task approval (no live SSE) cannot supply it. For `channel = "web"` an
+owner resolution is authorized by the session cookie (HttpOnly) + CSRF + the
+authorized-actor equality + the full immutable binding (`tenant/run/invocation/tool/
+permission_scope/session/effect_class/normalized_args_hash/policy_version`); the
+`nonce` is **optional and only verified when supplied** (chat still sends it).
+Replay is prevented by the `pending → decided` state transition, not the nonce.
+**Non-web channels (qq/email) still require the nonce** (weaker actor identity) and
+remain a future renderer. `permission_scope` can never be broadened by the client.
+
+**Pre-authorization grants (ADR-034).** A grant is an owner-configured rule that lets
+the loop auto-allow a matching external action without asking. `Grant` = `{id,
+tool_name, match_json, created_via, created_at}`; `GrantCreate` = `{tool_name,
+match_json}`. `match_json` is a bounded, secret-free, tool-specific rule (e.g.
+`{"recipients": ["me@x.com"]}` for `send_email`, matched on the exact lowercased
+recipient — no wildcard in v1). Grants are **owner-only**: there is no agent tool and
+no agent-writable path. `DELETE /grants/{id}` soft-revokes (a revoked grant never
+matches). Resolving an approval with choice `always` also persists a grant derived
+from the bound action. An auto-allowed action still records its effect + an audit
+receipt (`auto_approved_by_grant`), so it is never unlogged. Storage: `data-model.md`
+`permission_grants`.
 
 ### 4.8 Health and readiness
 
