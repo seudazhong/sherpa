@@ -33,9 +33,18 @@ _SLOT_NS = uuid.uuid5(uuid.NAMESPACE_URL, "sherpa/scheduled-task/firing")
 _RETRY_AFTER = datetime.timedelta(minutes=1)
 
 
-async def _ensure_session(session: AsyncSession, schedule: Schedule) -> uuid.UUID:
-    """Return the schedule's dedicated session id, creating it once."""
-    umo = f"scheduled:{schedule.id}"
+async def _ensure_session(
+    session: AsyncSession, schedule: Schedule, firing: ScheduleFiring
+) -> uuid.UUID:
+    """Return a **fresh per-firing** session id (ADR-031 amendment).
+
+    Each cron firing runs in its own isolated session so successive firings never
+    accumulate provider history (which caused a 2nd-run 400) and never pollute the
+    Chat/Session Library (`scope_type='scheduled_task'` is filtered out there). The
+    key is the firing slot, so a worker replay of the same firing reuses the same
+    session (idempotent) while different firings stay isolated.
+    """
+    umo = f"scheduled:{schedule.id}:{firing.firing_key}"
     existing = await session.scalar(
         select(SessionModel.id).where(
             SessionModel.tenant_id == schedule.tenant_id, SessionModel.umo_key == umo
@@ -52,7 +61,7 @@ async def _ensure_session(session: AsyncSession, schedule: Schedule) -> uuid.UUI
             umo_key=umo,
             channel="web",
             channel_installation_id="local",
-            scope_type="chat",
+            scope_type="scheduled_task",
             external_scope_id=umo,
             status="open",
             title=schedule.name,
@@ -126,7 +135,7 @@ async def dispatch_due_agent_tasks(
             await session.flush()
             continue
 
-        session_id = await _ensure_session(session, schedule)
+        session_id = await _ensure_session(session, schedule, firing)
         client_message_id = uuid.uuid5(_SLOT_NS, firing.firing_key)
         adm = await admit_prompt(
             session,

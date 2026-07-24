@@ -209,6 +209,7 @@ async def browse(
         SessionModel.tenant_id == ctx.tenant_id,
         SessionModel.user_id == ctx.user_id,
         SessionModel.status != "deleted",
+        SessionModel.scope_type != "scheduled_task",  # ADR-031: scheduled runs live in /reminders
     )
     if channel is not None:
         stmt = stmt.where(SessionModel.channel == channel)
@@ -241,6 +242,8 @@ async def search_sessions(
     for hit in hits:
         session = await db.get(SessionModel, (ctx.tenant_id, hit.session_id))
         if session is None or session.user_id != ctx.user_id or session.status == "deleted":
+            continue
+        if session.scope_type == "scheduled_task":  # ADR-031: excluded from the library
             continue
         base = await _view(db, session)
         views.append(dataclasses.replace(base, match=hit))

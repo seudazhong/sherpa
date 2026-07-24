@@ -53,6 +53,51 @@ def _agent_task(tid, uid, when):  # type: ignore[no-untyped-def]
 
 
 @pytest.mark.asyncio
+async def test_each_firing_gets_a_fresh_isolated_session() -> None:
+    # ADR-031 amendment: successive firings must NOT share a session (else provider
+    # history accumulates and the 2nd run 400s). Each firing = a fresh session,
+    # excluded from the Session Library.
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    from app.services import schedules as sched_svc
+    from app.services import sessions as session_svc
+    from app.services.context import CallerContext
+
+    async with SessionLocal() as s:
+        try:
+            tid, uid = await _seed(s)
+            now = datetime.datetime.now(_UTC)
+            sched = _agent_task(tid, uid, now - datetime.timedelta(minutes=1))
+            s.add(sched)
+            await s.flush()
+            ctx = CallerContext(tenant_id=tid, user_id=uid, actor="user")
+
+            await fire_due_schedules(s, now)
+            runs1 = await dispatch_due_agent_tasks(s, now)
+            # A second manual firing of the same schedule.
+            await sched_svc.run_now(s, ctx, schedule_id=sched.id)
+            later = datetime.datetime.now(_UTC) + datetime.timedelta(seconds=1)
+            runs2 = await dispatch_due_agent_tasks(s, later)
+            assert len(runs1) == 1 and len(runs2) == 1
+
+            r1 = await s.get(Run, (tid, runs1[0]))
+            r2 = await s.get(Run, (tid, runs2[0]))
+            assert r1 is not None and r2 is not None
+            assert r1.session_id != r2.session_id  # isolated per-firing sessions
+
+            for sid in (r1.session_id, r2.session_id):
+                sess = await s.get(SessionModel, (tid, sid))
+                assert sess is not None and sess.scope_type == "scheduled_task"
+
+            # Scheduled sessions are absent from the Session Library browse.
+            page = await session_svc.browse(s, ctx, limit=50)
+            lib_ids = {v.session.id for v in page.items}
+            assert r1.session_id not in lib_ids and r2.session_id not in lib_ids
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
 async def test_agent_task_fires_and_dispatches_one_run() -> None:
     if not await ping_db():
         pytest.skip("database not reachable")
@@ -78,10 +123,12 @@ async def test_agent_task_fires_and_dispatches_one_run() -> None:
             run = await s.get(Run, (tid, run_ids[0]))
             assert run is not None and run.run_kind == "scheduled_task" and run.status == "queued"
 
-            # A dedicated per-schedule session was created and seeded with the prompt.
+            # A fresh per-firing session was created (key includes the firing slot).
             sess_id = await s.scalar(
                 select(SessionModel.id).where(
-                    SessionModel.tenant_id == tid, SessionModel.umo_key == f"scheduled:{sched.id}"
+                    SessionModel.tenant_id == tid,
+                    SessionModel.umo_key.like(f"scheduled:{sched.id}:%"),
+                    SessionModel.scope_type == "scheduled_task",
                 )
             )
             assert sess_id is not None
