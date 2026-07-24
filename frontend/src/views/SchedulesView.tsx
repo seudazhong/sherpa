@@ -66,6 +66,18 @@ export default function SchedulesView() {
   const [firings, setFirings] = useState<Record<string, ScheduleFiring[]>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  // Inline edit (agent_task).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editPrompt, setEditPrompt] = useState("");
+  const [editCadence, setEditCadence] = useState<"cron" | "daily" | "interval">(
+    "daily",
+  );
+  const [editCron, setEditCron] = useState("0 9 * * 1-5");
+  const [editTime, setEditTime] = useState("08:00");
+  const [editInterval, setEditInterval] = useState(60);
+  const [editChannel, setEditChannel] = useState("web");
+
   const load = async () => {
     try {
       const [page, tp] = await Promise.all([
@@ -187,6 +199,64 @@ export default function SchedulesView() {
     }
     await loadFirings(s.id);
     setExpanded(s.id);
+  };
+
+  const startEdit = (s: Schedule) => {
+    setEditingId(s.id);
+    setEditName(s.name);
+    setEditPrompt(s.prompt ?? "");
+    setEditChannel(s.delivery_channel);
+    if (s.cadence_kind === "cron") {
+      setEditCadence("cron");
+      setEditCron(s.cron_expr ?? "0 9 * * 1-5");
+    } else if (s.cadence_kind === "interval") {
+      setEditCadence("interval");
+      setEditInterval(Math.round((s.interval_seconds ?? 3600) / 60));
+    } else {
+      setEditCadence("daily");
+      setEditTime((s.local_time ?? "08:00").slice(0, 5));
+    }
+  };
+
+  const saveEdit = async (s: Schedule) => {
+    if (!csrf) return;
+    setBusy(s.id);
+    setError(null);
+    try {
+      const body: Parameters<typeof api.editSchedule>[2] = {
+        if_version: s.version,
+        name: editName.trim(),
+        prompt: editPrompt.trim(),
+        delivery_channel: editChannel,
+        cadence_kind: editCadence,
+      };
+      if (editCadence === "cron") body.cron_expr = editCron.trim();
+      else if (editCadence === "daily") body.local_time = editTime;
+      else body.interval_seconds = editInterval * 60;
+      await api.editSchedule(csrf, s.id, body);
+      setEditingId(null);
+      await load();
+    } catch {
+      setError("Could not save changes (check the cadence and prompt).");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeSchedule = async (s: Schedule) => {
+    if (!csrf) return;
+    if (!window.confirm(`Delete “${s.name}”? This removes it and its run history.`))
+      return;
+    setBusy(s.id);
+    setError(null);
+    try {
+      await api.deleteSchedule(csrf, s.id);
+      await load();
+    } catch {
+      setError("Could not delete.");
+    } finally {
+      setBusy(null);
+    }
   };
 
   const addReminder = async () => {
@@ -505,6 +575,17 @@ export default function SchedulesView() {
                         >
                           Run now
                         </button>
+                        {s.kind === "agent_task" && (
+                          <button
+                            className="btn btn-quiet todo-action"
+                            disabled={busy === s.id}
+                            onClick={() =>
+                              editingId === s.id ? setEditingId(null) : startEdit(s)
+                            }
+                          >
+                            Edit
+                          </button>
+                        )}
                         <button
                           className="btn btn-quiet todo-action"
                           disabled={busy === s.id}
@@ -527,8 +608,118 @@ export default function SchedulesView() {
                     >
                       History
                     </button>
+                    <button
+                      className="btn btn-quiet todo-action danger"
+                      disabled={busy === s.id}
+                      onClick={() => void removeSchedule(s)}
+                    >
+                      Delete
+                    </button>
                   </span>
                 </article>
+                {editingId === s.id && (
+                  <div className="schedule-edit">
+                    <div className="control-grid">
+                      <label className="control">
+                        <span>Name</span>
+                        <input
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          aria-label="Edit name"
+                        />
+                      </label>
+                      <label className="control">
+                        <span>Prompt</span>
+                        <textarea
+                          value={editPrompt}
+                          onChange={(e) => setEditPrompt(e.target.value)}
+                          aria-label="Edit prompt"
+                          rows={2}
+                        />
+                      </label>
+                      <div className="control-grid two">
+                        <label className="control">
+                          <span>Cadence</span>
+                          <select
+                            value={editCadence}
+                            onChange={(e) =>
+                              setEditCadence(
+                                e.target.value as typeof editCadence,
+                              )
+                            }
+                            aria-label="Edit cadence type"
+                          >
+                            <option value="daily">Daily at a time</option>
+                            <option value="cron">Cron expression</option>
+                            <option value="interval">Every N minutes</option>
+                          </select>
+                        </label>
+                        {editCadence === "cron" && (
+                          <label className="control">
+                            <span>Cron (5-field)</span>
+                            <input
+                              value={editCron}
+                              onChange={(e) => setEditCron(e.target.value)}
+                              aria-label="Edit cron"
+                            />
+                          </label>
+                        )}
+                        {editCadence === "daily" && (
+                          <label className="control">
+                            <span>Time</span>
+                            <input
+                              type="time"
+                              value={editTime}
+                              onChange={(e) => setEditTime(e.target.value)}
+                              aria-label="Edit time"
+                            />
+                          </label>
+                        )}
+                        {editCadence === "interval" && (
+                          <label className="control">
+                            <span>Every (minutes)</span>
+                            <input
+                              type="number"
+                              min={5}
+                              value={editInterval}
+                              onChange={(e) =>
+                                setEditInterval(Number(e.target.value))
+                              }
+                              aria-label="Edit interval"
+                            />
+                          </label>
+                        )}
+                      </div>
+                      <label className="control">
+                        <span>Deliver to</span>
+                        <select
+                          value={editChannel}
+                          onChange={(e) => setEditChannel(e.target.value)}
+                          aria-label="Edit channel"
+                        >
+                          <option value="web">Web inbox</option>
+                          <option value="email">Email</option>
+                          <option value="qq">QQ</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="schedule-actions">
+                      <button
+                        className="btn btn-quiet"
+                        onClick={() => setEditingId(null)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="btn btn-primary"
+                        disabled={busy === s.id || !editName.trim()}
+                        onClick={() => void saveEdit(s)}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {expanded === s.id && (
                   <div className="drive-version-list">
                     {(firings[s.id] ?? []).length === 0 && (

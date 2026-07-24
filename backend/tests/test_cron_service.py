@@ -155,6 +155,60 @@ async def test_run_now_and_pause_resume() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_and_delete_schedule() -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    from sqlalchemy import func
+
+    from app.models import ScheduleFiring
+
+    async with SessionLocal() as s:
+        try:
+            tid, uid = await _seed(s)
+            ctx = _ctx(tid, uid)
+            sched = await svc.create_schedule(
+                s,
+                ctx,
+                kind="agent_task",
+                name="Task",
+                prompt="old",
+                cadence_kind="daily",
+                local_time=datetime.time(8, 0),
+            )
+
+            # Edit prompt + switch cadence to cron → next_fire_at recomputed.
+            updated = await svc.update_schedule(
+                s,
+                ctx,
+                schedule_id=sched.id,
+                if_version=sched.version,
+                name="Renamed",
+                prompt="new prompt",
+                cadence_kind="cron",
+                cron_expr="0 9 * * 1-5",
+            )
+            assert updated.name == "Renamed" and updated.prompt == "new prompt"
+            assert updated.cadence_kind == "cron" and updated.cron_expr == "0 9 * * 1-5"
+            assert updated.version == sched.version + 1
+
+            with pytest.raises(VersionConflict):
+                await svc.update_schedule(s, ctx, schedule_id=sched.id, if_version=999, name="x")
+
+            # A firing exists; hard delete removes schedule + firings.
+            await svc.run_now(s, ctx, schedule_id=sched.id)
+            await svc.delete_schedule(s, ctx, schedule_id=sched.id)
+            assert await s.get(Schedule, (tid, sched.id)) is None
+            remaining = await s.scalar(
+                select(func.count())
+                .select_from(ScheduleFiring)
+                .where(ScheduleFiring.schedule_id == sched.id)
+            )
+            assert remaining == 0
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
 async def test_create_scheduled_task_tool() -> None:
     if not await ping_db():
         pytest.skip("database not reachable")

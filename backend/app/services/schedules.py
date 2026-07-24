@@ -12,7 +12,7 @@ import datetime
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import Schedule as ScheduleSchema
@@ -257,6 +257,103 @@ async def run_now(
     db.add(firing)
     await db.flush()
     return firing
+
+
+async def update_schedule(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    schedule_id: uuid.UUID,
+    if_version: int,
+    name: str | None = None,
+    prompt: str | None = None,
+    delivery_channel: str | None = None,
+    timezone: str | None = None,
+    cadence_kind: str | None = None,
+    cron_expr: str | None = None,
+    interval_seconds: int | None = None,
+    weekly_days: str | None = None,
+    monthly_day: int | None = None,
+    local_time: datetime.time | None = None,
+) -> ScheduleSchema:
+    """Edit an active schedule (optimistic version). Changing the cadence recomputes
+    ``next_fire_at``. Providing ``cadence_kind`` replaces the whole cadence spec."""
+    row = await db.get(Schedule, (ctx.tenant_id, schedule_id))
+    if row is None or row.user_id != ctx.user_id:
+        raise NotFound("schedule not found")
+    if row.version != if_version:
+        raise VersionConflict("stale schedule version")
+    if row.status in ("disabled", "completed"):
+        raise Conflict("schedule is inactive")
+
+    if name is not None:
+        if not name.strip():
+            raise Invalid("name required")
+        row.name = name.strip()
+    if delivery_channel is not None:
+        row.delivery_channel = delivery_channel
+    if timezone is not None:
+        _tz(timezone)
+        row.timezone = timezone
+    if prompt is not None:
+        if row.kind != "agent_task":
+            raise Invalid("only agent_task has a prompt")
+        if not prompt.strip() or len(prompt) > 8000:
+            raise Invalid("invalid prompt")
+        row.prompt = prompt
+
+    if cadence_kind is not None:
+        if row.kind != "agent_task":
+            raise Invalid("cadence is editable only for agent_task")
+        try:
+            validate_cadence(
+                cadence_kind,
+                cron_expr=cron_expr,
+                interval_seconds=interval_seconds,
+                weekly_days=weekly_days,
+                monthly_day=monthly_day,
+                local_time=local_time,
+                min_interval_seconds=settings.scheduled_task_min_interval_seconds,
+            )
+            fire_at = first_fire_at(
+                cadence_kind=cadence_kind,
+                now=_now(),
+                timezone=row.timezone,
+                local_time=local_time,
+                cron_expr=cron_expr,
+                interval_seconds=interval_seconds,
+                weekly_days=weekly_days,
+                monthly_day=monthly_day,
+            )
+        except CadenceError as e:
+            raise Invalid(str(e)) from None
+        row.cadence_kind = cadence_kind
+        row.cron_expr = cron_expr
+        row.interval_seconds = interval_seconds
+        row.weekly_days = weekly_days
+        row.monthly_day = monthly_day
+        row.local_time = local_time
+        row.next_fire_at = fire_at
+
+    row.version += 1
+    row.updated_at = _now()
+    await db.flush()
+    return schedule_schema(row)
+
+
+async def delete_schedule(db: AsyncSession, ctx: CallerContext, *, schedule_id: uuid.UUID) -> None:
+    """Hard-delete a schedule and its firing history (firings first: FK RESTRICT)."""
+    row = await db.get(Schedule, (ctx.tenant_id, schedule_id))
+    if row is None or row.user_id != ctx.user_id:
+        raise NotFound("schedule not found")
+    await db.execute(
+        delete(ScheduleFiring).where(
+            ScheduleFiring.tenant_id == ctx.tenant_id,
+            ScheduleFiring.schedule_id == schedule_id,
+        )
+    )
+    await db.delete(row)
+    await db.flush()
 
 
 async def list_firings(

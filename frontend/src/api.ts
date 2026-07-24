@@ -706,6 +706,23 @@ export const api = {
       `/schedules/${id}/status`,
       jsonInit("POST", csrf, { if_version: ifVersion, status }),
     ),
+  editSchedule: (
+    csrf: string,
+    id: string,
+    body: {
+      if_version: number;
+      name?: string;
+      prompt?: string;
+      delivery_channel?: string;
+      timezone?: string;
+      cadence_kind?: string;
+      cron_expr?: string;
+      interval_seconds?: number;
+      local_time?: string;
+    },
+  ) => req<Schedule>(`/schedules/${id}`, jsonInit("PATCH", csrf, body)),
+  deleteSchedule: (csrf: string, id: string) =>
+    req<void>(`/schedules/${id}`, jsonInit("DELETE", csrf)),
   listScheduleFirings: (id: string) =>
     req<ScheduleFiringPage>(`/schedules/${id}/firings`),
   getSettings: () => req<Settings>("/settings"),

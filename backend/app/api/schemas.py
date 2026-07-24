@@ -361,6 +361,20 @@ class ScheduleStatusUpdate(StrictModel):
     status: Literal["active", "paused"]
 
 
+class ScheduleUpdate(StrictModel):
+    if_version: int
+    name: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    prompt: Annotated[str, Field(min_length=1, max_length=8000)] | None = None
+    delivery_channel: DeliveryChannel | None = None
+    timezone: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    cadence_kind: CadenceKind | None = None
+    cron_expr: Annotated[str, Field(max_length=200)] | None = None
+    interval_seconds: Annotated[int, Field(ge=60)] | None = None
+    weekly_days: Annotated[str, Field(max_length=32)] | None = None
+    monthly_day: Annotated[int, Field(ge=1, le=31)] | None = None
+    local_time: datetime.time | None = None
+
+
 class SchedulePage(StrictModel):
     items: list[Schedule]
     next_cursor: str | None

@@ -17,6 +17,7 @@ from app.api.schemas import (
     ScheduleFiringPage,
     SchedulePage,
     ScheduleStatusUpdate,
+    ScheduleUpdate,
 )
 from app.auth import RequestContext, require_context, require_csrf
 from app.db import get_session
@@ -85,6 +86,49 @@ async def list_schedules(
     db: Annotated[AsyncSession, Depends(get_session)],
 ) -> SchedulePage:
     return await svc.list_schedules(db, _caller(ctx))
+
+
+@router.patch("/schedules/{schedule_id}")
+async def edit_schedule(
+    schedule_id: uuid.UUID,
+    body: ScheduleUpdate,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ScheduleSchema:
+    try:
+        sched = await svc.update_schedule(
+            db,
+            _caller(ctx),
+            schedule_id=schedule_id,
+            if_version=body.if_version,
+            name=body.name,
+            prompt=body.prompt,
+            delivery_channel=body.delivery_channel,
+            timezone=body.timezone,
+            cadence_kind=body.cadence_kind,
+            cron_expr=body.cron_expr,
+            interval_seconds=body.interval_seconds,
+            weekly_days=body.weekly_days,
+            monthly_day=body.monthly_day,
+            local_time=body.local_time,
+        )
+        await db.commit()
+        return sched
+    except ServiceError as e:
+        raise _http(e) from None
+
+
+@router.delete("/schedules/{schedule_id}", status_code=204)
+async def delete_schedule(
+    schedule_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    try:
+        await svc.delete_schedule(db, _caller(ctx), schedule_id=schedule_id)
+        await db.commit()
+    except ServiceError as e:
+        raise _http(e) from None
 
 
 @router.post("/schedules/{schedule_id}/cancel")
