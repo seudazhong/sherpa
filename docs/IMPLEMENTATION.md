@@ -215,7 +215,24 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
-## Phase OBS-DEBUG — built-in short-retention prompt-debug inspector (ADR-035) — **DRAFT (awaiting owner review, 2026-07-25)**
+## Phase OBS-B — full-prompt content capture into spans + self-hosted Phoenix UI (ADR-033 Phase B) — **owner-selected path (2026-07-25)**
+
+> The owner's chosen way to "see every LLM call's full assembled prompt (system + memory + tool list + all messages) + response". The core work — capturing the full assembled input + response at the single provider-call boundary, redacted + bounded — is the same one ADR-035 would need; here it lands as **OpenInference span attributes** exported to a **self-hosted Phoenix** container (reuses Postgres), so the owner reads it in Phoenix's waterfall/search UI **without a bespoke inspector**. Gated by `otel_capture_message_content` (default false), independent of the default metadata-only spans. Research: all 8 products capture at this same boundary (`files/debug-ui-research.md`).
+
+| # | Task | refs | AC |
+|---|---|---|---|
+| **OBSB.0** | **deps + config**: add `opentelemetry-exporter-otlp-proto-grpc` to `pyproject` (`uv.lock`); verify `otel.py`'s OTLP branch loads it. `otel_exporter_otlp_endpoint` + `otel_capture_message_content` already exist — no new config. | ADR-033; config | dep pinned; OTLP exporter imports; gate green |
+| **OBSB.1** | **Content capture into spans** (gated by `otel_capture_message_content`): on the `chat` span, attach the full assembled input (system+memory+transcript messages) + tool schemas + response as **OpenInference attributes** — `llm.input_messages.[N].message.role/content`, `llm.output_messages.[N]…`, `llm.tools.[N].tool.json_schema`, `input.value`/`output.value`. Structured parts (tool args/schemas) pass through `security/redaction` (key-masking); every field size-capped with a `…[truncated]` marker. `execute_tool` span gets tool args/result (gated). Off = metadata-only (today). Centralize OpenInference attr names in the `genai` wrapper. | ADR-033 §决策4; redaction §3.5 | flag on → span carries redacted, bounded messages/tools/response; off → none; secret-named fields masked; test |
+| **OBSB.2** | **OpenInference span kind**: tag `invoke_agent`/`chat`/`execute_tool` with `openinference.span.kind` = `AGENT`/`LLM`/`TOOL` so Phoenix classifies + renders them correctly. | OpenInference semconv | correct span kinds; test asserts attr |
+| **OBSB.3** | **Phoenix container**: add an optional `phoenix` service to `infra/docker-compose.yml` behind a **compose profile** (not started with the core stack), `PHOENIX_SQL_DATABASE_URL` → existing Postgres (separate schema/db), OTLP receiver `4317`; document `OTEL_ENABLED=true` + `OTEL_CAPTURE_MESSAGE_CONTENT=true` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317`. Default off. | ADR-033 Phase B | phoenix starts via profile; reuses Postgres; core stack unaffected |
+| **OBSB.4** | **Deterministic tests**: `InMemorySpanExporter` — content on → span has redacted/bounded `input_messages`/`output_messages`/`tools` + span kind; off → none; secret masked; size-cap truncation. Mock provider. | AGENTS §2; 铁律 | tests green; no secret leak |
+| **OBSB.V** | **Verify OBS-B**: full gate; bring up Phoenix (profile) + `OTEL_ENABLED` + `OTEL_CAPTURE_MESSAGE_CONTENT` + endpoint; run a real chat; in the **Phoenix UI** see the full assembled prompt (system+memory+tools+messages) + response + tokens/latency in the `invoke_agent > chat > execute_tool` waterfall. Screenshot + UX note. | AGENTS §2 | verified in Phoenix UI |
+
+**OBS-B exit:** with `otel_capture_message_content=true` + Phoenix up, the owner sees every LLM call's full assembled prompt + response + tool steps in Phoenix's waterfall/search UI; off or no-Phoenix = metadata-only spans, zero content; content redacted (structured) + size-capped + secret-free; the core stack runs unaffected (Phoenix is an optional profile). **Supersedes the bespoke inspector** (Phase OBS-DEBUG / ADR-035 deferred).
+
+---
+
+## Phase OBS-DEBUG — built-in inspector (ADR-035) — **DEFERRED (owner chose the Phoenix path OBS-B, 2026-07-25; kept as a fallback for a future embedded / container-free inspector)**
 
 > A dev-only, owner-only inspector that shows, for a run, the **full assembled input of every LLM call** (system prompt + injected memory + tool schemas + all user/assistant/tool messages) + full response + tokens/latency + tool steps — Microsoft-Copilot-`/debug` depth, but **short-retention, off by default, redacted, owner-only**. Extends ADR-033 §决策3 with a built-in content store so the full prompt is inspectable **without standing up Phoenix**. Research: 8 products all capture at the single provider-call boundary (`files/debug-ui-research.md`). Content lives in a new `llm_call_debug` table (NOT the immutable journal — PII/ephemeral, TTL'd + deletable), gated by `debug_capture_enabled` (default false), independent of OTEL.
 

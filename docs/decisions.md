@@ -353,7 +353,7 @@
 
 - **契约先行（本 ADR 同批）**：`config`（`OTEL_*` 键）、`events`（可选 `model.request`/`model.response` debug 事件）。`generations` 表已存在，Phase A 让 chat 循环也写它即可，**无需新表**——span 后端持有树。均带 `tenant_id`（ADR-015）。
 
-- **分阶段**：**Phase A**=OTel SDK + `gen_ai` 属性包一层（隔离 semconv 改名）+ 循环打点（chat/execute_tool）+ 真实 per-call token 取代字符估算 + `InMemorySpanExporter` 测试；补上 item0；**无新基座**。**Phase B**=可选 Phoenix 容器（复用 Postgres）+ OTLP exporter（config 开关）+ 保留期。**Phase C**=评估/飞轮（judge + 人工分；失败 run（`stop_reason=error`/`loop_count>N`）导出 `datasets/regression.jsonl`，CI 跑 mock）——**证据门**，比照 ADR-029 Phase C。
+- **分阶段**：**Phase A**=OTel SDK + `gen_ai` 属性包一层（隔离 semconv 改名）+ 循环打点（chat/execute_tool）+ 真实 per-call token 取代字符估算 + `InMemorySpanExporter` 测试；补上 item0；**无新基座**。**Phase B（owner 2026-07-25 选定为「看完整 prompt」的实现路径，取代自研 ADR-035）**=**内容采集进 span**（`otel_capture_message_content` 开时，把装配后的 system+memory+transcript messages、tool schemas、response 写成 **OpenInference span 属性**（`llm.input_messages`/`llm.output_messages`/`llm.tools` + `openinference.span.kind`），结构化部分经 `security/redaction` 脱敏 + size cap）＋**可选 Phoenix 容器**（复用 Postgres、compose profile、默认不随核心栈起）＋ OTLP exporter（config 开关）＋保留期。借 Phoenix 现成 UI 看每次调用完整 prompt/response/瀑布，免自研 inspector。**Phase C**=评估/飞轮（judge + 人工分；失败 run（`stop_reason=error`/`loop_count>N`）导出 `datasets/regression.jsonl`，CI 跑 mock）——**证据门**，比照 ADR-029 Phase C。
 
 - **护栏**：单用户 **100% 采样、无需 Collector**（SDK 直连本地后端）；span 名**低基数**（`chat gpt-4o`，高基数值进属性）；GenAI semconv 处 **Development** 状态、会改名（`gen_ai.system`→`gen_ai.provider.name` 已发生）→ 所有 `set_attribute` 收拢进**一个 wrapper 模块**隔离变动。
 
@@ -382,7 +382,7 @@
 
 ### ADR-035 · 内建「调试快照」inspector = provider-call 边界抓完整装配 prompt + response，短保留、owner-only、默认关（扩展 ADR-033 §决策3；源自微软 Copilot `/debug` 参照 + R-DEBUG-CAPTURE 调研）
 
-> **状态：草案（待 owner 审，2026-07-25）。** 先契约后代码（AGENTS.md §1）：契约 diff（config/data-model/api）随本 ADR 同批草拟，DBG.0 冻结。调研见 [session `files/debug-ui-research.md`](../..)（8 产品，含源码出处）。
+> **状态：暂缓 / 备选（owner 2026-07-25 选择走 ADR-033 Phase B「Phoenix」路线）。** 「在 provider-call 边界捕获完整装配内容 + 脱敏」这一**核心工作两条路共用**，已并入 **ADR-033 Phase B**（写成 OpenInference span 属性 → 自托管 Phoenix UI）；本 ADR 的自研 `llm_call_debug` 表 + `/inspector` 页**后置**，仅在未来需「Sherpa 内嵌 / 去容器化 / 完全自控保留（TTL、不进 journal）」时再启用。理由：效果相同下 Phoenix UI 更强（瀑布/搜索/聚合/prompt 重放）且免自研 UI，代价仅多一个可选容器。调研见 [session `files/debug-ui-research.md`]（8 产品，含源码出处）。
 
 - **决策**：加一个**内建的、短保留的「LLM 调用调试快照」+ dev-only inspector 页**，让 owner 能看到 agent 循环内**每次 LLM 调用的完整装配输入**（system prompt + 注入的 memory 块 + tool schema 列表 + 全部 user/assistant/tool 消息）＋完整 response ＋ token/延迟/工具步骤——即微软 Copilot `/debug` 那种深度，但**短保留、默认关、脱敏、owner-only**。
 - **动机 / 现状缺口**：你在 OTEL trace 里看到 `invoke_agent/chat/execute_tool` 却看不到具体 message/tool 内容，是 ADR-033「内容默认不采集」的**有意**结果。ADR-033 §决策3 让**完整装配 prompt 只进 span**（Phoenix）、journal 的 `model.request` 只存 **sha-256 摘要（no content）**。但那要求 owner **先立起 Phoenix** 才能看 prompt。本 ADR 补一个**内建的第三存储层**（短保留 DB 调试 store），让完整 prompt **在 Sherpa 内就能看，无需任何 trace 后端**——**扩展而非取代 ADR-033**。
