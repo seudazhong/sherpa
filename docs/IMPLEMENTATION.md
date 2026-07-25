@@ -215,7 +215,7 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
-## Phase OBS-B — full-prompt content capture into spans + self-hosted Phoenix UI (ADR-033 Phase B) — **owner-selected path (2026-07-25)**
+## Phase OBS-B — full-prompt content capture into spans + self-hosted Phoenix UI (ADR-033 Phase B) — ✅ **COMPLETE + verified (2026-07-25)**
 
 > The owner's chosen way to "see every LLM call's full assembled prompt (system + memory + tool list + all messages) + response". The core work — capturing the full assembled input + response at the single provider-call boundary, redacted + bounded — is the same one ADR-035 would need; here it lands as **OpenInference span attributes** exported to a **self-hosted Phoenix** container (reuses Postgres), so the owner reads it in Phoenix's waterfall/search UI **without a bespoke inspector**. Gated by `otel_capture_message_content` (default false), independent of the default metadata-only spans. Research: all 8 products capture at this same boundary (`files/debug-ui-research.md`).
 
@@ -229,6 +229,8 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 | **OBSB.V** | **Verify OBS-B**: full gate; bring up Phoenix (profile) + `OTEL_ENABLED` + `OTEL_CAPTURE_MESSAGE_CONTENT` + endpoint; run a real chat; in the **Phoenix UI** see the full assembled prompt (system+memory+tools+messages) + response + tokens/latency in the `invoke_agent > chat > execute_tool` waterfall. Screenshot + UX note. | AGENTS §2 | verified in Phoenix UI |
 
 **OBS-B exit:** with `otel_capture_message_content=true` + Phoenix up, the owner sees every LLM call's full assembled prompt + response + tool steps in Phoenix's waterfall/search UI; off or no-Phoenix = metadata-only spans, zero content; content redacted (structured) + size-capped + secret-free; the core stack runs unaffected (Phoenix is an optional profile). **Supersedes the bespoke inspector** (Phase OBS-DEBUG / ADR-035 deferred).
+
+**Done:** OBSB.0 `ef142ba` · OBSB.1+2+4 `0a9e5cd` · OBSB.3 `2b592cd`. **Verified live end-to-end (OBSB.V):** brought up Phoenix via `--profile observability` (reusing Postgres, `phoenix` schema), restarted web+worker with `OTEL_ENABLED=true` + `OTEL_CAPTURE_MESSAGE_CONTENT=true` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317`, ran a real `claude-sonnet-4.6` tool-using chat → Phoenix received the trace: `AGENT invoke_agent > LLM chat ×2 / TOOL execute_tool` (correct OpenInference span kinds), the `chat` span's `llm.input_messages` = the full assembled prompt (`system` + `user`, system carries the prompt + memory slot), `llm.tools` = the tool schemas, `llm.output_messages` = the assistant reply, and the flattened `input.value` contains the user's message; 1 trace with 3 linked child spans (waterfall). UI at http://localhost:6006. Gate green (195).
 
 ---
 
