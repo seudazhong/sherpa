@@ -181,3 +181,27 @@ def test_json_formatter_redacts_and_correlates() -> None:
     assert out["tenant_id"] == "tenant-123"
     assert out["turns"] == 3
     assert out["refresh_token"] == "***REDACTED***"
+
+
+def test_json_formatter_keeps_llm_usage_counts() -> None:
+    """LOG.2 regression: usage counts must survive redaction. The sensitive-key
+    match is a substring, so a field literally named *_tokens would be masked
+    (e.g. refresh_token); the loop logs input_tok/output_tok to stay readable."""
+    formatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="app.core.loop",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="llm call",
+        args=(),
+        exc_info=None,
+    )
+    record.input_tok = 150  # type: ignore[attr-defined]
+    record.output_tok = 27  # type: ignore[attr-defined]
+    record.model = "claude-sonnet-4.6"  # type: ignore[attr-defined]
+
+    out = json.loads(formatter.format(record))
+    assert out["input_tok"] == 150
+    assert out["output_tok"] == 27
+    assert out["model"] == "claude-sonnet-4.6"

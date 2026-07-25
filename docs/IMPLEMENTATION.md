@@ -199,6 +199,22 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
+## Phase OBS-LOG — Agent observability, the Logs pillar: make stdout useful by default (ADR-033) — ✅ **COMPLETE + verified (2026-07-25)**
+
+> OBS-A strengthened **traces** (DB / OTel spans); this closes the **Logs** pillar gap so default stdout is diagnostic **independent of OTEL and any UI** — directly answering the owner's "400 bad request, logs too terse" + "I can't see it by default".
+
+| # | Task | refs | AC | status |
+|---|---|---|---|---|
+| **LOG.1** | **Provider errors surfaced**: `openai_compatible` reads the body on non-2xx (`await resp.aread()`) and raises `ProviderError(status_code, redacted bounded body)`; the worker's `run_job` stops swallowing the exception — logs a structured ERROR (run_id/provider_model/error_type/redacted detail/traceback) and threads the detail into `_settle_failed` → recorded on the `run.settled` journal event. | ADR-033 Logs; redaction §3.5 | provider raises with status+redacted body; failed run journals the reason; tests | ✅ `f382ead` |
+| **LOG.2** | **Per-LLM-call log line**: one structured INFO `llm call` per `provider.stream` (provider/model/`input_tok`/`output_tok`/finish_reason/tool_calls/latency_ms; run/session-correlated). **Unconditional** — NOT gated on OTEL. No prompt/response content. | ADR-033 Logs | one line/call with real usage, default stdout; test | ✅ `84382d4` |
+| **LOG.3** | **Per-tool-execution log line**: one `tool call` per tool (tool/call_id/outcome/latency_ms), at WARNING on error. | ADR-033 Logs | one line/tool; error → WARNING; test | ✅ `84382d4` |
+| **LOG.4** | **Log↔trace correlation**: JsonFormatter injects `trace_id`/`span_id` from the active OTel span when tracing is on; nothing added when off. | ADR-033; docs/07 | trace ids present inside a span, absent when disabled; test | ✅ `84382d4` |
+| **LOG.V** | **Verify OBS-LOG**: full gate; live docker run with **OTEL off (default)** shows `llm call` with real tokens on stdout + a bogus-model run shows `run failed` with the real provider reason. | AGENTS §2 | verified live | ✅ gate **192** green; live: `llm call ... input_tok=145 output_tok=2 finish=stop latency_ms=2262`; error: `run failed ... status=400 body={...Invalid model name...}` |
+
+**OBS-LOG exit:** default stdout carries one structured line per LLM call (real tokens/finish/latency) and per tool (outcome/latency), provider HTTP failures show their real reason in both the log and the `run.settled` journal event, and logs correlate to the trace when OTEL is on — all with content off + secrets redacted, zero dependency on a UI or a trace backend.
+
+---
+
 
 ## Cross-cutting (do continuously, not a separate phase)
 - **Tests with every task** — deterministic, mock provider, `pytest-asyncio`. No real model calls in tests.
