@@ -215,6 +215,24 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
+## Phase OBS-DEBUG — built-in short-retention prompt-debug inspector (ADR-035) — **DRAFT (awaiting owner review, 2026-07-25)**
+
+> A dev-only, owner-only inspector that shows, for a run, the **full assembled input of every LLM call** (system prompt + injected memory + tool schemas + all user/assistant/tool messages) + full response + tokens/latency + tool steps — Microsoft-Copilot-`/debug` depth, but **short-retention, off by default, redacted, owner-only**. Extends ADR-033 §决策3 with a built-in content store so the full prompt is inspectable **without standing up Phoenix**. Research: 8 products all capture at the single provider-call boundary (`files/debug-ui-research.md`). Content lives in a new `llm_call_debug` table (NOT the immutable journal — PII/ephemeral, TTL'd + deletable), gated by `debug_capture_enabled` (default false), independent of OTEL.
+
+| # | Task | refs | AC |
+|---|---|---|---|
+| **DBG.0** | **ADR-035 accepted + contracts frozen + migration**: config (`debug_capture_enabled=false`, `debug_capture_ttl_hours=48`, `debug_capture_max_calls_per_session=200`, `debug_capture_max_bytes`), data-model (`llm_call_debug`: tenant_id+composite keys, `request_redacted`/`response_redacted` jsonb, tokens/finish/latency, `created_at`/`expires_at`, GC index), api (owner-only `/debug` section). events §2.7 **unchanged** (still digest-only). Migration (next free head). | ADR-035; contracts | contracts merged; migration head advances; gate green |
+| **DBG.1** | **Capture at the provider-call boundary** (`core/loop.py`, gated by `debug_capture_enabled`): write one **redacted, bounded** `llm_call_debug` row per chat call — request (system+memory+transcript messages + tool schemas) + response (text/tool_calls/finish) + tokens + latency; `expires_at = now()+ttl`. Reuse the `model.request` site; content via `security/redaction`; per-field size cap + `…[truncated]`. **Off = zero rows / zero overhead.** | ADR-035; redaction §3.5 | flag on → one redacted bounded row/call; off → none; secret masked; test |
+| **DBG.2** | **TTL GC + per-session cap**: background job (reuse the Drive-maintenance cron) deletes `expires_at < now()` rows; enforce `debug_capture_max_calls_per_session` (ring-buffer: drop oldest). | ADR-035 | expired rows purged; cap enforced; test |
+| **DBG.3** | **Owner-only REST**: `GET /debug/sessions/{id}/llm-calls` + `GET /debug/runs/{id}/llm-calls` (list + detail of captured snapshots). Owner-only guard; empty when capture off. | api §debug; ADR-035 | owner-only; returns captured calls; 403 for non-owner; test |
+| **DBG.4** | **Dev-only inspector UI** (**SPA route `/inspector`**, avoids API prefix `/debug`): per-run list of LLM calls; per-call expandable inspector — **System / Memory (highlighted) / Tools (schemas) / Messages (role+content) / Response / tokens / latency / tool-step waterfall**. Nav entry owner/dev-gated. Update capability matrix (`11-agent-tool-surface.md §9` UI column). | design-bright; ADR-035 | build/lint green; renders; matrix UI cell filled |
+| **DBG.5** | **Deterministic tests**: capture off = no rows; on = redacted bounded rows (secret masked, size-cap truncation); GC deletes expired + cap enforced; API owner-only; content redaction. Mock provider. | AGENTS §2; 铁律 | tests green; no secret/content leak beyond redaction |
+| **DBG.V** | **Verify OBS-DEBUG**: full backend gate; restart the stack; **two-lane Playwright** — agent lane (chat with capture on → `/inspector` shows the assembled prompt incl. system+memory+tools+messages+response); human lane (click through `/inspector`, UX acceptance review). Use `dazhongguo97@gmail.com` if a tool triggers email. | AGENTS §2; verification memory | verified two-lane; UX notes recorded |
+
+**OBS-DEBUG exit:** with `debug_capture_enabled=true`, the owner can open `/inspector` and see, per run, every LLM call's full assembled prompt (system + memory + tools + messages) + response + tokens/latency + tool steps; off = zero capture/overhead; snapshots are redacted, size-capped, owner-only, TTL-GC'd, and never touch the immutable journal; two-lane Playwright verified. Deferred: span content capture (ADR-033 OTEL path), prompt playground/replay, cross-user debug sharing.
+
+---
+
 
 ## Cross-cutting (do continuously, not a separate phase)
 - **Tests with every task** — deterministic, mock provider, `pytest-asyncio`. No real model calls in tests.

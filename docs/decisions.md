@@ -379,3 +379,30 @@
 - **明确不做（本阶段）**：通配/正则 grant、跨 user 共享 grant、时间窗/次数限额 grant、per-session `always`（session 持久）、把 grant 开放给 agent 自建——留后续 ADR。
 - **验收关键**：后台/定时任务产生的审批能在 `/approvals` 页被 owner 批准并真正执行；给白名单收件人的定时邮件**免审批自动发**、非白名单仍进待审批；`always` 建出可见 grant、之后同类动作自动放行；自动放行有审计回执；非 web 渠道仍需 nonce；零跨 user/tenant 泄漏；契约（data-model `permission_grants` + api §4.7/新 grants 段）先于代码。双路径 Playwright：人工（批一个后台审批 + 配一条邮箱白名单 → 定时邮件自动发）+ agent（定时任务命中白名单自动执行，agent 无法自建 grant）。
 - **来源**：用户输入「1.待审批入口，适用场景:实在不能预授权但是又想让它定时做的…需要我人工审批。2.可设置的预授权，例如设置邮箱地址白名单，给我自己的个人邮箱工作邮箱发邮件都不需要我审批，直接就能发…定时发QQ消息、写代码跑代码以及未来…都能被这两种覆盖」；recon 见本会话审批/策略架构调研。
+
+### ADR-035 · 内建「调试快照」inspector = provider-call 边界抓完整装配 prompt + response，短保留、owner-only、默认关（扩展 ADR-033 §决策3；源自微软 Copilot `/debug` 参照 + R-DEBUG-CAPTURE 调研）
+
+> **状态：草案（待 owner 审，2026-07-25）。** 先契约后代码（AGENTS.md §1）：契约 diff（config/data-model/api）随本 ADR 同批草拟，DBG.0 冻结。调研见 [session `files/debug-ui-research.md`](../..)（8 产品，含源码出处）。
+
+- **决策**：加一个**内建的、短保留的「LLM 调用调试快照」+ dev-only inspector 页**，让 owner 能看到 agent 循环内**每次 LLM 调用的完整装配输入**（system prompt + 注入的 memory 块 + tool schema 列表 + 全部 user/assistant/tool 消息）＋完整 response ＋ token/延迟/工具步骤——即微软 Copilot `/debug` 那种深度，但**短保留、默认关、脱敏、owner-only**。
+- **动机 / 现状缺口**：你在 OTEL trace 里看到 `invoke_agent/chat/execute_tool` 却看不到具体 message/tool 内容，是 ADR-033「内容默认不采集」的**有意**结果。ADR-033 §决策3 让**完整装配 prompt 只进 span**（Phoenix）、journal 的 `model.request` 只存 **sha-256 摘要（no content）**。但那要求 owner **先立起 Phoenix** 才能看 prompt。本 ADR 补一个**内建的第三存储层**（短保留 DB 调试 store），让完整 prompt **在 Sherpa 内就能看，无需任何 trace 后端**——**扩展而非取代 ADR-033**。
+- **调研（R-DEBUG-CAPTURE，`files/debug-ui-research.md`）**：LangSmith / Phoenix·OpenInference / Langfuse / OpenHands / Cline·Roo / Vercel AI SDK / Semantic Kernel·AutoGen / aider **8 个产品无一例外都在同一处捕获——单一 provider-call 边界**，快照 `messages[](system/memory/history) + tools[] + response + tokens + latency`。共同模式＝**捕获边界 → keyed record `{run_id, turn, messages, tools, system, response, tokens, latency}` → 短保留（gated）→ per-call inspector**。gate 多为 opt-in（`DEBUG=1` / SDK init / per-call flag）；短保留靠 TTL / ring buffer；隐私最佳＝OpenInference 分字段脱敏 flag ＋ Semantic Kernel 的 Presidio PII 过滤。
+- **设计要点**：
+  1. **捕获点**：`core/loop.py` 的 provider-call 边界（即现在写 `model.request` 事件那一处）。`debug_capture_enabled` 开时，快照该次调用的 `{messages(system+memory+transcript+tool-results)、tools schemas、response(text+tool_calls+finish)、input/output_tokens、latency_ms}`——`provider_messages` ＋ `schemas` 本身就是完整装配输入。
+  2. **存储＝新表 `llm_call_debug`，不进不可变 journal**：内容是 PII/易失，必须**可删＋TTL**；ADR-016 journal 是**真相源**，不塞 PII 调试内容（守 ADR-016/021 边界）。带 `tenant_id`＋复合键（ADR-015）、`expires_at`；内容经 `security/redaction` 脱敏、每字段大小上限截断（`…[truncated]`）。
+  3. **保留**：TTL（`debug_capture_ttl_hours` 默认 48h）＋**后台 GC**（复用 Drive maintenance cron 模式）＋每 session 调用数上限（`debug_capture_max_calls_per_session`，ring-buffer 丢最旧）——**短保留是设计要求**（正合「数据量大、保留时间短」）。
+  4. **gate**：新 config `debug_capture_enabled`（默认 **false**），**独立于 OTEL**（这是 DB inspector，不是 span；OTEL 的 `otel_capture_message_content` 走 span 内容那条路，二者正交）。
+  5. **隐私（ADR-019 铁律）**：owner-only API＋UI；内容脱敏；size cap；TTL；**不进 journal**；数据明确标为 PII 调试；密钥永不入（API key 在 header 不在 messages，仍防御性脱敏）；**不给 agent 工具**（agent 不读也不建调试快照）。
+  6. **UI**：dev-only inspector（**SPA 路由 `/inspector`，避开 API 前缀 `/debug`**）。按 run 列每次 chat 调用；点开分区看 **System / Memory（高亮 system 内的记忆块）/ Tools（schema）/ Messages（role+content）/ Response ＋ token/延迟 ＋ 工具步骤瀑布**。导航入口 owner/dev 门控。
+  7. **API**：owner-only `GET /debug/sessions/{id}/llm-calls` ＋ `GET /debug/runs/{id}/llm-calls`（列表＋详情）。
+- **契约先行（本 ADR 同批草案，DBG.0 冻结）**：
+  - `config-and-secrets`：`debug_capture_enabled`(false) ＋ `debug_capture_ttl_hours`(48) ＋ `debug_capture_max_calls_per_session`(200) ＋ `debug_capture_max_bytes`(单条上限, 如 256 KiB)。
+  - `data-model`：新表 `llm_call_debug`（`tenant_id,id,run_id,session_id,call_index,provider,model,request_redacted jsonb, response_redacted jsonb, input_tokens,output_tokens,finish_reason,latency_ms,created_at,expires_at`）＋ TTL/GC 索引 ＋ 复合键 ＋ `tenant_id`（ADR-015）。
+  - `api.md`：新 owner-only debug 段。
+  - `events` §2.7 **不变**（`model.request/response` 仍 digest-only 耐久）——内容版是**新表**、非 journal 事件（守 ADR-016/021）。
+- **护栏/不变量**：journal 仍真相源、不塞 PII；默认关、owner-only；脱敏＋size cap＋TTL；SPA 路由避开 API 前缀；`llm_call_debug` 带 `tenant_id`＋复合键（forward-compat，勿删）。
+- **明确不做（本阶段）**：把内容采进 span（那是 ADR-033 的 OTEL 路径，仍可选并存）；prompt playground 重放（后置）；跨 user 共享调试；无限保留；自定义脱敏规则（用现有 `security/redaction`）。
+- **取代/扩展关系**：**扩展 ADR-033 §决策3**（新增内建短保留内容 store，使完整 prompt 无需 Phoenix 即可查）；**不改** ADR-016 日志真相源、ADR-021 审计/调试事件边界、ADR-019 密钥脱敏、ADR-015 租户键。
+- **分阶段**：单阶段 **Phase OBS-DEBUG**（DBG.0–DBG.V，见 IMPLEMENTATION.md）。
+- **验收关键**：开 flag 后 owner 在 `/inspector` 能看某 run **每次 LLM 调用的完整装配 prompt（system+memory+tools+messages）＋ response ＋ token/延迟**；关 flag 时**零捕获零开销**；快照 TTL 到期被 GC 删除、每 session 有上限；API/UI **owner-only**；内容脱敏、密钥不入、超限截断；**不进 journal**；双路径 Playwright（agent：开 flag 跑聊天→inspector 显示装配 prompt；人工：点 `/inspector` 页并做 UX 评审）。
+- **来源**：用户输入「微软 Copilot `/debug`… 几乎能看到 agent 循环内每一步的详细内容，能看到发给 LLM 的完整 prompt，包括 system prompt, memory, tool list, assistant and user messages… 因为过于详细数据量比较大，保留时间比较短… 我想知道我们能不能做到类似效果？代价是什么？已知的开源 agent 有没有这样做的，怎么做的」；R-DEBUG-CAPTURE 调研 [`files/debug-ui-research.md`]（8 产品 + 源码出处）。
