@@ -14,6 +14,8 @@ import json
 import logging
 from typing import Any
 
+from opentelemetry import trace as otel_trace
+
 from app.config import settings
 from app.security.redaction import redact
 
@@ -51,6 +53,13 @@ class JsonFormatter(logging.Formatter):
             value = var.get()
             if value is not None:
                 payload[name] = value
+
+        # Correlate logs with the OTel trace when a span is active (LOG.4). When
+        # tracing is disabled the current span is invalid → nothing is added.
+        span_ctx = otel_trace.get_current_span().get_span_context()
+        if span_ctx.is_valid:
+            payload["trace_id"] = format(span_ctx.trace_id, "032x")
+            payload["span_id"] = format(span_ctx.span_id, "016x")
 
         extra = {k: v for k, v in record.__dict__.items() if k not in _RESERVED}
         if extra:

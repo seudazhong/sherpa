@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import logging
 import uuid
 
 from opentelemetry.trace import Span
@@ -36,6 +37,8 @@ from app.providers import Finish, Provider, TextDelta, ToolCall
 from app.services import CallerContext
 from app.services import memory as memory_service
 from app.tools import FULL, ToolContext, ToolError, ToolRegistry, bound_text, spill_output
+
+logger = logging.getLogger("app.core.loop")
 
 SYSTEM_PROMPT = (
     "You are Sherpa, a careful assistant. Use tools when needed; be concise. "
@@ -133,6 +136,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
     # `execute_tool` span (ADR-033): child of the run's `invoke_agent` span. An
     # error observation marks the span ERROR + agent.tool.success=false; a tool
     # gated on approval leaves success unset (it neither ran nor failed).
+    tool_started = _now()
     with get_tracer().start_as_current_span(genai.SPAN_EXECUTE_TOOL) as span:
         genai.set_attrs(
             span,
@@ -156,6 +160,24 @@ async def _run_tool(  # type: ignore[no-untyped-def]
         elif outcome == "error":
             genai.record_tool_result(span, success=False)
         # "gated" (awaiting approval) → success left unset.
+
+    # One structured line per tool execution (Logs pillar, ADR-033). Unconditional
+    # (not gated on OTEL): tool name / outcome / latency, correlated by run. An
+    # `error` outcome logs at WARNING so failures stand out in stdout. No content.
+    tool_latency_ms = int((_now() - tool_started).total_seconds() * 1000)
+    logger.log(
+        logging.WARNING if outcome == "error" else logging.INFO,
+        "tool call",
+        extra={
+            "run_id": str(run.id),
+            "session_id": str(run.session_id),
+            "turn": turn,
+            "tool": call.name,
+            "call_id": call.id,
+            "outcome": outcome,
+            "latency_ms": tool_latency_ms,
+        },
+    )
 
 
 async def _run_tool_impl(  # type: ignore[no-untyped-def]
@@ -529,15 +551,35 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
                 },
             )
 
+        latency_ms = int((_now() - call_started).total_seconds() * 1000)
+        output_chars = sum(len(c) for c in text_chunks)
+        model_label = model_name or provider.name
+
+        # One structured line per LLM call (Logs pillar, ADR-033). Emitted
+        # unconditionally — NOT gated on OTEL — so stdout is useful by default:
+        # model/tokens/finish/latency, correlated by run/session. No content.
+        logger.info(
+            "llm call",
+            extra={
+                "run_id": str(run_id),
+                "session_id": str(session_id),
+                "turn": turn,
+                "provider": provider.name,
+                "model": model_label,
+                "input_tokens": call_input_tokens,
+                "output_tokens": call_output_tokens,
+                "finish_reason": stop_reason,
+                "tool_calls": len(tool_calls),
+                "latency_ms": latency_ms,
+            },
+        )
+
         # Durable, redacted per-call record (events §2.7, durability=debug) — no
         # prompt/tool content, only a sha-256 digest + counts. Gated on OTEL so the
         # journal is untouched by default; project_run_trace derives generations +
         # real token totals from these. Written post-call so real usage is present.
         if settings.otel_enabled:
             digest, input_chars = _input_digest(provider_messages)
-            latency_ms = int((_now() - call_started).total_seconds() * 1000)
-            output_chars = sum(len(c) for c in text_chunks)
-            model_label = model_name or provider.name
             await append_event(
                 session,
                 tenant_id=tenant_id,

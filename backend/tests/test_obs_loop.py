@@ -289,3 +289,40 @@ async def test_disabled_otel_writes_no_model_events_and_estimates(
             assert gens == []  # no per-call usage -> no generation rows
         finally:
             await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_loop_logs_llm_and_tool_calls_without_otel(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """LOG.2/LOG.3: one structured 'llm call' + 'tool call' line per step, even
+    with OTEL off (stdout is useful by default)."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    monkeypatch.setattr(settings, "otel_enabled", False)
+    reset_tracing()
+    async with SessionLocal() as s:
+        try:
+            _tid, _rid, run = await _seed(s)
+            provider = MockProvider(
+                script=[
+                    [ToolCall(id="c1", name="get_time", args={}), Finish("tool_use")],
+                    [TextDelta("It is time."), Finish("stop")],
+                ]
+            )
+            with caplog.at_level("INFO", logger="app.core.loop"):
+                await execute_run(
+                    s, run=run, provider=provider, registry=build_default_registry(), tier="full"
+                )
+
+            llm = [r for r in caplog.records if r.message == "llm call"]
+            tools = [r for r in caplog.records if r.message == "tool call"]
+            assert len(llm) == 2  # tool_use turn + final answer
+            assert {r.__dict__["finish_reason"] for r in llm} == {"tool_use", "stop"}
+            assert all(r.__dict__["provider"] == "mock" for r in llm)
+            assert all("latency_ms" in r.__dict__ for r in llm)
+            assert len(tools) == 1
+            assert tools[0].__dict__["tool"] == "get_time"
+            assert tools[0].__dict__["outcome"] == "ok"
+        finally:
+            await s.rollback()

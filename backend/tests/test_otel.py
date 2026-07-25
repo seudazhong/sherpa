@@ -8,18 +8,37 @@ dropped so partial metadata stays terse.
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Iterator
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from app.observability import genai
+from app.observability.logging import JsonFormatter
 from app.observability.otel import (
     configure_tracing,
     get_tracer,
     reset_tracing,
     tracing_enabled,
 )
+
+
+def _format(record: logging.LogRecord) -> dict[str, object]:
+    return json.loads(JsonFormatter().format(record))
+
+
+def _record() -> logging.LogRecord:
+    return logging.LogRecord(
+        name="app.core.loop",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="llm call",
+        args=(),
+        exc_info=None,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +56,24 @@ def test_disabled_by_default_is_noop() -> None:
     assert type(tracer).__name__ == "NoOpTracer"
     with tracer.start_as_current_span("x") as span:
         assert span.is_recording() is False
+
+
+def test_log_has_no_trace_id_when_tracing_disabled() -> None:
+    # LOG.4: no active/valid span -> the formatter adds no trace correlation.
+    payload = _format(_record())
+    assert "trace_id" not in payload
+    assert "span_id" not in payload
+
+
+def test_log_carries_trace_id_when_span_active() -> None:
+    # LOG.4: inside an active span, every log line carries trace_id/span_id so
+    # logs and the OTel trace correlate.
+    configure_tracing(force=True, exporter=InMemorySpanExporter())
+    with get_tracer("sherpa").start_as_current_span(genai.SPAN_CHAT):
+        payload = _format(_record())
+    assert len(str(payload["trace_id"])) == 32
+    assert len(str(payload["span_id"])) == 16
+    assert int(str(payload["trace_id"]), 16) != 0
 
 
 def test_forced_provider_records_and_exports() -> None:
