@@ -140,7 +140,13 @@ def test_capture_llm_io_writes_openinference_attrs_redacted_and_bounded() -> Non
                 {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": [{"id": "c1", "name": "x", "api_key": "sk-INNER"}],
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": '{"q":"x"}'},
+                        }
+                    ],
                 },
             ],
             tools=[
@@ -156,13 +162,20 @@ def test_capture_llm_io_writes_openinference_attrs_redacted_and_bounded() -> Non
     assert "Memory: user likes tea." in str(attrs["llm.input_messages.0.message.content"])
     # Size cap on a huge message.
     assert "…[truncated" in str(attrs["llm.input_messages.1.message.content"])
-    # Secret-named fields masked in structured parts (tool schema + tool-call args).
+    # Assistant tool calls flattened into OpenInference indexed sub-attrs.
+    in_tc = "llm.input_messages.2.message.tool_calls.0.tool_call"
+    assert attrs[f"{in_tc}.function.name"] == "lookup"
+    assert "q" in str(attrs[f"{in_tc}.function.arguments"])
+    # Secret-named fields masked in structured parts (tool schema).
     assert "sk-TOOL" not in str(attrs["llm.tools.0.tool.json_schema"])
     assert "send_email" in str(attrs["llm.tools.0.tool.json_schema"])
-    assert "sk-INNER" not in str(attrs["llm.input_messages.2.message.content"])
     # Output + flattened value present.
     assert attrs["llm.output_messages.0.message.role"] == "assistant"
     assert attrs["llm.output_messages.0.message.content"] == "Here you go."
-    assert "get_time" in str(attrs["llm.output_messages.0.message.tool_calls"])
+    # Tool calls flattened into OpenInference indexed sub-attrs (NOT a JSON string
+    # — Phoenix .map()s over these, so a string would crash the trace view).
+    out_tc_name = "llm.output_messages.0.message.tool_calls.0.tool_call.function.name"
+    assert attrs[out_tc_name] == "get_time"
+    assert "llm.output_messages.0.message.tool_calls" not in attrs  # no scalar string attr
     assert attrs["input.mime_type"] == genai.MIME_JSON
     assert "You are Sherpa." in str(attrs["input.value"])

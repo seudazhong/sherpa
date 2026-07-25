@@ -122,10 +122,20 @@ def capture_llm_io(
     for i, m in enumerate(messages):
         span.set_attribute(f"llm.input_messages.{i}.message.role", str(m.get("role", "")))
         content = m.get("content")
-        if content is None and m.get("tool_calls"):
-            content = json.dumps(redact(m["tool_calls"]), ensure_ascii=False)
         if content is not None:
             span.set_attribute(f"llm.input_messages.{i}.message.content", _bounded(str(content)))
+        # Assistant tool calls arrive in OpenAI shape ({id, function:{name, arguments}}).
+        # Flatten into OpenInference indexed sub-attributes — NOT a JSON string, which
+        # the Phoenix UI would try to .map() over and crash on.
+        for j, tc in enumerate(m.get("tool_calls") or []):
+            prefix = f"llm.input_messages.{i}.message.tool_calls.{j}.tool_call"
+            fn = tc.get("function") or {}
+            if tc.get("id"):
+                span.set_attribute(f"{prefix}.id", str(tc["id"]))
+            if fn.get("name"):
+                span.set_attribute(f"{prefix}.function.name", str(fn["name"]))
+            if fn.get("arguments") is not None:
+                span.set_attribute(f"{prefix}.function.arguments", _bounded(str(fn["arguments"])))
 
     for i, tool in enumerate(tools or []):
         span.set_attribute(
@@ -136,11 +146,13 @@ def capture_llm_io(
     span.set_attribute("llm.output_messages.0.message.role", "assistant")
     if output_text:
         span.set_attribute("llm.output_messages.0.message.content", _bounded(output_text))
-    if output_tool_calls:
-        calls = [{"name": tc.name, "arguments": tc.args} for tc in output_tool_calls]
+    for j, tc in enumerate(output_tool_calls):
+        prefix = f"llm.output_messages.0.message.tool_calls.{j}.tool_call"
+        span.set_attribute(f"{prefix}.id", tc.id)
+        span.set_attribute(f"{prefix}.function.name", tc.name)
         span.set_attribute(
-            "llm.output_messages.0.message.tool_calls",
-            _bounded(json.dumps(redact(calls), ensure_ascii=False)),
+            f"{prefix}.function.arguments",
+            _bounded(json.dumps(redact(tc.args), ensure_ascii=False)),
         )
 
     span.set_attribute(
