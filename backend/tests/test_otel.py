@@ -120,3 +120,49 @@ def test_genai_attribute_names_are_stable() -> None:
     assert genai.TOOL_NAME == "gen_ai.tool.name"
     assert genai.AGENT_RUN_ID == "agent.run_id"
     assert genai.AGENT_STOP_REASON == "agent.stop_reason"
+    assert genai.SPAN_KIND == "openinference.span.kind"
+
+
+def test_capture_llm_io_writes_openinference_attrs_redacted_and_bounded() -> None:
+    # OBSB.1: full assembled prompt + response as OpenInference attrs, with
+    # secret-named fields masked, message text preserved, and size caps applied.
+    from app.providers import ToolCall
+
+    configure_tracing(force=True, exporter=(exp := InMemorySpanExporter()))
+    tracer = get_tracer("sherpa")
+    big = "x" * 20_000
+    with tracer.start_as_current_span(genai.SPAN_CHAT) as span:
+        genai.capture_llm_io(
+            span,
+            messages=[
+                {"role": "system", "content": "You are Sherpa.\nMemory: user likes tea."},
+                {"role": "user", "content": big},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": "c1", "name": "x", "api_key": "sk-INNER"}],
+                },
+            ],
+            tools=[
+                {"name": "send_email", "input_schema": {"type": "object"}, "api_key": "sk-TOOL"}
+            ],
+            output_text="Here you go.",
+            output_tool_calls=[ToolCall(id="c2", name="get_time", args={})],
+        )
+
+    attrs = dict(exp.get_finished_spans()[0].attributes or {})
+    # Messages captured verbatim (the debug value), incl. the injected memory.
+    assert attrs["llm.input_messages.0.message.role"] == "system"
+    assert "Memory: user likes tea." in str(attrs["llm.input_messages.0.message.content"])
+    # Size cap on a huge message.
+    assert "…[truncated" in str(attrs["llm.input_messages.1.message.content"])
+    # Secret-named fields masked in structured parts (tool schema + tool-call args).
+    assert "sk-TOOL" not in str(attrs["llm.tools.0.tool.json_schema"])
+    assert "send_email" in str(attrs["llm.tools.0.tool.json_schema"])
+    assert "sk-INNER" not in str(attrs["llm.input_messages.2.message.content"])
+    # Output + flattened value present.
+    assert attrs["llm.output_messages.0.message.role"] == "assistant"
+    assert attrs["llm.output_messages.0.message.content"] == "Here you go."
+    assert "get_time" in str(attrs["llm.output_messages.0.message.tool_calls"])
+    assert attrs["input.mime_type"] == genai.MIME_JSON
+    assert "You are Sherpa." in str(attrs["input.value"])

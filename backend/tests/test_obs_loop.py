@@ -145,11 +145,13 @@ async def test_loop_emits_span_tree_tokens_and_generations(
             assert root.attributes[genai.AGENT_STOP_REASON] == "completed"
             assert int(root.attributes[genai.AGENT_LOOP_COUNT]) == 2
 
-            # Content capture OFF by default: every attribute key is gen_ai.*/agent.*
+            # Content capture OFF by default: every attribute key is
+            # gen_ai.*/agent.*/openinference.span.kind, no llm.* content attrs,
             # and no value leaks the prompt text.
             for sp in spans:
                 for key, value in (sp.attributes or {}).items():
-                    assert key.startswith(("gen_ai.", "agent.")), key
+                    assert key.startswith(("gen_ai.", "agent.", "openinference.")), key
+                    assert not key.startswith("llm."), key
                     assert _PROMPT not in str(value)
 
             # Durable model.request/response debug events: digest + counts, no content.
@@ -289,6 +291,48 @@ async def test_disabled_otel_writes_no_model_events_and_estimates(
             assert gens == []  # no per-call usage -> no generation rows
         finally:
             await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_content_capture_on_writes_openinference_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OBSB.1/OBSB.2: with content capture on, the chat span carries the full
+    assembled prompt + response as OpenInference attrs, and the spans carry
+    OpenInference span kinds (AGENT/LLM/TOOL) so Phoenix renders them."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    monkeypatch.setattr(settings, "otel_enabled", True)
+    monkeypatch.setattr(settings, "otel_capture_message_content", True)
+    exporter = InMemorySpanExporter()
+    configure_tracing(force=True, exporter=exporter)
+    async with SessionLocal() as s:
+        try:
+            _tid, _rid, run = await _seed(s)
+            provider = MockProvider(
+                script=[
+                    [ToolCall(id="c1", name="get_time", args={}), Finish("tool_use")],
+                    [TextDelta("It is time to work."), Finish("stop")],
+                ]
+            )
+            await execute_run(
+                s, run=run, provider=provider, registry=build_default_registry(), tier="full"
+            )
+            spans = exporter.get_finished_spans()
+            by_name = {sp.name: sp for sp in spans}
+            # Span kinds for Phoenix classification.
+            assert by_name[genai.SPAN_INVOKE_AGENT].attributes[genai.SPAN_KIND] == genai.KIND_AGENT
+            assert by_name[genai.SPAN_CHAT].attributes[genai.SPAN_KIND] == genai.KIND_LLM
+            assert by_name[genai.SPAN_EXECUTE_TOOL].attributes[genai.SPAN_KIND] == genai.KIND_TOOL
+            # The chat span carries the assembled prompt (system incl. prompt) + response.
+            chat = next(sp for sp in spans if sp.name == genai.SPAN_CHAT)
+            a = dict(chat.attributes or {})
+            assert a["llm.input_messages.0.message.role"] == "system"
+            assert _PROMPT in str(a["input.value"])  # the user's prompt is in the window
+            assert any(k.startswith("llm.tools.") for k in a)  # tool schemas captured
+        finally:
+            await s.rollback()
+            reset_tracing()
 
 
 @pytest.mark.asyncio

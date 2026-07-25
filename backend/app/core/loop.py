@@ -142,6 +142,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
             span,
             {
                 genai.OPERATION_NAME: genai.OP_EXECUTE_TOOL,
+                genai.SPAN_KIND: genai.KIND_TOOL,
                 genai.TOOL_NAME: call.name,
                 genai.TOOL_CALL_ID: call.id,
             },
@@ -420,6 +421,7 @@ async def execute_run(  # type: ignore[no-untyped-def]
             root,
             {
                 genai.OPERATION_NAME: genai.OP_INVOKE_AGENT,
+                genai.SPAN_KIND: genai.KIND_AGENT,
                 genai.AGENT_RUN_ID: str(run.id),
                 genai.AGENT_SESSION_ID: str(run.session_id),
                 genai.AGENT_TENANT_ID: str(run.tenant_id),
@@ -519,6 +521,7 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
                 chat_span,
                 {
                     genai.OPERATION_NAME: genai.OP_CHAT,
+                    genai.SPAN_KIND: genai.KIND_LLM,
                     genai.SYSTEM: provider.name,
                     genai.REQUEST_MODEL: model_name,
                 },
@@ -550,6 +553,16 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
                     genai.USAGE_OUTPUT_TOKENS: call_output_tokens,
                 },
             )
+            # Full assembled prompt + response as OpenInference attrs (OBSB.1),
+            # for the Phoenix UI. Opt-in (PII), redacted + bounded; off by default.
+            if settings.otel_capture_message_content:
+                genai.capture_llm_io(
+                    chat_span,
+                    messages=provider_messages,
+                    tools=schemas,
+                    output_text="".join(text_chunks),
+                    output_tool_calls=tool_calls,
+                )
 
         latency_ms = int((_now() - call_started).total_seconds() * 1000)
         output_chars = sum(len(c) for c in text_chunks)
