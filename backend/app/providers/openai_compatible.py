@@ -17,18 +17,39 @@ import httpx
 from app.providers.base import (
     Finish,
     Message,
+    ProviderError,
     ProviderEvent,
     StopReason,
     TextDelta,
     ToolCall,
     ToolSchema,
 )
+from app.security.redaction import redact
 
 _FINISH: dict[str, StopReason] = {
     "stop": "stop",
     "tool_calls": "tool_use",
     "length": "length",
 }
+
+
+def _error_detail(resp: httpx.Response, *, limit: int = 1000) -> str:
+    """Bounded, redacted body of a failed provider response (safe for logs).
+
+    Requires the body to already be read (`await resp.aread()`), since streaming
+    responses do not expose `.text` until then. JSON is redacted key-wise; any
+    body is truncated to `limit` chars.
+    """
+    try:
+        text = resp.text
+    except Exception:  # body not readable
+        return ""
+    try:
+        parsed = redact(json.loads(text))
+        text = json.dumps(parsed, separators=(",", ":"), ensure_ascii=False)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return text[:limit]
 
 
 def _to_openai_tools(tools: list[ToolSchema] | None) -> list[dict[str, object]] | None:
@@ -96,7 +117,13 @@ class OpenAICompatibleProvider:
                 json=payload,
                 headers=headers,
             ) as resp:
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    await resp.aread()
+                    raise ProviderError(
+                        "provider chat completion failed",
+                        status_code=resp.status_code,
+                        body=_error_detail(resp),
+                    )
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue

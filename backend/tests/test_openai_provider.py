@@ -9,7 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.providers import Finish, OpenAICompatibleProvider, TextDelta, ToolCall
+from app.providers import Finish, OpenAICompatibleProvider, ProviderError, TextDelta, ToolCall
 
 
 def _sse(*chunks: str) -> str:
@@ -90,3 +90,33 @@ async def test_usage_chunk_populates_finish_tokens_and_requests_include_usage() 
     assert finishes[0].input_tokens == 42
     assert finishes[0].output_tokens == 7
     assert seen.get("stream_options") == {"include_usage": True}
+
+
+@pytest.mark.asyncio
+async def test_http_error_raises_provider_error_with_redacted_body() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"error": {"message": "No connected db", "api_key": "sk-should-be-hidden"}},
+        )
+
+    provider = OpenAICompatibleProvider(
+        base_url="http://proxy",
+        api_key="k",
+        model="claude-sonnet-4.6",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(ProviderError) as ei:
+        _ = [e async for e in provider.stream(messages=[{"role": "user", "content": "hi"}])]
+
+    err = ei.value
+    assert err.status_code == 400
+    assert err.body is not None
+    # The real reason is preserved for logs/journal…
+    assert "No connected db" in err.body
+    # …but any secret-named field in the body is redacted.
+    assert "sk-should-be-hidden" not in err.body
+    assert "REDACTED" in err.body
+    # detail() is a compact one-liner carrying status + body.
+    d = err.detail()
+    assert "status=400" in d and "No connected db" in d

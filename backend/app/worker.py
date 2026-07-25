@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import logging
 import uuid
 from typing import Any
 
@@ -39,12 +40,26 @@ from app.observability import (
     project_run_trace,
     shutdown_tracing,
 )
-from app.providers import build_provider
+from app.providers import ProviderError, build_provider
 from app.redis_client import client as redis_client
 from app.scheduler import dispatch_due_agent_tasks, fire_due_schedules, try_acquire_leader
 from app.scheduler.pipeline import sync_and_analyze
 from app.services import channels as chan_svc
 from app.tools import build_default_registry
+
+logger = logging.getLogger("app.worker")
+
+
+def _failure_detail(exc: BaseException, *, limit: int = 1000) -> str:
+    """Compact, bounded description of a run failure for logs + the journal.
+
+    ProviderError contributes its HTTP status + redacted body (the actual reason,
+    e.g. a proxy 400 "No connected db"); anything else contributes its type +
+    message. Never includes a traceback (that goes to the log's exc field).
+    """
+    if isinstance(exc, ProviderError):
+        return exc.detail()[:limit]
+    return f"{type(exc).__name__}: {exc}"[:limit]
 
 
 async def ping(ctx: dict[str, Any]) -> str:
@@ -53,7 +68,10 @@ async def ping(ctx: dict[str, Any]) -> str:
 
 
 async def _settle_failed(
-    tenant_id: uuid.UUID, run_id: uuid.UUID, session_id: uuid.UUID | None
+    tenant_id: uuid.UUID,
+    run_id: uuid.UUID,
+    session_id: uuid.UUID | None,
+    error: str | None = None,
 ) -> None:
     """Settle a run as failed in a fresh transaction after a provider/loop error."""
     async with SessionLocal() as session:
@@ -71,13 +89,16 @@ async def _settle_failed(
         run.settled_at = now
         run.lease_expires_at = None
         await session.flush()
+        payload: dict[str, object] = {"reason": "failed", "status": "failed"}
+        if error:
+            payload["error"] = error
         await append_event(
             session,
             tenant_id=tenant_id,
             run_id=run_id,
             session_id=session_id,
             event_type="run.settled",
-            payload={"reason": "failed", "status": "failed"},
+            payload=payload,
         )
         await session.commit()
 
@@ -276,9 +297,20 @@ async def run_job(ctx: dict[str, Any], run_id: str) -> str:
                 await _deliver_im_reply(rid)
                 await _deliver_scheduled_task(rid)
                 return reason
-            except Exception:
+            except Exception as exc:
                 await session.rollback()
-                await _settle_failed(tenant_id, rid, session_id)
+                detail = _failure_detail(exc)
+                logger.error(
+                    "run failed",
+                    extra={
+                        "run_id": str(rid),
+                        "provider_model": settings.provider_model,
+                        "error_type": type(exc).__name__,
+                        "error_detail": detail,
+                    },
+                    exc_info=exc,
+                )
+                await _settle_failed(tenant_id, rid, session_id, error=detail)
                 await _deliver_scheduled_task(rid)
                 return "failed"
 

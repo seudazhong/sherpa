@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.admission import admit_prompt
 from app.db import SessionLocal, ping_db
+from app.models import Run, Tenant, Trace, User
 from app.models import Session as SessionModel
-from app.models import Tenant, Trace, User
 from app.observability import JsonFormatter, tenant_id_var
 from app.worker import run_job
 
@@ -82,6 +82,76 @@ async def test_run_yields_trace_with_usage_and_rollups() -> None:
             assert sess is not None
             assert sess.output_tokens_rollup > 0
             assert sess.input_tokens_rollup > 0
+    finally:
+        await _drop(tid)
+
+
+@pytest.mark.asyncio
+async def test_run_failure_journals_provider_error_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider HTTP failure settles the run failed AND records the real reason.
+
+    Regression for "400 bad request, logs too terse": the worker used to swallow
+    the exception. Now run.settled carries the ProviderError detail (status + the
+    proxy's actual message) so the failure is diagnosable from the journal.
+    """
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    from collections.abc import AsyncIterator
+
+    from app import worker as worker_mod
+    from app.models import EventJournal
+    from app.providers import ProviderError, ProviderEvent
+
+    class _FailingProvider:
+        name = "openai_compatible"
+        _model = "claude-sonnet-4.6"
+
+        async def stream(self, **_: object) -> AsyncIterator[ProviderEvent]:
+            raise ProviderError(
+                "provider chat completion failed",
+                status_code=400,
+                body='{"error":{"message":"No connected db"}}',
+            )
+            yield  # pragma: no cover — makes this an async generator
+
+    monkeypatch.setattr(worker_mod, "build_provider", lambda: _FailingProvider())
+
+    async with SessionLocal() as s:
+        tid, uid, sid = await _seed(s)
+        adm = await admit_prompt(
+            s,
+            tenant_id=tid,
+            session_id=sid,
+            user_id=uid,
+            client_message_id=uuid.uuid4(),
+            text="trigger a provider error",
+        )
+        await s.commit()
+    try:
+        result = await run_job({}, str(adm.run_id))
+        assert result == "failed"
+        async with SessionLocal() as s:
+            run = await s.get(Run, (tid, adm.run_id))
+            assert run is not None and run.status == "failed"
+            settled = (
+                (
+                    await s.execute(
+                        select(EventJournal).where(
+                            EventJournal.tenant_id == tid,
+                            EventJournal.run_id == adm.run_id,
+                            EventJournal.event_type == "run.settled",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(settled) == 1
+            error = settled[0].payload_redacted.get("error", "")
+            assert "status=400" in error
+            assert "No connected db" in error
     finally:
         await _drop(tid)
 

@@ -6,6 +6,7 @@ from app.providers.base import (
     Finish,
     Message,
     Provider,
+    ProviderError,
     ProviderEvent,
     ReasoningDelta,
     StopReason,
@@ -19,6 +20,7 @@ from app.providers.openai_compatible import OpenAICompatibleProvider
 
 __all__ = [
     "Provider",
+    "ProviderError",
     "ProviderEvent",
     "TextDelta",
     "ReasoningDelta",
