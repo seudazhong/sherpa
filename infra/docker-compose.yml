@@ -147,6 +147,24 @@ services:
     ports: ["5173:5173"]
     depends_on: [web]
 
+  # Optional agent-observability UI (ADR-033 Phase B). NOT started with the core
+  # stack — enable with `--profile observability`. Reuses the existing Postgres
+  # (separate `phoenix` schema, no new datastore). Point the app at it with
+  # OTEL_ENABLED=true, OTEL_CAPTURE_MESSAGE_CONTENT=true (opt-in, PII), and
+  # OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317, then restart web+worker.
+  # UI: http://localhost:6006.
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    profiles: ["observability"]
+    environment:
+      PHOENIX_SQL_DATABASE_URL: postgresql://${POSTGRES_USER:-sherpa}:${POSTGRES_PASSWORD:-sherpa}@postgres:5432/${POSTGRES_DB:-sherpa}
+      PHOENIX_SQL_DATABASE_SCHEMA: phoenix
+    ports:
+      - "6006:6006"   # Phoenix UI + OTLP HTTP collector
+      - "4317:4317"   # OTLP gRPC collector
+    depends_on:
+      postgres: {condition: service_healthy}
+
 volumes:
   pgdata:
   redisdata:
