@@ -199,11 +199,11 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 导出/删除导入数据 | ✅ | ✅ | ❌(破坏性,不给 agent) | Activity(Export/Delete)✅ | non_idempotent_write | ask/human |
 | QQ/IM 入站对话 + IM 审批(post-v1 里程碑4) | channels ✅ | POST /channels/qq/webhook · GET /channels · /simulate · /threads ✅ | 复用有界循环(非独立 tool);审批复用 v1 基座 | Messaging(/messaging)✅ | idempotent_write | HMAC+owner allowlist |
 | agentic email 入站 + 邮件审批 + 统一发信(post-v1 里程碑5) | notifications(build_email_sender)✅ · channels ✅ | POST /channels/email/webhook · /simulate · GET /channels/threads ✅ | `send_email`(走统一发信接缝,真实 AgentMail)✅;入站复用有界循环;审批复用基座 | Messaging(email 段)✅ | non_idempotent_write | Svix+owner allowlist · **ask** |
-| 知识库:检索(带引用)(ADR-036, KB0 设计中) | ⬜ knowledge | POST /knowledge/search ⬜ | `search_knowledge` ⬜ | Knowledge(/library)检索测试 · 静态稿✅/页面⬜ | read_only | allow |
-| 知识库:列来源(ADR-036) | ⬜ knowledge | GET /knowledge/sources ⬜ | `list_knowledge_sources` ⬜ | Knowledge 主页 · 静态稿✅/页面⬜ | read_only | allow |
-| 知识库:加来源(从 Drive 文件)(ADR-036) | ⬜ knowledge | POST /knowledge/sources ⬜ | `add_knowledge_source`(需显式 file_id) ⬜ | Knowledge「从 Drive 添加」· 静态稿✅/页面⬜ | idempotent_write | allow |
-| 知识库:重建来源(ADR-036) | ⬜ knowledge | POST /knowledge/sources/{id}/reindex ⬜ | `reindex_knowledge_source` ⬜ | 来源详情「重建」· 静态稿✅/页面⬜ | idempotent_write | allow |
-| 知识库:删除来源(ADR-036) | ⬜ knowledge | DELETE /knowledge/sources/{id} ⬜ | `remove_knowledge_source`(破坏性) ⬜ | 来源详情「移除」+ 确认 · 静态稿✅/页面⬜ | non_idempotent_write | **ask** |
+| 知识库:检索(带引用)(ADR-036, KB3/KB4) | ✅ knowledge_search | POST /knowledge/search ✅ | `search_knowledge` ✅ | Knowledge(/library)检索测试 · 静态稿✅/页面⬜ | read_only | allow |
+| 知识库:列来源(ADR-036, KB4) | ✅ knowledge | GET /knowledge/sources ✅ | `list_knowledge_sources` ✅ | Knowledge 主页 · 静态稿✅/页面⬜ | read_only | allow |
+| 知识库:加来源(从 Drive 文件)(ADR-036, KB1/KB4) | ✅ knowledge | POST /knowledge/sources ✅ | `add_knowledge_source`(按 path 解析) ✅ | Knowledge「从 Drive 添加」· 静态稿✅/页面⬜ | idempotent_write | allow |
+| 知识库:重建来源(ADR-036, KB1/KB4) | ✅ knowledge | POST /knowledge/sources/{id}/reindex ✅ | `reindex_knowledge_source` ✅ | 来源详情「重建」· 静态稿✅/页面⬜ | idempotent_write | allow |
+| 知识库:删除来源(ADR-036, KB1/KB4) | ✅ knowledge | DELETE /knowledge/sources/{id} ✅ | `remove_knowledge_source`(破坏性→审批) ✅ | 来源详情「移除」+ 确认 · 静态稿✅/页面⬜ | non_idempotent_write | **ask** |
 
 **剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)· **Knowledge(/library)页(ADR-036 KB0：静态稿已交付，后端+页面 KB1–KB5 落地)**。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
 
