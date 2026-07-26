@@ -567,6 +567,44 @@ async def _dispatch_agent_tasks() -> str:
     return f"dispatched={len(run_ids)}"
 
 
+async def knowledge_ingest_job(
+    ctx: dict[str, Any], tenant_id: str, source_id: str, generation: int
+) -> str:
+    """Process one durable knowledge ingestion job (ADR-036 KB2b): snapshot → parse →
+    chunk → embed + fts → generation-fenced activate. Re-entrant; the job/version rows
+    are the recovery source of truth."""
+    from app.services import knowledge_ingest as ki
+
+    async with SessionLocal() as session:
+        reason = await ki.process_ingestion(
+            session,
+            tenant_id=uuid.UUID(tenant_id),
+            source_id=uuid.UUID(source_id),
+            generation=int(generation),
+            lease_owner=worker_identity(),
+        )
+        await session.commit()
+    logger.info(
+        "knowledge ingest job",
+        extra={"source_id": source_id, "generation": generation, "reason": reason},
+    )
+    return reason
+
+
+async def knowledge_ingest_tick(ctx: dict[str, Any]) -> str:
+    """Leader-gated at-least-once recovery: (re)dispatch queued or lease-expired
+    ingestion jobs (crash-safety net for the explicit enqueue on create/reindex)."""
+    if not await try_acquire_leader("knowledge_ingest_tick", ttl_ms=55_000):
+        return "not_leader"
+    from app.services import knowledge_ingest as ki
+
+    async with SessionLocal() as session:
+        jobs = await ki.recover_stuck_jobs(session)
+    for tid, sid, gen in jobs:
+        await queue.enqueue_knowledge_ingest(tid, sid, gen)
+    return f"redispatched={len(jobs)}"
+
+
 class WorkerSettings:
     functions = [
         ping,
@@ -575,6 +613,7 @@ class WorkerSettings:
         sync_and_analyze_job,
         approval_resume_job,
         agent_task_dispatch_job,
+        knowledge_ingest_job,
     ]
     cron_jobs = [
         cron(scheduler_tick, second=0),
@@ -582,6 +621,7 @@ class WorkerSettings:
         cron(agent_task_tick, second={5, 35}),
         cron(periodic_connector_sync, minute=set(range(0, 60, 5))),
         cron(drive_maintenance, minute=set(range(0, 60, 10))),
+        cron(knowledge_ingest_tick, second={10, 40}),
     ]
     on_startup = _startup
     on_shutdown = _shutdown

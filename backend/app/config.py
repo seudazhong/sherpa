@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     embedding_dim: int = 1024
     embedding_api_key: str = ""  # only for the openai_compatible external override
 
+    # Knowledge base (ADR-036): source-backed document KB (reuses the EMBEDDING_*
+    # profile above). CJK lexical search resolves a stable Postgres text-search config
+    # at deploy time (zhparser, else an app-tokenized fallback).
+    knowledge_text_search_config: str = "sherpa_text"
+    knowledge_lexical_backend: str = "zhparser"  # zhparser | app_jieba
+    knowledge_max_file_bytes: int = 25 * 1024 * 1024
+    knowledge_max_pages: int = 500
+    knowledge_chunk_target_tokens: int = 450
+    knowledge_chunk_overlap_tokens: int = 64
+    knowledge_retrieval_k: int = 6
+    knowledge_retrieval_min_score: float = 0.0
+    knowledge_evidence_retention_days: int = 30
+
     # Object storage for personal files (ADR-012). "memory" keeps dev/tests
     # offline; "minio" targets an S3-compatible MinIO service.
     storage_kind: str = "memory"
