@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 import uuid
 
 from sqlalchemy import delete, select
@@ -35,6 +36,16 @@ from app.services.context import CallerContext
 logger = logging.getLogger("app.knowledge.ingest")
 
 _LEASE_SECONDS = 600
+_TS_CONFIG_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def _ts_config() -> str:
+    """The (trusted, deploy-config) text-search config name, validated as a bare
+    identifier so it can be safely inlined (SQLAlchemy mis-parses `:param::regconfig`)."""
+    cfg = settings.knowledge_text_search_config
+    if not _TS_CONFIG_RE.match(cfg):
+        raise ValueError(f"invalid text-search config: {cfg!r}")
+    return cfg
 
 
 def _now() -> datetime.datetime:
@@ -91,19 +102,19 @@ async def _populate_fts(db: AsyncSession, tenant_id: uuid.UUID, version_id: uuid
     """Best-effort lexical index under the `sherpa_text` CJK config. Skipped (chunks
     keep a NULL `fts`) where zhparser is unavailable (e.g. CI) — the lexical branch is
     dormant there, consistent with migration 0027."""
-    cfg = settings.knowledge_text_search_config
     try:
+        cfg = _ts_config()
         async with db.begin_nested():
             await db.execute(sql_text("SET LOCAL zhparser.multi_short = on"))
             await db.execute(
                 sql_text(
-                    "UPDATE knowledge_chunks SET fts = to_tsvector(:cfg::regconfig, lexical_text) "
+                    f"UPDATE knowledge_chunks SET fts = to_tsvector('{cfg}', lexical_text) "
                     "WHERE tenant_id = :t AND version_id = :v"
                 ),
-                {"cfg": cfg, "t": tenant_id, "v": version_id},
+                {"t": tenant_id, "v": version_id},
             )
     except Exception as exc:  # noqa: BLE001 - lexical is optional; vector still works
-        logger.warning("knowledge fts skipped (%s config unavailable): %s", cfg, exc)
+        logger.warning("knowledge fts skipped (sherpa_text unavailable): %s", exc)
 
 
 async def process_ingestion(

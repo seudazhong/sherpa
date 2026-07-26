@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     knowledge_chunk_target_tokens: int = 450
     knowledge_chunk_overlap_tokens: int = 64
     knowledge_retrieval_k: int = 6
-    knowledge_retrieval_min_score: float = 0.0
+    knowledge_retrieval_min_score: float = 0.35  # vector cosine-similarity floor (0..1)
     knowledge_evidence_retention_days: int = 30
 
     # Object storage for personal files (ADR-012). "memory" keeps dev/tests

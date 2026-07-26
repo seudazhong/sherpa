@@ -115,7 +115,7 @@ class Settings(BaseSettings):
     knowledge_chunk_target_tokens: int = Field(default=450, ge=64, le=2048)
     knowledge_chunk_overlap_tokens: int = Field(default=64, ge=0, le=512)
     knowledge_retrieval_k: int = Field(default=6, ge=1, le=50)            # hits returned to the model
-    knowledge_retrieval_min_score: float = Field(default=0.0, ge=0.0)    # below => "insufficient evidence"
+    knowledge_retrieval_min_score: float = Field(default=0.35, ge=0.0)   # vector cosine-similarity floor (0..1); below on all branches => "insufficient evidence"
     knowledge_evidence_retention_days: int = Field(default=30, ge=1)     # knowledge_retrieval_evidence TTL
 
     # Agent observability (ADR-033): OpenTelemetry gen_ai spans, off by default.
@@ -334,7 +334,7 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Knowledge | `KNOWLEDGE_CHUNK_TARGET_TOKENS` | `int`, 64–2048 | `450` | No | No | Structural chunk target; tune against the golden set. |
 | Knowledge | `KNOWLEDGE_CHUNK_OVERLAP_TOKENS` | `int`, 0–512 | `64` | No | No | Chunk overlap. |
 | Knowledge | `KNOWLEDGE_RETRIEVAL_K` | `int`, 1–50 | `6` | No | No | Hits returned to the model per `search_knowledge`. |
-| Knowledge | `KNOWLEDGE_RETRIEVAL_MIN_SCORE` | `float` ≥ 0 | `0.0` | No | No | Below this top score ⇒ `sufficient=false` ("insufficient evidence"). |
+| Knowledge | `KNOWLEDGE_RETRIEVAL_MIN_SCORE` | `float` ≥ 0 | `0.35` | No | No | Vector cosine-similarity floor (0..1); a query clearing no branch ⇒ `sufficient=false` ("insufficient evidence"). |
 | Knowledge | `KNOWLEDGE_EVIDENCE_RETENTION_DAYS` | `int` ≥ 1 | `30` | No | No | `knowledge_retrieval_evidence` TTL (GC sweep). |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
 | Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | `AnyHttpUrl` | None | No | No | OTLP endpoint (e.g. self-hosted Phoenix `http://phoenix:4317`); unset = console/in-memory exporter only. |
