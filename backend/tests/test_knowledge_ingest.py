@@ -117,15 +117,19 @@ async def test_ingest_file_changed_terminates() -> None:
                 s, ctx, parent_id=None, name="doc.md", data=_MD, content_type="text/markdown"
             )
             src = await ksvc.create_source(s, ctx, file_id=node.id)
-            # Overwrite the backing file after the source (gen 1) was enqueued.
-            await drive_svc.upload(
-                s,
-                ctx,
-                parent_id=None,
-                name="doc.md",
-                data=_MD + b"\n\n# More\n\nx",
-                content_type="text/markdown",
+            # Defensive branch: the file changed out-of-band (bypassing the overwrite
+            # hook) so the version's expected hash no longer matches the readable file,
+            # while its generation is still current. Snapshot must refuse to index it.
+            ver = await s.scalar(
+                select(KnowledgeSourceVersion).where(
+                    KnowledgeSourceVersion.tenant_id == ctx.tenant_id,
+                    KnowledgeSourceVersion.source_id == src.id,
+                    KnowledgeSourceVersion.generation == 1,
+                )
             )
+            assert ver is not None
+            ver.expected_file_hash = b"\x22" * 32
+            await s.flush()
             reason = await ki.process_ingestion(
                 s, tenant_id=ctx.tenant_id, source_id=src.id, generation=1, lease_owner="w1"
             )

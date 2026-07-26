@@ -483,6 +483,10 @@ async def _upload_into(
         await db.flush()
         if prior_hash is not None and prior_hash != content_hash:
             await _recompute_blob(db, ctx, uid, prior_hash)
+            # Knowledge hook: a changed backing file marks its sources stale (ADR-036).
+            from app.services import knowledge as _knowledge
+
+            await _knowledge.mark_stale_for_file(db, ctx, file_id=existing.id)
 
     await _recompute_blob(db, ctx, uid, content_hash)
     await _recompute_used(db, ctx, uid)
@@ -701,6 +705,10 @@ async def trash(db: AsyncSession, ctx: CallerContext, node_id: uuid.UUID) -> Dri
             n.trashed_at = now
             n.purge_after = purge_after
     await db.flush()
+    # Knowledge hook: a deleted file tombstones its sources (retrieval exclusion; ADR-036).
+    from app.services import knowledge as _knowledge
+
+    await _knowledge.tombstone_sources_for_files(db, ctx, file_ids=ids)
     await db.refresh(node, ["updated_at"])
     return node
 
@@ -757,6 +765,10 @@ async def purge(db: AsyncSession, ctx: CallerContext, node_id: uuid.UUID) -> Non
         hashes.update(h for h in vers if h is not None)
         await db.delete(n)
     await db.flush()
+    # Knowledge hook: purged files tombstone their sources (ADR-036).
+    from app.services import knowledge as _knowledge
+
+    await _knowledge.tombstone_sources_for_files(db, ctx, file_ids=ids)
     for h in hashes:
         await _recompute_blob(db, ctx, uid, h)
     await _recompute_used(db, ctx, uid)

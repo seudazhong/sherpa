@@ -536,6 +536,22 @@ async def drive_maintenance(ctx: dict[str, Any]) -> str:
     return f"gc={gced} orphans={swept}"
 
 
+async def knowledge_maintenance(ctx: dict[str, Any]) -> str:
+    """Leader-gated: purge expired retrieval evidence, hard-delete tombstoned sources,
+    and sweep orphan snapshot objects (ADR-036 KB2c)."""
+    if not await try_acquire_leader("knowledge_maintenance", ttl_ms=280_000):
+        return "not_leader"
+    from app.services import knowledge as ksvc
+
+    async with SessionLocal() as session:
+        evidence = await ksvc.purge_expired_evidence(session)
+        sources = await ksvc.gc_tombstoned_sources(session)
+        await session.commit()
+    async with SessionLocal() as session:
+        snapshots = await ksvc.sweep_orphan_snapshots(session)
+    return f"evidence={evidence} sources={sources} snapshots={snapshots}"
+
+
 async def agent_task_tick(ctx: dict[str, Any]) -> str:
     """Leader-gated: dispatch due `agent_task` firings as autonomous runs (ADR-031).
 
@@ -622,6 +638,7 @@ class WorkerSettings:
         cron(periodic_connector_sync, minute=set(range(0, 60, 5))),
         cron(drive_maintenance, minute=set(range(0, 60, 10))),
         cron(knowledge_ingest_tick, second={10, 40}),
+        cron(knowledge_maintenance, minute=set(range(5, 60, 10))),
     ]
     on_startup = _startup
     on_shutdown = _shutdown
