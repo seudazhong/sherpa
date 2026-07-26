@@ -8,7 +8,8 @@
 # URLs once up:  UI http://localhost:5173  ·  API http://localhost:8000
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    build: ./postgres-zhparser
+    image: sherpa-pg-zhparser:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-sherpa}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sherpa}
