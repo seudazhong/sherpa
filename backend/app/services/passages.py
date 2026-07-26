@@ -34,7 +34,7 @@ def _require_user(ctx: CallerContext) -> uuid.UUID:
 
 
 def _model_tag() -> str:
-    return settings.embedding_model if settings.provider_kind != "mock" else "mock"
+    return settings.embedding_model if settings.embedding_kind != "mock" else "mock"
 
 
 @dataclasses.dataclass(frozen=True)

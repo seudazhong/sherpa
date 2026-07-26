@@ -42,7 +42,7 @@ class MemoryPassage(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     text_content: Mapped[str] = mapped_column(Text)
-    embedding: Mapped[list[float]] = mapped_column(Vector(1536))
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024))
     embedding_model: Mapped[str] = mapped_column(Text)
     content_hash: Mapped[bytes] = mapped_column(LargeBinary)
     source: Mapped[str] = mapped_column(Text, server_default="agent")

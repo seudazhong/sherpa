@@ -68,6 +68,14 @@ services:
       PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-http://host.docker.internal:4000}
       PROVIDER_MODEL: ${PROVIDER_MODEL:-claude-sonnet-4.6}
       PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
+      # Embeddings (ADR-032): decoupled from the chat provider. Default mock
+      # (offline). Set EMBEDDING_KIND=ollama + run `--profile embeddings` for the
+      # bundled local bge-m3 (1024-d). Web serves REST memory search, so it embeds too.
+      EMBEDDING_KIND: ${EMBEDDING_KIND:-mock}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://ollama:11434}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       STORAGE_KIND: ${STORAGE_KIND:-minio}
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-sherpa}
@@ -113,6 +121,14 @@ services:
       PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-http://host.docker.internal:4000}
       PROVIDER_MODEL: ${PROVIDER_MODEL:-claude-sonnet-4.6}
       PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
+      # Embeddings (ADR-032): the worker runs archival memory writes/formation.
+      # Default mock (offline); set EMBEDDING_KIND=ollama + `--profile embeddings`
+      # for the bundled local bge-m3 (1024-d). Decoupled from PROVIDER_*.
+      EMBEDDING_KIND: ${EMBEDDING_KIND:-mock}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://ollama:11434}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       STORAGE_KIND: ${STORAGE_KIND:-minio}
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-sherpa}
@@ -147,6 +163,26 @@ services:
     ports: ["5173:5173"]
     depends_on: [web]
 
+  # Bundled local embedding model (ADR-032). Behind the `embeddings` profile so
+  # the core stack stays light (default EMBEDDING_KIND=mock). Enable real semantic
+  # memory with `docker compose --profile embeddings up` and set
+  # EMBEDDING_KIND=ollama. Pulls bge-m3 (~1.2 GB, 1024-d, multilingual incl. CJK)
+  # on first boot; personal memory is embedded on-box and never leaves the machine.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["embeddings"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "ollama serve & until ollama list >/dev/null 2>&1; do sleep 1; done; ollama pull ${EMBEDDING_MODEL:-bge-m3}; wait"
+    volumes: ["ollamadata:/root/.ollama"]
+    ports: ["11434:11434"]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q ${EMBEDDING_MODEL:-bge-m3}"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
   # Optional agent-observability UI (ADR-033 Phase B). NOT started with the core
   # stack — enable with `--profile observability`. Reuses the existing Postgres
   # (separate `phoenix` schema, no new datastore). Point the app at it with
@@ -169,3 +205,4 @@ volumes:
   pgdata:
   redisdata:
   miniodata:
+  ollamadata:

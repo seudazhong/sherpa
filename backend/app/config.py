@@ -28,8 +28,15 @@ class Settings(BaseSettings):
     provider_api_key: str = ""
     provider_model: str = "claude-sonnet-4.6"
     provider_timeout_seconds: int = 60
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dim: int = 1536
+
+    # Embeddings (ADR-032): a Sherpa-bundled local model by default, decoupled
+    # from the chat provider. embedding_dim MUST equal the memory_passages vector
+    # column width; changing the model/dim is a full re-embed, not a toggle.
+    embedding_kind: str = "mock"  # mock | ollama | openai_compatible
+    embedding_base_url: str | None = None  # e.g. http://ollama:11434
+    embedding_model: str = "bge-m3"
+    embedding_dim: int = 1024
+    embedding_api_key: str = ""  # only for the openai_compatible external override
 
     # Object storage for personal files (ADR-012). "memory" keeps dev/tests
     # offline; "minio" targets an S3-compatible MinIO service.
