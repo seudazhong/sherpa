@@ -617,6 +617,56 @@ correlated by `run_id`.
 `input_digest` lets you verify/correlate an exact assembled input without
 persisting its text. Content capture is span-only and opt-in (ADR-033/ADR-019).
 
+### 2.8 Knowledge ingestion and retrieval (ADR-036, post-v1 — additive)
+
+Knowledge ingestion is a durable job (outbox + lease/fencing, §4). Stage transitions
+and retrieval invocations emit additive events. Document **text never enters the
+append-only journal** — retrieval excerpts live in the retention-scoped
+`knowledge_retrieval_evidence` table; the journal carries only references + bounded
+metadata (ADR-016/021).
+
+#### `knowledge.ingest`
+
+One event per ingestion stage transition (observability + recovery).
+
+```text
+{
+  source_id: uuid,
+  version_id: uuid | null,
+  generation: integer,
+  stage: string,                 // snapshot | parse | chunk | embed | activate | done | failed
+  chunk_count: integer | null,
+  termination_reason: string | null   // done | file_changed | unsupported_* | superseded | error:...
+}
+```
+
+On `activate`, the `active_version_id` switch is **generation-fenced**: an obsolete
+job's activate is a named no-op (`termination_reason='superseded'`), never a
+reactivation of an old version. A changed/missing source file terminates with
+`file_changed` instead of indexing the wrong bytes; the previous `ready` version stays
+active on any failure.
+
+#### `knowledge.searched`
+
+One event per `search_knowledge` invocation. Carries references + counts, **not**
+excerpts.
+
+```text
+{
+  retrieval_invocation_id: uuid,
+  tool_call_id: string | null,
+  query_chars: integer,
+  candidates: { lexical: integer, vector: integer, returned: integer },
+  citation_refs: string[],       // "K:<tool_call_id>:N"
+  sufficient: boolean
+}
+```
+
+The provider-visible excerpts for these refs are persisted to
+`knowledge_retrieval_evidence` (retention-scoped) for crash/history replay. History
+replay resolves each ref through that store and the source tombstone state; a deleted
+source renders as `[knowledge source deleted]`, never a replayed excerpt.
+
 ## 3. Delivery and SSE
 
 ### 3.1 Required path

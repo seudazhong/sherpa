@@ -1580,3 +1580,72 @@ class MemoryBlockHistoryItem(StrictModel):
 - `replace`/`remove` require `old` to match **exactly one** substring, else `422`.
 - Both the block value and its history are escaped on render; content may originate
   from untrusted email and is threat-scanned before injection (ADR-009/019).
+
+### 10.4 Knowledge base (ADR-036)
+
+Source-backed document knowledge with cited retrieval. Capability layer
+`services/knowledge.py` behind thin REST (below) + the `*knowledge*` agent tools
+(ADR-023 dual adapter). Sources are Drive files; retrieval is hybrid (zhparser lexical
++ pgvector, RRF) with structured citations. UI is the SPA route `/library` (the REST
+prefix `/knowledge` is API-only — no route collision).
+
+```python
+class KnowledgeSource(StrictModel):
+    id: UUID
+    file_id: UUID | None
+    display_name: str
+    status: Literal["queued","parsing","chunking","embedding","ready","stale","failed","deleting"]
+    active_version: int | None
+    language: str | None
+    chunk_count: int
+    failure_code: str | None       # bounded, named
+    updated_at: datetime
+
+class KnowledgeSourceCreate(StrictModel):
+    file_id: UUID                  # an owned Drive file
+    display_name: str | None = None
+
+class KnowledgeSearchQuery(StrictModel):
+    query: str
+    k: int = 6
+
+class KnowledgeHit(StrictModel):
+    citation_ref: str              # "K:<tool_call_id>:N" (unique within the run)
+    source_id: UUID
+    source_version_id: UUID
+    chunk_id: UUID
+    title: str
+    locator: dict                  # {"page": int?, "heading": str?}
+    excerpt: str                   # bounded
+    score: float
+    matched_by: list[Literal["lexical","vector"]]
+
+class KnowledgeSearchResult(StrictModel):
+    query: str
+    retrieval_invocation_id: UUID
+    hits: list[KnowledgeHit]
+    sufficient: bool               # false => the model must answer "insufficient evidence"
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /knowledge/sources` | none → `list[KnowledgeSource]` | Session | `200`, `401` |
+| `POST /knowledge/sources` | `KnowledgeSourceCreate` → `KnowledgeSource` | Session + CSRF | `201`, `401`, `404`, `409`, `422` |
+| `GET /knowledge/sources/{id}` | none → `KnowledgeSource` | Session | `200`, `401`, `404` |
+| `POST /knowledge/sources/{id}/reindex` | none → `KnowledgeSource` | Session + CSRF | `202`, `401`, `404`, `409` |
+| `DELETE /knowledge/sources/{id}` | none → `204` | Session + CSRF | `204`, `401`, `404` |
+| `POST /knowledge/search` | `KnowledgeSearchQuery` → `KnowledgeSearchResult` | Session | `200`, `401`, `422` |
+
+- `POST /knowledge/sources` requires an **owned** `file_id`; it enqueues a durable
+  ingestion job (async — `status` starts `queued`). A duplicate add for the same file
+  version is idempotent (`409`/returns the existing source).
+- `reindex` bumps `desired_generation` + enqueues a job; the previous `ready` version
+  stays searchable until the new one activates (never a half-built index).
+- `DELETE` tombstones the source (immediate retrieval exclusion) then purges
+  snapshots/chunks/vectors/evidence durably; it does **not** delete the Drive file.
+- `POST /knowledge/search` filters tenant/user/visibility/ready/active-version **before**
+  ranking; `sufficient=false` when the top score is below `knowledge_retrieval_min_score`.
+- Agent tools mirror these: `search_knowledge` / `list_knowledge_sources` /
+  `add_knowledge_source` / `reindex_knowledge_source` are `allow`; `remove_knowledge_source`
+  is **`ask`** (approval-gated). Retrieval results are **untrusted evidence** (`role=tool`),
+  never instructions (ADR-009); a document cannot grant permission or change tool scope.

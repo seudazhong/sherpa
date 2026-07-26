@@ -100,6 +100,24 @@ class Settings(BaseSettings):
     memory_autoform_enabled: bool = False
     memory_autoform_every_turns: int = Field(default=0, ge=0)  # 0 = on run settle
 
+    # Knowledge base (ADR-036): source-backed document KB. Embedding reuses the
+    # EMBEDDING_* profile above (ollama/bge-m3, 1024-d). CJK lexical search resolves a
+    # stable Postgres text-search config name at deploy time (zhparser, else an
+    # app-tokenized fallback); the query- and index-side tokenizer versions must match.
+    knowledge_text_search_config: str = Field(default="sherpa_text", min_length=1)
+    knowledge_lexical_backend: Literal["zhparser", "app_jieba"] = "zhparser"
+    knowledge_allowed_mime: list[str] = Field(default_factory=lambda: [
+        "application/pdf", "text/markdown", "text/plain",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ])
+    knowledge_max_file_bytes: int = Field(default=25 * 1024 * 1024, ge=1)  # per-source ingest cap
+    knowledge_max_pages: int = Field(default=500, ge=1)
+    knowledge_chunk_target_tokens: int = Field(default=450, ge=64, le=2048)
+    knowledge_chunk_overlap_tokens: int = Field(default=64, ge=0, le=512)
+    knowledge_retrieval_k: int = Field(default=6, ge=1, le=50)            # hits returned to the model
+    knowledge_retrieval_min_score: float = Field(default=0.0, ge=0.0)    # below => "insufficient evidence"
+    knowledge_evidence_retention_days: int = Field(default=30, ge=1)     # knowledge_retrieval_evidence TTL
+
     # Agent observability (ADR-033): OpenTelemetry gen_ai spans, off by default.
     # A derived diagnostic layer over the ADR-016 journal — never a source of truth.
     otel_enabled: bool = False
@@ -308,6 +326,16 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Embeddings | `EMBEDDING_API_KEY` | `SecretStr` | None | when `openai_compatible` | **Yes** | Only for the external-provider embedding override. |
 | Memory | `MEMORY_AUTOFORM_ENABLED` | `bool` | `false` | No | No | Background memory-formation kill-switch (ADR-032). |
 | Memory | `MEMORY_AUTOFORM_EVERY_TURNS` | `int` ≥ 0 | `0` | No | No | `0` = form on run settle; `N` = every N user turns. |
+| Knowledge | `KNOWLEDGE_TEXT_SEARCH_CONFIG` | `str` | `sherpa_text` | No | No | Postgres TS config name for CJK lexical (ADR-036); query- and index-side tokenizer versions must match. |
+| Knowledge | `KNOWLEDGE_LEXICAL_BACKEND` | `zhparser \| app_jieba` | `zhparser` | No | No | Index-time tokenizer; `app_jieba` fallback stores tokenized `lexical_text`. |
+| Knowledge | `KNOWLEDGE_ALLOWED_MIME` | `list[str]` | PDF/MD/TXT/DOCX | No | No | Ingest allowlist; archives/OCR/executable formats deferred. |
+| Knowledge | `KNOWLEDGE_MAX_FILE_BYTES` | `int` ≥ 1 | `26214400` | No | No | Per-source ingest cap (25 MiB). |
+| Knowledge | `KNOWLEDGE_MAX_PAGES` | `int` ≥ 1 | `500` | No | No | Per-source page cap. |
+| Knowledge | `KNOWLEDGE_CHUNK_TARGET_TOKENS` | `int`, 64–2048 | `450` | No | No | Structural chunk target; tune against the golden set. |
+| Knowledge | `KNOWLEDGE_CHUNK_OVERLAP_TOKENS` | `int`, 0–512 | `64` | No | No | Chunk overlap. |
+| Knowledge | `KNOWLEDGE_RETRIEVAL_K` | `int`, 1–50 | `6` | No | No | Hits returned to the model per `search_knowledge`. |
+| Knowledge | `KNOWLEDGE_RETRIEVAL_MIN_SCORE` | `float` ≥ 0 | `0.0` | No | No | Below this top score ⇒ `sufficient=false` ("insufficient evidence"). |
+| Knowledge | `KNOWLEDGE_EVIDENCE_RETENTION_DAYS` | `int` ≥ 1 | `30` | No | No | `knowledge_retrieval_evidence` TTL (GC sweep). |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
 | Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | `AnyHttpUrl` | None | No | No | OTLP endpoint (e.g. self-hosted Phoenix `http://phoenix:4317`); unset = console/in-memory exporter only. |
 | Observability | `OTEL_CAPTURE_MESSAGE_CONTENT` | `bool` | `false` | No | No | Opt-in capture of prompt/completion/tool content into spans (PII); redacted when on. Also set the upstream `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` if using OTel auto-instrumentation. |

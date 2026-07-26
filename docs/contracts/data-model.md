@@ -2347,3 +2347,179 @@ Notes:
 - Grants carry no `policy_version` binding (they are durable rules); the action they
   authorize is still classified and executed under the current policy + effect
   semantics (ADR-020).
+
+### Knowledge base (ADR-036, source-backed documents — additive, post-v1)
+
+A separate `knowledge_*` subsystem (**not** an extension of `memory_passages`).
+**Canonical** = sources + versions + immutable object-store snapshots; **derived /
+rebuildable** = chunks + lexical `tsvector` + embeddings. Reuses Drive files as the
+visible origin, the ADR-032 `ollama/bge-m3` embedding profile, pgvector, and a stable
+`sherpa_text` CJK text-search config (zhparser; app-jieba fallback). All tables carry
+`tenant_id` + composite tenant-scoped keys (ADR-015).
+
+```sql
+-- One reviewed active embedding profile in the first release. A model/dim change is a
+-- NEW profile + full reindex; never mix vectors from two profiles in one index.
+CREATE TABLE embedding_profiles (
+    tenant_id  uuid NOT NULL,
+    id         uuid NOT NULL,
+    name       text NOT NULL,                 -- e.g. "emb_local_v1"
+    provider   text NOT NULL,                 -- ollama|openai_compatible
+    model      text NOT NULL,                 -- bge-m3
+    dim        integer NOT NULL,              -- MUST equal knowledge_chunks.embedding width
+    normalize  text NOT NULL DEFAULT 'cosine',
+    privacy    text NOT NULL DEFAULT 'local', -- local|external (disclosed in the UI)
+    is_active  boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_embedding_profiles PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_ep_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT ck_ep_dim CHECK (dim BETWEEN 1 AND 4096),
+    CONSTRAINT ck_ep_privacy CHECK (privacy IN ('local','external'))
+);
+
+-- A knowledge source = one user-visible document origin (a Drive file in v1). Holds
+-- lifecycle status + a pointer to the currently-searchable (fully-indexed) version.
+CREATE TABLE knowledge_sources (
+    tenant_id          uuid NOT NULL,
+    id                 uuid NOT NULL,
+    user_id            uuid NOT NULL,
+    source_kind        text NOT NULL DEFAULT 'file',   -- file only in v1; connector/url deferred
+    file_id            uuid,                            -- Drive node (source_kind='file')
+    display_name       text NOT NULL,
+    visibility         text NOT NULL DEFAULT 'private', -- team/shared deferred
+    trust_level        text NOT NULL DEFAULT 'untrusted',
+    status             text NOT NULL DEFAULT 'queued',  -- queued|parsing|chunking|embedding|ready|stale|failed|deleting
+    active_version_id  uuid,                            -- the one fully-indexed, searchable version
+    desired_generation integer NOT NULL DEFAULT 1,      -- monotonic; bumped on (re)index intent
+    tombstoned_at      timestamptz,                     -- soft-delete; excluded from retrieval immediately
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_knowledge_sources PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_ks_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ks_user FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_ks_status CHECK (status IN ('queued','parsing','chunking','embedding','ready','stale','failed','deleting')),
+    CONSTRAINT ck_ks_kind CHECK (source_kind IN ('file')),
+    CONSTRAINT ck_ks_visibility CHECK (visibility IN ('private'))
+);
+
+-- Each (re)index attempt is a version: an immutable object-store snapshot of the exact
+-- bytes it indexed + the parser/embedding profile used. The active pointer only ever
+-- references a fully-indexed version; search never reads a partially-built one.
+CREATE TABLE knowledge_source_versions (
+    tenant_id             uuid NOT NULL,
+    id                    uuid NOT NULL,
+    source_id             uuid NOT NULL,
+    generation            integer NOT NULL,             -- matches the desired_generation it was built for
+    expected_file_version integer,                      -- Drive version indexed
+    expected_file_hash    bytea,                        -- sha-256 of indexed bytes
+    snapshot_object_key   text NOT NULL,                -- immutable MinIO object; canonical for parse/preview/citation
+    parser_version        text NOT NULL,
+    pipeline_version      text NOT NULL,
+    embedding_profile_id  uuid NOT NULL,
+    language              text,                         -- detected; drives the sherpa_text config
+    status                text NOT NULL DEFAULT 'building', -- building|ready|failed|superseded
+    chunk_count           integer NOT NULL DEFAULT 0,
+    failure_code          text,                         -- bounded, named (e.g. 'unsupported_scanned_pdf')
+    idempotency_key       text NOT NULL,                -- deterministic per (source, content, pipeline)
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    activated_at          timestamptz,
+    CONSTRAINT pk_ksv PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_ksv_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ksv_source FOREIGN KEY (tenant_id, source_id) REFERENCES knowledge_sources (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_ksv_profile FOREIGN KEY (tenant_id, embedding_profile_id) REFERENCES embedding_profiles (tenant_id, id),
+    CONSTRAINT ck_ksv_status CHECK (status IN ('building','ready','failed','superseded')),
+    CONSTRAINT uq_ksv_idem UNIQUE (tenant_id, source_id, idempotency_key)
+);
+
+-- Derived retrieval units. lexical_text = app-tokenized text when lexical_backend=
+-- 'app_jieba', else = text_content; fts is built under the sherpa_text config. The
+-- vector width MUST equal the version's embedding profile dim (1024 for bge-m3).
+CREATE TABLE knowledge_chunks (
+    tenant_id    uuid NOT NULL,
+    id           uuid NOT NULL,
+    source_id    uuid NOT NULL,
+    version_id   uuid NOT NULL,
+    ordinal      integer NOT NULL,             -- stable order within the version
+    text_content text NOT NULL,
+    token_count  integer NOT NULL,
+    heading_path text,                         -- e.g. "3 / 3.2 审批"
+    page         integer,
+    char_offset  integer,
+    content_hash bytea NOT NULL,
+    lexical_text text NOT NULL,                -- app-tokenized (app_jieba) else = text_content
+    embedding    vector(1024) NOT NULL,
+    fts          tsvector,                     -- maintained under the sherpa_text config
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_knowledge_chunks PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_kc_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_kc_version FOREIGN KEY (tenant_id, version_id) REFERENCES knowledge_source_versions (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_kc_text_bound CHECK (octet_length(text_content) <= 65536)
+);
+-- Indexes: (tenant_id, version_id, ordinal); GIN(fts); HNSW(embedding vector_cosine_ops).
+-- Retrieval ALWAYS filters tenant/user/visibility/ready/active-version BEFORE ranking.
+
+-- Durable, resumable ingestion jobs (bounded retry + lease/fencing). The active-version
+-- switch is atomic + generation-fenced: an obsolete job can never reactivate an old version.
+CREATE TABLE knowledge_ingestion_jobs (
+    tenant_id          uuid NOT NULL,
+    id                 uuid NOT NULL,
+    source_id          uuid NOT NULL,
+    version_id         uuid,                        -- filled once the version row exists
+    generation         integer NOT NULL,            -- fences activation vs desired_generation
+    stage              text NOT NULL DEFAULT 'queued', -- queued|claiming|snapshot|parse|chunk|embed|activate|done|failed
+    lease_owner        text,                        -- worker claim token
+    lease_expires_at   timestamptz,
+    attempt            integer NOT NULL DEFAULT 0,
+    termination_reason text,                        -- named exit: done|file_changed|unsupported|superseded|error:...
+    idempotency_key    text NOT NULL,
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_kij PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_kij_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_kij_source FOREIGN KEY (tenant_id, source_id) REFERENCES knowledge_sources (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_kij_stage CHECK (stage IN ('queued','claiming','snapshot','parse','chunk','embed','activate','done','failed')),
+    CONSTRAINT uq_kij_idem UNIQUE (tenant_id, idempotency_key)
+);
+
+-- Retention-scoped retrieval evidence: the provider-visible excerpts for a search,
+-- keyed by a globally-unique citation ref, for crash/history replay. Document text
+-- lives HERE for replay — NOT in the append-only journal (ADR-016/021).
+CREATE TABLE knowledge_retrieval_evidence (
+    tenant_id               uuid NOT NULL,
+    id                      uuid NOT NULL,
+    user_id                 uuid NOT NULL,
+    retrieval_invocation_id uuid NOT NULL,
+    run_id                  uuid,
+    tool_call_id            text,
+    citation_ref            text NOT NULL,          -- "K:<tool_call_id>:N", unique within the run
+    source_id               uuid NOT NULL,
+    source_version_id       uuid NOT NULL,
+    chunk_id                uuid NOT NULL,
+    excerpt                 text NOT NULL,          -- bounded
+    score                   double precision,
+    matched_by              text NOT NULL,          -- CSV of lexical/vector
+    created_at              timestamptz NOT NULL DEFAULT now(),
+    purge_after             timestamptz NOT NULL,   -- TTL (knowledge_evidence_retention_days); GC sweep
+    CONSTRAINT pk_kre PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_kre_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT uq_kre_ref UNIQUE (tenant_id, run_id, citation_ref)
+);
+```
+
+Notes:
+
+- **Canonical vs derived:** dropping/rebuilding `knowledge_chunks` + indexes must be
+  possible from `knowledge_source_versions.snapshot_object_key` alone. Snapshots are
+  immutable and ref-counted like Drive blobs; GC removes a snapshot only after its
+  version is purged.
+- **File lifecycle:** a Drive overwrite marks linked sources `stale` + bumps
+  `desired_generation` (old active version stays searchable until a new one activates);
+  a Drive delete tombstones linked sources (immediate retrieval exclusion) then purges
+  snapshots/chunks/vectors/evidence; removing a knowledge source does **not** delete the
+  Drive file.
+- **Activation fencing:** the atomic switch of `active_version_id` happens only when the
+  source is not tombstoned and `desired_generation` still equals the job `generation`.
+- **Evidence vs journal:** `knowledge.searched` (events §2.8) puts only refs + counts in
+  the journal; excerpts live in `knowledge_retrieval_evidence` (retention-scoped). History
+  replay resolves a ref there + the source tombstone state; a deleted source renders as
+  `[knowledge source deleted]`.
