@@ -432,6 +432,62 @@ export interface KnowledgeSearchResult {
   sufficient: boolean;
 }
 
+export type ProjectImportStatus = "none" | "importing" | "ready" | "failed";
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  status: "active" | "archived" | "deleting";
+  source_status: "unbound";
+  current_snapshot_id: string | null;
+  used_bytes: number;
+  last_activity_at: string | null;
+  updated_at: string;
+  import_status: ProjectImportStatus;
+  import_failure_reason: string | null;
+}
+
+export interface ProjectPage {
+  items: Project[];
+  next_cursor: string | null;
+}
+
+export interface ProjectEntry {
+  path: string;
+  entry_kind: "file" | "dir" | "symlink";
+  size_bytes: number;
+  executable: boolean;
+}
+
+export interface ProjectTree {
+  project_id: string;
+  snapshot_id: string | null;
+  entries: ProjectEntry[];
+}
+
+export interface ProjectSnapshot {
+  id: string;
+  reason: string;
+  entry_count: number;
+  size_bytes: number;
+  pinned: boolean;
+  created_at: string;
+}
+
+export interface ProjectTemplate {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface ProjectContext {
+  session_id: string;
+  project_id: string | null;
+  project_name: string | null;
+  bound: boolean;
+}
+
 export interface QQStatus {
   enabled: boolean;
   configured: boolean;
@@ -898,6 +954,51 @@ export const api = {
       "/knowledge/search",
       jsonInit("POST", null, { query, ...(k ? { k } : {}) }),
     ),
+  listProjects: (params?: { query?: string; status?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set("query", params.query);
+    if (params?.status) qs.set("status", params.status);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return req<ProjectPage>(`/projects${suffix}`);
+  },
+  getProject: (id: string) => req<Project>(`/projects/${id}`),
+  createProject: (
+    csrf: string,
+    body: { name: string; description?: string | null; template_id?: string | null },
+  ) =>
+    req<Project>(
+      "/projects",
+      jsonInit("POST", csrf, {
+        name: body.name,
+        description: body.description ?? null,
+        template_id: body.template_id ?? null,
+      }),
+    ),
+  importProjectArchive: (csrf: string, name: string, file: File) => {
+    const form = new FormData();
+    form.append("kind", "archive");
+    form.append("name", name);
+    form.append("file", file);
+    return req<Project>("/projects/imports", {
+      method: "POST",
+      headers: { "X-CSRF-Token": csrf },
+      body: form,
+    });
+  },
+  projectTree: (id: string, path?: string) => {
+    const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
+    return req<ProjectTree>(`/projects/${id}/tree${suffix}`);
+  },
+  projectSnapshots: (id: string) =>
+    req<ProjectSnapshot[]>(`/projects/${id}/snapshots`),
+  projectTemplates: () => req<ProjectTemplate[]>("/projects/templates"),
+  openProjectChat: (csrf: string, id: string, title?: string | null) =>
+    req<SessionSummary>(
+      `/projects/${id}/chats`,
+      jsonInit("POST", csrf, { title: title ?? null }),
+    ),
+  projectContext: (sid: string) =>
+    req<ProjectContext>(`/sessions/${sid}/project-context`),
   channelsStatus: () => req<ChannelsStatus>("/channels"),
   simulateQQ: (csrf: string, text: string, fromId?: string) =>
     req<SimulateResult>(

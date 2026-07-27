@@ -14,6 +14,7 @@ import {
   eventsUrl,
   type AppMeta,
   type PendingApproval,
+  type ProjectContext,
   type SessionSummary,
 } from "../api";
 import { useAuth } from "../auth";
@@ -292,6 +293,7 @@ export default function ChatView() {
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [draft, setDraft] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [projectCtx, setProjectCtx] = useState<ProjectContext | null>(null);
   const [running, setRunning] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -495,6 +497,7 @@ export default function ChatView() {
       setActivities([]);
       setApprovals([]);
       setCites({});
+      setProjectCtx(null);
       insufficientRef.current = false;
       setRunning(false);
       const mp = await api.listMessages(sid);
@@ -507,6 +510,10 @@ export default function ChatView() {
       );
       openStream(sid, mp.event_cursor);
       void backfillCitations(sid);
+      void api
+        .projectContext(sid)
+        .then((pc) => setProjectCtx(pc.project_id ? pc : null))
+        .catch(() => setProjectCtx(null));
     },
     [openStream, backfillCitations],
   );
@@ -666,6 +673,14 @@ export default function ChatView() {
                   : "Mock model"
                 : "Loading model…"}
             </span>
+            {projectCtx?.project_id && (
+              <span className="chip project-chip" title="This chat is bound to a project (read/discuss only in W2a)">
+                ▦ {projectCtx.project_name ?? "Project"}
+                <span className="project-chip-note">
+                  {projectCtx.bound ? "bound · read-only" : "read-only"}
+                </span>
+              </span>
+            )}
           </div>
 
           {running && (
