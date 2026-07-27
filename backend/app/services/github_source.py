@@ -195,7 +195,7 @@ async def create_connection(
         auth_kind="pat",
         account_login=login,
         scopes=scopes or ["contents:read"],
-        status="active",
+        status="pending",
     )
     db.add(conn)
     await db.flush()
@@ -210,6 +210,7 @@ async def create_connection(
     conn.key_version = seal.key_version
     conn.token_algorithm = seal.token_algorithm
     conn.aad_version = seal.aad_version
+    conn.status = "active"
     await db.flush()
     logger.info("github connection created", extra={"account_login": login})
     return conn
@@ -264,11 +265,18 @@ def _redact_status(status_code: int) -> str:
     return "error"
 
 
+def _make_async_client(timeout: float) -> httpx.AsyncClient:
+    """Single construction point for GitHub HTTP clients (a test seam). httpx strips the
+    Authorization header on cross-host redirects (tarball → codeload), so the token never
+    leaves ``api.github.com``."""
+    return httpx.AsyncClient(
+        base_url=settings.github_api_base, timeout=timeout, follow_redirects=True
+    )
+
+
 async def _validate_pat(token: str) -> tuple[str, list[str]]:
     """GET /user with the PAT; returns (login, scopes). Raises GithubApiError."""
-    async with httpx.AsyncClient(
-        base_url=settings.github_api_base, timeout=15.0, follow_redirects=True
-    ) as client:
+    async with _make_async_client(15.0) as client:
         try:
             resp = await client.get("/user", headers=_headers(token))
         except httpx.HTTPError as exc:  # noqa: BLE001 - normalized/redacted
@@ -298,9 +306,7 @@ async def list_repos(
 
     out: list[RepoInfo] = []
     next_cursor: str | None = None
-    async with httpx.AsyncClient(
-        base_url=settings.github_api_base, timeout=20.0, follow_redirects=True
-    ) as client:
+    async with _make_async_client(20.0) as client:
         scanned_pages = 0
         while len(out) < limit and scanned_pages < _MAX_REPO_PAGES:
             try:
@@ -373,9 +379,7 @@ async def list_refs(
     want = (kind or "").strip().lower()
     q = (query or "").strip().lower()
     out: list[RefInfo] = []
-    async with httpx.AsyncClient(
-        base_url=settings.github_api_base, timeout=20.0, follow_redirects=True
-    ) as client:
+    async with _make_async_client(20.0) as client:
         try:
             owner, repo = await _resolve_repo_full_name(client, token, repo_external_id)
         except GithubApiError as exc:
@@ -496,8 +500,4 @@ def open_connection_token_for_worker(conn: GithubConnection) -> str | None:
 def make_client() -> httpx.AsyncClient:
     """httpx client for GitHub import calls (auth stripped on cross-host redirects to
     codeload by httpx's default redirect handling — the token never leaves api.github.com)."""
-    return httpx.AsyncClient(
-        base_url=settings.github_api_base,
-        timeout=float(settings.github_archive_timeout_seconds),
-        follow_redirects=True,
-    )
+    return _make_async_client(float(settings.github_archive_timeout_seconds))
