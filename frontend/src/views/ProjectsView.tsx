@@ -452,7 +452,7 @@ export default function ProjectsView() {
                           className="btn btn-quiet"
                           onClick={() => void openChat(p.id)}
                           disabled={busy === "chat"}
-                          title="Open a project-bound chat (read/discuss only)"
+                          title="Open a project-bound chat — edits stage into a reviewable working copy"
                         >
                           Open in Chat
                         </button>
@@ -941,8 +941,10 @@ export default function ProjectsView() {
                     ))}
                   </ul>
                   <p className="small muted proj-w3-note">
-                    Open in Chat is <b>read / discuss only</b> in W2a — no working
-                    copy, sandbox, or edits. Editing &amp; running is W3.
+                    Open in Chat to work on this project: the assistant edits and
+                    runs in a hardened sandbox, staging changes into a working
+                    copy you review and Save (or Discard) — saving to the head is
+                    a human review action.
                   </p>
                 </div>
               </div>

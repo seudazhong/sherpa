@@ -656,6 +656,10 @@ async def _sandbox_state(
 async def _wc_summary(
     db: AsyncSession, ctx: CallerContext, wc: ProjectWorkingCopy
 ) -> WorkingCopySummary:
+    # Callers may pass a working copy just mutated + flushed in this same request (e.g.
+    # discard), which expires server-side columns (updated_at onupdate). Refresh so the
+    # summary reads them without a sync lazy-load (MissingGreenlet) during serialization.
+    await db.refresh(wc)
     project = await db.get(Project, (ctx.tenant_id, wc.project_id))
     moved = bool(project is not None and wc_svc.head_moved(project, wc))
     open_cs = await changes_svc.open_change_set(db, ctx, wc)

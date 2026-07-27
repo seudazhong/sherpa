@@ -297,3 +297,28 @@ async def test_project_workcopy_change_review_rest_flow(tmp_path, monkeypatch) -
         # After a full Save the working copy is closed.
         after = await client.get(f"/sessions/{sid}/working-copy")
         assert after.json() is None or after.json()["state"] == "saved"
+
+        # Stage another change and Discard it via REST (regression: the discard route
+        # summarizes the just-mutated working copy — must not 500 on an expired column).
+        head_after_save = (await client.get(f"/projects/{pid}")).json()["current_snapshot_id"]
+        async with SessionLocal() as s:
+            wc2 = await wc_svc.open_working_copy(s, cc, session_id=uuid.UUID(sid))
+            out2 = await sbx_svc.run_sandbox(
+                s,
+                cc,
+                wc2,
+                run_id=uuid.uuid4(),
+                request=sbx_svc.SandboxRequest(
+                    edits=[ScratchEdit(path="scratch.txt", op="write", data=b"tmp\n")]
+                ),
+            )
+            cs2_id = str(out2.change_set_id)
+            await s.commit()
+        discarded = await client.post(
+            f"/projects/{pid}/change-sets/{cs2_id}/discard", json={}, headers=headers
+        )
+        assert discarded.status_code == 200, discarded.text
+        assert discarded.json()["state"] == "discarded"
+        # Discard leaves the project head byte-identical (no new snapshot).
+        head_after_discard = (await client.get(f"/projects/{pid}")).json()["current_snapshot_id"]
+        assert head_after_discard == head_after_save
