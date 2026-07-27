@@ -293,7 +293,12 @@ export default function ProjectsView() {
                       <button
                         className="btn btn-quiet"
                         onClick={() => void openChat(p.id)}
-                        disabled={busy === "chat"}
+                        disabled={busy === "chat" || p.import_status !== "ready"}
+                        title={
+                          p.import_status !== "ready"
+                            ? "Available once the project snapshot is ready"
+                            : "Open a project-bound chat (read/discuss only)"
+                        }
                       >
                         Open in Chat
                       </button>
