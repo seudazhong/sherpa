@@ -290,18 +290,24 @@ export default function ProjectsView() {
                       </span>
                     </button>
                     <div className="proj-row-actions">
-                      <button
-                        className="btn btn-quiet"
-                        onClick={() => void openChat(p.id)}
-                        disabled={busy === "chat" || p.import_status !== "ready"}
-                        title={
-                          p.import_status !== "ready"
-                            ? "Available once the project snapshot is ready"
-                            : "Open a project-bound chat (read/discuss only)"
-                        }
-                      >
-                        Open in Chat
-                      </button>
+                      {p.import_status === "ready" ? (
+                        <button
+                          className="btn btn-quiet"
+                          onClick={() => void openChat(p.id)}
+                          disabled={busy === "chat"}
+                          title="Open a project-bound chat (read/discuss only)"
+                        >
+                          Open in Chat
+                        </button>
+                      ) : (
+                        <span className="small muted proj-open-off">
+                          {p.import_status === "failed"
+                            ? "Import failed"
+                            : p.import_status === "importing"
+                              ? "Importing…"
+                              : "No snapshot"}
+                        </span>
+                      )}
                     </div>
                   </li>
                 ))}
@@ -453,13 +459,21 @@ export default function ProjectsView() {
                       : "importing…"}
                 </span>
               </div>
-              <button
-                className="btn btn-primary"
-                onClick={() => void openChat(detail.id)}
-                disabled={busy === "chat" || !detail.current_snapshot_id}
-              >
-                Open in Chat
-              </button>
+              {detail.current_snapshot_id ? (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => void openChat(detail.id)}
+                  disabled={busy === "chat"}
+                >
+                  Open in Chat
+                </button>
+              ) : (
+                <span className="small muted proj-open-off">
+                  {detail.import_status === "failed"
+                    ? "Import failed — no snapshot to open"
+                    : "Importing…"}
+                </span>
+              )}
             </div>
 
             <div className="proj-facts">

@@ -12,8 +12,8 @@ import uuid
 import pytest
 
 from app.db import SessionLocal, ping_db
+from app.models import Project, Tenant, User
 from app.models import Session as SessionModel
-from app.models import Tenant, User
 from app.services import projects as svc
 from app.services.archive import ArchiveEntry
 from app.services.context import CallerContext
@@ -133,6 +133,42 @@ async def test_open_in_chat_binds_and_context_immutable() -> None:
             await s.flush()
             pc2 = await svc.project_context(s, ctx, session_id=session.id)
             assert pc2.bound is True
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_open_in_chat_rejects_project_without_head_snapshot() -> None:
+    """A failed/importing project has no head snapshot to read/discuss (ADR-037), so
+    Open in Chat must be refused deterministically rather than binding an empty chat."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            # Simulate a failed archive import: a visible project with no snapshot.
+            project = Project(
+                tenant_id=ctx.tenant_id,
+                id=uuid.uuid4(),
+                user_id=ctx.user_id,
+                name="Evil traversal",
+                status="active",
+                source_status="unbound",
+                current_snapshot_id=None,
+            )
+            s.add(project)
+            await s.flush()
+
+            with pytest.raises(Invalid):
+                await svc.open_in_chat(s, ctx, project_id=project.id)
+
+            # No stray Project-bound session was created.
+            from sqlalchemy import select
+
+            bound = await s.scalar(
+                select(SessionModel).where(SessionModel.project_id == project.id)
+            )
+            assert bound is None
         finally:
             await s.rollback()
 

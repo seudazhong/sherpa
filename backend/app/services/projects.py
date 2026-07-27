@@ -506,8 +506,15 @@ async def open_in_chat(
     db: AsyncSession, ctx: CallerContext, *, project_id: uuid.UUID, title: str | None = None
 ) -> SessionModel:
     """Create a NEW Project-bound web chat session. The binding is set at creation and
-    is immutable after the first admitted user message; switching Project = a new chat."""
+    is immutable after the first admitted user message; switching Project = a new chat.
+
+    A Project with no head snapshot (still importing, or a ``failed`` import that never
+    activated bytes — ADR-037) has nothing to read/discuss, so binding a chat to it is
+    meaningless. Refuse deterministically (422) as the backend defense behind the UI,
+    which also hides the control for such projects."""
     project = await get_project(db, ctx, project_id=project_id)
+    if project.current_snapshot_id is None:
+        raise Invalid("project has no head snapshot; import must finish before opening in chat")
     session_id = uuid.uuid4()
     session = SessionModel(
         tenant_id=ctx.tenant_id,

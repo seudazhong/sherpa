@@ -152,3 +152,47 @@ async def test_projects_rest_flow() -> None:
         gsid = gen.json()["id"]
         gpc = await client.get(f"/sessions/{gsid}/project-context")
         assert gpc.json()["project_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_open_in_chat_on_failed_import_is_rejected() -> None:
+    """A failed archive import leaves a visible, snapshotless project (ADR-037). Its
+    Open in Chat must be refused (422) — the backend defense behind the hidden UI
+    control, so a user can never enter a chat bound to a project with no head snapshot."""
+    if not await ping_db() or not await ping_redis():
+        pytest.skip("database or redis not reachable")
+    await _drop_owner()
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        login = await client.post(
+            "/auth/login",
+            json={"email": settings.owner_email, "password": settings.owner_password},
+        )
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
+
+        # Unsafe archive (path traversal) → import fails without a snapshot.
+        raw = _zip([("../escape.txt", b"pwn")])
+        imp = await client.post(
+            "/projects/imports",
+            data={"kind": "archive", "name": "Evil traversal"},
+            files={"file": ("evil.zip", raw, "application/zip")},
+            headers=headers,
+        )
+        assert imp.status_code == 202, imp.text
+        pid = imp.json()["id"]
+
+        tid, _ = owner_ids()
+        async with SessionLocal() as s:
+            reason, _ = await pimp.process_import(
+                s, tenant_id=tid, project_id=uuid.UUID(pid), lease_owner="test"
+            )
+            await s.commit()
+        assert reason == "unsafe_archive"
+
+        failed = await client.get(f"/projects/{pid}")
+        assert failed.json()["import_status"] == "failed"
+        assert failed.json()["current_snapshot_id"] is None
+
+        # Open in Chat on the snapshotless project → 422, no bound session created.
+        chat = await client.post(f"/projects/{pid}/chats", json={"title": "x"}, headers=headers)
+        assert chat.status_code == 422, chat.text
