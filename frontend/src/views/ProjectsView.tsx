@@ -69,6 +69,7 @@ export default function ProjectsView() {
   // Detail surface.
   const [detail, setDetail] = useState<Project | null>(null);
   const [entries, setEntries] = useState<ProjectEntry[]>([]);
+  const [treeTruncated, setTreeTruncated] = useState(false);
   const [snapshots, setSnapshots] = useState<ProjectSnapshot[]>([]);
 
   // W2b — GitHub one-time import.
@@ -131,6 +132,7 @@ export default function ProjectsView() {
       ]);
       setDetail(proj);
       setEntries(tree.entries);
+      setTreeTruncated(tree.truncated);
       setSnapshots(snaps);
       setSurface("detail");
     } catch {
@@ -892,6 +894,12 @@ export default function ProjectsView() {
                       );
                     })}
                   </ul>
+                )}
+                {treeTruncated && (
+                  <p className="small muted">
+                    Showing the first {entries.length} entries (partial) — this
+                    snapshot has more files than fit in one page.
+                  </p>
                 )}
               </div>
 

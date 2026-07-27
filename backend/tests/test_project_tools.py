@@ -58,6 +58,46 @@ async def test_project_tools_roundtrip() -> None:
             await s.rollback()
 
 
+@pytest.mark.asyncio
+async def test_project_tree_tool_marks_truncated_page(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    from app.services import projects as svc
+
+    async with SessionLocal() as s:
+        try:
+            tid, uid = await _seed(s)
+            reg = build_default_registry()
+            tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
+            pid, sid = uuid.uuid4(), uuid.uuid4()
+            entry = svc.TreeEntry(path="backend", entry_kind="dir", size_bytes=0, executable=False)
+
+            async def fake_partial(db, ctx, **kw):  # type: ignore[no-untyped-def]
+                return svc.ProjectTree(
+                    project_id=pid, snapshot_id=sid, entries=[entry], truncated=True
+                )
+
+            monkeypatch.setattr("app.tools.project_tools.svc.get_tree", fake_partial)
+            out = await reg.get("project_tree").execute(tctx, {"project_id": str(pid)})
+            # A truncated page must NOT read as a complete tree.
+            assert "PARTIAL" in out.llm_content
+            assert "not proof" in out.llm_content.lower()
+            assert "path" in out.llm_content.lower()
+            assert "complete listing" not in out.llm_content
+
+            async def fake_full(db, ctx, **kw):  # type: ignore[no-untyped-def]
+                return svc.ProjectTree(
+                    project_id=pid, snapshot_id=sid, entries=[entry], truncated=False
+                )
+
+            monkeypatch.setattr("app.tools.project_tools.svc.get_tree", fake_full)
+            out2 = await reg.get("project_tree").execute(tctx, {"project_id": str(pid)})
+            assert "complete listing" in out2.llm_content
+            assert "PARTIAL" not in out2.llm_content
+        finally:
+            await s.rollback()
+
+
 def test_project_tools_are_allow_policy() -> None:
     reg = build_default_registry()
     for name in ("list_projects", "create_project", "project_tree", "project_read"):

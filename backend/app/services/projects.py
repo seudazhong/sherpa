@@ -421,6 +421,7 @@ class ProjectTree:
     project_id: uuid.UUID
     snapshot_id: uuid.UUID | None
     entries: list[TreeEntry]
+    truncated: bool = False
 
 
 async def get_tree(
@@ -432,12 +433,16 @@ async def get_tree(
     path: str | None = None,
     limit: int = 200,
 ) -> ProjectTree:
-    """Bounded page of a snapshot's entries (defaults to the head snapshot)."""
+    """Bounded page of a snapshot's entries (defaults to the head snapshot).
+
+    Fetches ``limit + 1`` rows so the caller can tell whether the page is
+    ``truncated`` (more entries exist beyond it) without a second count query.
+    """
     project = await get_project(db, ctx, project_id=project_id)
     limit = max(1, min(limit, _TREE_LIMIT))
     snap_id = snapshot_id or project.current_snapshot_id
     if snap_id is None:
-        return ProjectTree(project_id=project.id, snapshot_id=None, entries=[])
+        return ProjectTree(project_id=project.id, snapshot_id=None, entries=[], truncated=False)
     snapshot = await db.get(ProjectSnapshot, (ctx.tenant_id, snap_id))
     if snapshot is None or snapshot.project_id != project.id:
         raise NotFound("snapshot not found")
@@ -448,8 +453,11 @@ async def get_tree(
     if path and path.strip():
         prefix = path.strip().strip("/")
         stmt = stmt.where(ProjectSnapshotEntry.path.like(f"{prefix}/%"))
-    stmt = stmt.order_by(ProjectSnapshotEntry.path).limit(limit)
+    stmt = stmt.order_by(ProjectSnapshotEntry.path).limit(limit + 1)
     rows = (await db.execute(stmt)).scalars().all()
+    truncated = len(rows) > limit
+    if truncated:
+        rows = rows[:limit]
     entries = [
         TreeEntry(
             path=r.path,
@@ -459,7 +467,9 @@ async def get_tree(
         )
         for r in rows
     ]
-    return ProjectTree(project_id=project.id, snapshot_id=snap_id, entries=entries)
+    return ProjectTree(
+        project_id=project.id, snapshot_id=snap_id, entries=entries, truncated=truncated
+    )
 
 
 async def list_snapshots(

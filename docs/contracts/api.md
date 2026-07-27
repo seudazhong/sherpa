@@ -1698,6 +1698,8 @@ class ProjectTree(StrictModel):
     project_id: UUID
     snapshot_id: UUID
     entries: list[ProjectEntry]                # bounded page of the head snapshot
+    returned_count: int                        # == len(entries) in this page
+    truncated: bool                            # True ⇒ more entries exist beyond this page (query a narrower path)
 
 class ProjectChatCreate(StrictModel):
     title: str | None = None
@@ -1734,6 +1736,13 @@ class ProjectContext(StrictModel):
   new chat — an existing session's `project_id` is never re-pointed.
 - `GET /sessions/{id}/project-context` returns the (possibly null) binding for chat-header
   display; `project_id=null` is General chat.
+- `GET /projects/{id}/tree` returns a **bounded page** ordered by `path` (default 200, hard cap
+  500 entries per call). `returned_count` is the number of entries in this page; `truncated=true`
+  means **more entries exist beyond this page** — the page is **not** the full tree, so absence of
+  a path from a truncated page is **not** proof it doesn't exist. Callers (and the `project_tree`
+  tool) must narrow with the `path` prefix filter (or later `cursor`) to inspect subtrees. Because
+  a `path`-filtered listing has no cheap total, the response intentionally carries **no** `total`
+  field — only `truncated` + `returned_count`.
 - Reservation/quota reuse ADR-030: a project's snapshot bytes are the same content-addressed,
   ref-counted `storage_blobs`; `507 insufficient_storage` when a reservation would exceed quota.
 - **Tool surface (W2a, ADR-023):** `project_list` / `project_create` / `project_tree` /

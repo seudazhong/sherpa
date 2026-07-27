@@ -92,6 +92,8 @@ class ProjectTree(BaseModel):
     project_id: uuid.UUID
     snapshot_id: uuid.UUID | None
     entries: list[ProjectEntry]
+    returned_count: int
+    truncated: bool
 
 
 class ProjectSnapshotOut(BaseModel):
@@ -440,6 +442,8 @@ async def get_tree(
             )
             for e in tree.entries
         ],
+        returned_count=len(tree.entries),
+        truncated=tree.truncated,
     )
 
 

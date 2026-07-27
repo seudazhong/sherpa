@@ -88,7 +88,18 @@ async def test_projects_rest_flow() -> None:
         assert got.status_code == 200
         tree = await client.get(f"/projects/{pid}/tree")
         assert tree.status_code == 200
-        assert any(e["path"] == "main.py" for e in tree.json()["entries"])
+        body = tree.json()
+        assert any(e["path"] == "main.py" for e in body["entries"])
+        # Full page of a small template is complete, not truncated.
+        assert body["truncated"] is False
+        assert body["returned_count"] == len(body["entries"])
+        # A tiny limit forces truncation; response says so instead of implying completeness.
+        page = await client.get(f"/projects/{pid}/tree?limit=1")
+        assert page.status_code == 200
+        pbody = page.json()
+        assert pbody["truncated"] is True
+        assert pbody["returned_count"] == 1
+        assert len(pbody["entries"]) == 1
         snaps = await client.get(f"/projects/{pid}/snapshots")
         assert snaps.status_code == 200
         assert snaps.json()[0]["reason"] == "import"

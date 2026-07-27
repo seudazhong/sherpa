@@ -86,6 +86,36 @@ async def test_duplicate_name_conflicts_and_unknown_template_invalid() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_tree_truncation_flag_and_page_bound() -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            project = await svc.create_project(s, ctx, name="Many files")
+            entries = [
+                ArchiveEntry(path=f"f{i:03d}.txt", entry_kind="file", data=f"n{i}".encode())
+                for i in range(5)
+            ]
+            await svc.build_import_snapshot(s, ctx, project, entries)
+            # A page smaller than the entry count is truncated but still bounded.
+            page = await svc.get_tree(s, ctx, project_id=project.id, limit=3)
+            assert page.truncated is True
+            assert len(page.entries) == 3
+            # A page at/above the entry count is complete.
+            full = await svc.get_tree(s, ctx, project_id=project.id, limit=50)
+            assert full.truncated is False
+            assert len(full.entries) == 5
+            # An empty project is never reported as truncated.
+            blank = await svc.create_project(s, ctx, name="Blank many")
+            blank_tree = await svc.get_tree(s, ctx, project_id=blank.id)
+            assert blank_tree.entries == []
+            assert blank_tree.truncated is False
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
 async def test_snapshot_dir_synthesis_and_dedup() -> None:
     if not await ping_db():
         pytest.skip("database not reachable")

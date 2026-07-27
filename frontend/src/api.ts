@@ -511,6 +511,8 @@ export interface ProjectTree {
   project_id: string;
   snapshot_id: string | null;
   entries: ProjectEntry[];
+  returned_count: number;
+  truncated: boolean;
 }
 
 export interface ProjectSnapshot {
