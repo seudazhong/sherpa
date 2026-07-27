@@ -698,6 +698,16 @@ duplicate project. On any failure the project stays `failed` with **no** snapsho
 deletable), never a snapshot over the wrong bytes. **blank**/**template** creation is a single
 committed transaction (no staging) that emits `created` + `snapshot_activated`.
 
+`project.lifecycle` event catalog stays the canonical observability shape above.
+
+**Realization (implementation, ADR-037).** A project's lifecycle is **not run-scoped**, so the
+frozen run-scoped `event_journal` (run_id NOT NULL) is not used for `project.lifecycle`.
+The durable job is the `project_import_jobs` table (data-model §Projects): its `stage`
+(`queued|staged|activated|done|failed`) + named `termination_reason` capture the lifecycle
+stages; at-least-once dispatch is the explicit worker enqueue backed by a recovery tick
+(mirroring `knowledge_ingestion_job`); structured logs carry ids + bounded metadata. Project
+file bytes never enter any journal.
+
 Project-bound Chat (`sessions.project_id`, api §10.5) creates no new event type: the binding
 is set at session creation and is immutable after the first admitted user message; the existing
 run/message events carry `session_id` as usual.

@@ -1671,6 +1671,11 @@ class ProjectSummary(StrictModel):
     used_bytes: int
     last_activity_at: datetime | None
     updated_at: datetime
+    # Additive (impl, ADR-037): archive-import progress. `status` stays active/archived/deleting;
+    # this derived field conveys the async import state (a project has no snapshot while importing
+    # or after a failed import). Derived from project_import_jobs — never a second canonical state.
+    import_status: Literal["none", "importing", "ready", "failed"]
+    import_failure_reason: str | None
 
 class ProjectCreate(StrictModel):
     # Blank or template project. Archive/GitHub go through POST /projects/imports.
@@ -1711,6 +1716,8 @@ class ProjectContext(StrictModel):
 | `POST /projects/imports` | `ProjectImportRequest` (+ multipart for archive) → `ProjectSummary` | Session + CSRF | `202`, `401`, `409`, `413`, `422`, `501`, `507` |
 | `GET /projects/{id}` | none → `ProjectSummary` | Session | `200`, `401`, `404` |
 | `GET /projects/{id}/tree?snapshot=&path=&cursor=&limit=` | none → `ProjectTree` | Session | `200`, `401`, `404`, `422` |
+| `GET /projects/{id}/snapshots` | none → `list[ProjectSnapshot]` | Session | `200`, `401`, `404` |
+| `GET /projects/templates` | none → `list[Template]` | Session | `200`, `401` |
 | `POST /projects/{id}/chats` | `ProjectChatCreate` → `SessionSummary` | Session + CSRF | `201`, `401`, `404`, `422` |
 | `GET /sessions/{id}/project-context` | none → `ProjectContext` | Session | `200`, `401`, `404` |
 
@@ -1734,7 +1741,11 @@ class ProjectContext(StrictModel):
   in W2a:** any destructive purge, `project_run` (W3), `project_push` (W4). Project files remain
   **untrusted content** (ADR-009); source credentials (W2b+) never enter a project tree, prompt,
   log, or tool result.
-- **UI:** SPA route `/work/projects` (avoids the REST `/projects` proxy prefix). **W2a ships the
-  static design draft only** ([`design-workspace/index.html`](../design-workspace/index.html)) —
-  production navigation is **not** exposed and the capability-matrix UI cells stay ⬜ until the
-  W2a implementation phase (owner-gated).
+- **Additive support endpoints (impl, ADR-037):** `GET /projects/templates` (blank/template
+  picker) and `GET /projects/{id}/snapshots` (detail snapshots + activity) are read-only,
+  Session-authenticated conveniences for the Projects UI; they add no new capability.
+- **UI:** SPA route `/work/projects` (avoids the REST `/projects` proxy prefix). The W2a
+  implementation ships the production Projects pages (list / new-project blank·template·archive
+  with GitHub disabled→W2b / detail read-only tree + snapshots + activity / Open in Chat) ported
+  from the [static draft](../design-workspace/index.html) onto the Quiet Work system; the
+  capability-matrix UI cells (docs/11 §9) flip to ✅. Agent tools remain the ADR-023 dual adapter.

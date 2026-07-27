@@ -2620,10 +2620,47 @@ CREATE TABLE project_snapshot_entries (
     CONSTRAINT ck_pse_kind CHECK (entry_kind IN ('file','dir','symlink')),
     CONSTRAINT ck_pse_path CHECK (
         char_length(path) BETWEEN 1 AND 1024
-        AND path NOT LIKE '/%' AND path NOT LIKE '%..%' AND position(E'\\000' IN path) = 0),
+        AND path NOT LIKE '/%' AND path NOT LIKE '%..%'),  -- NUL is inherently rejected by text
     CONSTRAINT ck_pse_file_blob CHECK (entry_kind <> 'file' OR content_hash IS NOT NULL)
 );
 CREATE UNIQUE INDEX uq_pse_path ON project_snapshot_entries (tenant_id, snapshot_id, path);
+
+-- Durable archive-import job (events §2.9 realization; mirrors knowledge_ingestion_job).
+-- Recovery source of truth for the async archive import: claim (lease) → stage the
+-- isolated upload → bounded expand → build the initial immutable snapshot → atomically
+-- set projects.current_snapshot_id. Every exit carries a named termination_reason; a
+-- crash/replay never yields a half-built or duplicate project (idempotent per project).
+-- blank/template creation is a single committed transaction and needs no job row.
+CREATE TABLE project_import_jobs (
+    tenant_id          uuid NOT NULL,
+    id                 uuid NOT NULL,
+    project_id         uuid NOT NULL,
+    user_id            uuid NOT NULL,
+    create_kind        text NOT NULL,              -- W2a: 'archive'
+    stage              text NOT NULL DEFAULT 'queued',  -- queued|staged|activated|done|failed
+    idempotency_key    text NOT NULL,              -- 'import:<project_id>' (one import per project)
+    staging_object_key text,                       -- isolated archive staging object (transient)
+    archive_bytes      bigint NOT NULL DEFAULT 0,  -- compressed upload size
+    entry_count        integer,
+    size_bytes         bigint,
+    termination_reason text,                       -- done|unsafe_archive|too_large|expansion_ratio|...
+    attempt            integer NOT NULL DEFAULT 0,
+    lease_owner        text,
+    lease_expires_at   timestamptz,
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_project_import_jobs PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_pij_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pij_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_pij_stage CHECK (stage IN ('queued','staged','activated','done','failed')),
+    CONSTRAINT ck_pij_kind CHECK (create_kind IN ('archive')),
+    CONSTRAINT uq_pij_idem UNIQUE (tenant_id, idempotency_key)
+);
+CREATE INDEX ix_pij_recover ON project_import_jobs (tenant_id, stage, lease_expires_at)
+    WHERE stage NOT IN ('done','failed');
+CREATE INDEX ix_pij_project ON project_import_jobs (tenant_id, project_id);
 
 -- Project-bound Chat: immutable binding of a session to one Project. NULL = General chat.
 ALTER TABLE sessions ADD COLUMN project_id uuid;
@@ -2656,3 +2693,12 @@ Notes:
 - **Deferred tables (NOT W2a):** `project_sources` (W2b), and
   `project_working_copies`/`project_change_sets`/`project_artifacts` (W3) each land with their
   own ADR + contract-first batch; do not create them in W2a.
+- **`project_import_jobs` (implementation, ADR-037 §决策5 realization):** the durable
+  archive-import job that realizes events §2.9's "durable job (outbox + lease)" — the recovery
+  source of truth for the async archive path (lease + `(project_id)` idempotency + named
+  `termination_reason`), mirroring `knowledge_ingestion_job`. It is operational infrastructure,
+  not a rebuildable projection of `projects`/`snapshots`; blank/template creation is a single
+  transaction and writes no job row. Because a project's lifecycle is **not run-scoped**, the
+  frozen run-scoped `event_journal` (run_id NOT NULL) is not used for `project.lifecycle`;
+  the job's stage/termination_reason + at-least-once enqueue + a recovery tick provide the
+  same durability guarantee (see events §2.9).
