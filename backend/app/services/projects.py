@@ -28,6 +28,7 @@ from app.models import (
     ProjectImportJob,
     ProjectSnapshot,
     ProjectSnapshotEntry,
+    ProjectSource,
     StorageBlob,
 )
 from app.models import Session as SessionModel
@@ -144,11 +145,15 @@ async def build_import_snapshot(
     ctx: CallerContext,
     project: Project,
     entries: list[ArchiveEntry],
+    *,
+    source_oid: str | None = None,
 ) -> ProjectSnapshot:
     """Materialize ``entries`` into a new immutable ``reason='import'`` snapshot and
     atomically point ``project.current_snapshot_id`` at it. Files reference the shared
-    deduped blob store; parent dirs are synthesized. Raises InsufficientStorage over
-    quota. Idempotent per project: only ever the initial snapshot in W2a."""
+    deduped blob store; parent dirs are synthesized. ``source_oid`` records the GitHub
+    commit OID for W2b imports (NULL for blank/template/archive). Raises
+    InsufficientStorage over quota. Idempotent per project: only ever the initial
+    snapshot in W2a/W2b."""
     uid = project.user_id
 
     # 1) content-address file bytes (dedup within the batch) + quota check up front.
@@ -195,6 +200,7 @@ async def build_import_snapshot(
         reason="import",
         entry_count=0,
         size_bytes=0,
+        source_oid=source_oid,
     )
     db.add(snapshot)
     await db.flush()
@@ -386,6 +392,20 @@ async def get_list_item(
     project = await get_project(db, ctx, project_id=project_id)
     st, reason = await _import_status(db, project)
     return ProjectListItem(project=project, import_status=st, import_failure_reason=reason)
+
+
+async def get_source(
+    db: AsyncSession, ctx: CallerContext, *, project_id: uuid.UUID
+) -> ProjectSource | None:
+    """The GitHub source provenance (W2b) for a project, or None (blank/template/archive).
+    Never exposes any credential — provenance only."""
+    project = await get_project(db, ctx, project_id=project_id)
+    return await db.scalar(
+        select(ProjectSource).where(
+            ProjectSource.tenant_id == ctx.tenant_id,
+            ProjectSource.project_id == project.id,
+        )
+    )
 
 
 @dataclasses.dataclass(frozen=True)

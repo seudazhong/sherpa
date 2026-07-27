@@ -82,7 +82,12 @@ class ProjectImportJob(Base):
     """Durable archive-import job (events §2.9 realization; mirrors the knowledge
     ingestion job). Recovery source of truth: claim (lease) → stage the archive in
     isolated bounded expansion → build the initial immutable snapshot → atomically
-    activate ``projects.current_snapshot_id``. Every exit has a named reason."""
+    activate ``projects.current_snapshot_id``. Every exit has a named reason.
+
+    W2b (ADR-038) extends this with ``create_kind='github'``: the github columns carry
+    the source spec + a ``connection_id`` reference (NOT the token — the token stays in
+    ``github_connections``/vault); the worker resolves ref→OID then bounded-fetches the
+    tarball for that OID."""
 
     __tablename__ = "project_import_jobs"
 
@@ -98,9 +103,44 @@ class ProjectImportJob(Base):
     entry_count: Mapped[int | None] = mapped_column(Integer)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     termination_reason: Mapped[str | None] = mapped_column(Text)
+    # W2b GitHub columns (create_kind='github'); token stays in github_connections.
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    source_ref_type: Mapped[str | None] = mapped_column(Text)
+    source_ref: Mapped[str | None] = mapped_column(Text)
+    resolved_oid: Mapped[str | None] = mapped_column(Text)
     attempt: Mapped[int] = mapped_column(Integer, server_default="0")
     lease_owner: Mapped[str | None] = mapped_column(Text)
     lease_expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ProjectSource(Base):
+    """Canonical GitHub source provenance (ADR-038, W2b): one row per project once a
+    github import starts. After a successful import this is a frozen provenance record
+    (repo id + ref + resolved OID); the remote is NOT authoritative and W2b never
+    re-fetches. ``connection_id`` is a vault credential reference, never the token."""
+
+    __tablename__ = "project_sources"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    provider: Mapped[str] = mapped_column(Text, server_default="github")
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    repo_external_id: Mapped[str] = mapped_column(Text)
+    owner: Mapped[str] = mapped_column(Text)
+    repo: Mapped[str] = mapped_column(Text)
+    ref_type: Mapped[str] = mapped_column(Text)
+    ref_name: Mapped[str] = mapped_column(Text)
+    source_oid: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="importing")
+    imported_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

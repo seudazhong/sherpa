@@ -17,6 +17,7 @@ from app.api.activity import router as activity_router
 from app.api.auth import router as auth_router
 from app.api.candidates import router as candidates_router
 from app.api.channels import router as channels_router
+from app.api.connections import router as connections_router
 from app.api.connectors import router as connectors_router
 from app.api.drive import router as drive_router
 from app.api.files import router as files_router
@@ -49,6 +50,7 @@ app = FastAPI(title="Sherpa", version=__version__, lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(connectors_router)
+app.include_router(connections_router)
 app.include_router(candidates_router)
 app.include_router(todos_router)
 app.include_router(schedules_router)

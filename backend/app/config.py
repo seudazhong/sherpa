@@ -78,6 +78,18 @@ class Settings(BaseSettings):
     project_max_path_depth: int = 40
     project_snapshot_retention_days: int = 30  # unpinned snapshot GC window (pinned kept)
 
+    # Projects — Workspace W2b (ADR-038): GitHub ONE-TIME import (select repo + ref ->
+    # bounded archive fetch -> immutable initial snapshot -> record source repo/ref/OID).
+    # No sync/push/PR (W4), no sandbox (W3). The archive-fetch path reuses the
+    # PROJECT_MAX_* bounds above. GitHub credentials live only in the AEAD vault
+    # (github_connections) and never enter a project tree/snapshot/prompt/log/event.
+    github_api_base: str = "https://api.github.com"  # override for GitHub Enterprise
+    github_default_auth_kind: str = "pat"  # pat | app_installation (forward path)
+    github_import_ref_types: list[str] = ["branch", "tag", "commit"]
+    github_app_id: str | None = None  # GitHub App (app_installation only)
+    github_app_private_key: str | None = None  # PEM; vault/secret, never logged
+    github_archive_timeout_seconds: int = 120  # bounded archive fetch deadline
+
     # Recurring scheduled agent tasks (ADR-031). Guardrails on autonomous runs.
     scheduled_task_max_concurrency: int = 3
     scheduled_task_min_interval_seconds: int = 300

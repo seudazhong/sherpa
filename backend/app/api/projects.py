@@ -15,7 +15,7 @@ import logging
 import uuid
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +24,9 @@ from app.api.schemas import SessionSummary
 from app.api.sessions import _summary as _session_summary
 from app.auth import RequestContext, require_context, require_csrf
 from app.db import get_session
+from app.models import ProjectSource
 from app.services import CallerContext, ServiceError
+from app.services import github_source as gh
 from app.services import projects as svc
 from app.services import projects_import as pimp
 from app.services import sessions as sessions_svc
@@ -41,18 +43,31 @@ def _http(e: ServiceError) -> HTTPException:
     return HTTPException(status_code=e.http_status, detail=e.code)
 
 
+class ProjectSourceOut(BaseModel):
+    provider: Literal["github"]
+    repo_external_id: str
+    owner: str
+    repo: str
+    ref_type: Literal["branch", "tag", "commit"]
+    ref_name: str
+    source_oid: str | None
+    status: Literal["importing", "imported", "import_failed"]
+    imported_at: datetime.datetime | None
+
+
 class ProjectSummary(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
     status: Literal["active", "archived", "deleting"]
-    source_status: Literal["unbound"]
+    source_status: Literal["unbound", "importing", "imported", "import_failed"]
     current_snapshot_id: uuid.UUID | None
     used_bytes: int
     last_activity_at: datetime.datetime | None
     updated_at: datetime.datetime
     import_status: Literal["none", "importing", "ready", "failed"]
     import_failure_reason: str | None
+    source: ProjectSourceOut | None = None
 
 
 class ProjectPage(BaseModel):
@@ -105,7 +120,57 @@ class TemplateOut(BaseModel):
     description: str
 
 
-def _summary(item: svc.ProjectListItem) -> ProjectSummary:
+class GithubImportSpecIn(BaseModel):
+    repo_external_id: str
+    owner: str
+    repo: str
+    ref_type: Literal["branch", "tag", "commit"]
+    ref: str
+    connection_id: uuid.UUID | None = None
+
+
+class GithubImportRequest(BaseModel):
+    kind: Literal["github"]
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    github: GithubImportSpecIn
+
+
+class GithubRepoOut(BaseModel):
+    repo_external_id: str
+    owner: str
+    repo: str
+    private: bool
+    default_branch: str
+
+
+class GithubRepoPage(BaseModel):
+    items: list[GithubRepoOut]
+    next_cursor: str | None
+
+
+class GithubRefOut(BaseModel):
+    ref_type: Literal["branch", "tag"]
+    name: str
+    oid: str
+
+
+def _source_out(src: ProjectSource | None) -> ProjectSourceOut | None:
+    if src is None:
+        return None
+    return ProjectSourceOut(
+        provider="github",
+        repo_external_id=src.repo_external_id,
+        owner=src.owner,
+        repo=src.repo,
+        ref_type=src.ref_type,  # type: ignore[arg-type]
+        ref_name=src.ref_name,
+        source_oid=src.source_oid,
+        status=src.status,  # type: ignore[arg-type]
+        imported_at=src.imported_at,
+    )
+
+
+def _summary(item: svc.ProjectListItem, source: ProjectSource | None = None) -> ProjectSummary:
     p = item.project
     return ProjectSummary(
         id=p.id,
@@ -119,6 +184,7 @@ def _summary(item: svc.ProjectListItem) -> ProjectSummary:
         updated_at=p.updated_at,
         import_status=item.import_status,  # type: ignore[arg-type]
         import_failure_reason=item.import_failure_reason,
+        source=_source_out(source),
     )
 
 
@@ -174,21 +240,38 @@ async def create_project(
 
 @router.post("/projects/imports", status_code=status.HTTP_202_ACCEPTED)
 async def import_project(
+    request: Request,
     ctx: Annotated[RequestContext, Depends(require_csrf)],
     db: Annotated[AsyncSession, Depends(get_session)],
-    kind: Annotated[str, Form()],
-    name: Annotated[str, Form()],
-    file: Annotated[UploadFile | None, File()] = None,
 ) -> ProjectSummary:
+    """Durable async import. **archive** = multipart upload (bounded safe expand); a
+    **github** one-time import = a JSON body carrying a GithubImportSpec (ADR-038).
+    Both return `202` with `import_status='importing'` (no snapshot yet)."""
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/form-data"):
+        return await _import_archive(request, ctx, db)
+    return await _import_github(request, ctx, db)
+
+
+async def _import_archive(
+    request: Request, ctx: RequestContext, db: AsyncSession
+) -> ProjectSummary:
+    form = await request.form()
+    kind = str(form.get("kind") or "")
+    name = str(form.get("name") or "")
     if kind == "github":
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="not_implemented")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="github import uses a JSON body",
+        )
     if kind != "archive":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="bad_kind")
-    if file is None:
+    upload = form.get("file")
+    if upload is None or isinstance(upload, str):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="archive file required"
         )
-    data = await file.read()
+    data = await upload.read()
     try:
         project, _job = await pimp.create_archive_import(
             db, _caller(ctx), name=name, archive_bytes=data
@@ -205,6 +288,117 @@ async def import_project(
     return _summary(item)
 
 
+async def _import_github(request: Request, ctx: RequestContext, db: AsyncSession) -> ProjectSummary:
+    try:
+        raw = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid json"
+        ) from None
+    try:
+        body = GithubImportRequest.model_validate(raw)
+    except Exception:  # noqa: BLE001 - pydantic validation → 422
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="bad_github_spec"
+        ) from None
+    spec = body.github
+    try:
+        project, _job = await pimp.create_github_import(
+            db,
+            _caller(ctx),
+            name=body.name,
+            repo_external_id=spec.repo_external_id,
+            owner=spec.owner,
+            repo=spec.repo,
+            ref_type=spec.ref_type,
+            ref=spec.ref,
+            connection_id=spec.connection_id,
+        )
+        await db.commit()
+    except ServiceError as e:
+        await db.rollback()
+        raise _http(e) from None
+    try:
+        await queue.enqueue_project_import(ctx.tenant_id, project.id)
+    except Exception as exc:  # noqa: BLE001 - the recovery tick is the safety net
+        logger.warning("github import enqueue skipped: %s", exc)
+    item = await svc.get_list_item(db, _caller(ctx), project_id=project.id)
+    return _summary(item)
+
+
+@router.post("/projects/{project_id}/imports/retry", status_code=status.HTTP_202_ACCEPTED)
+async def retry_import(
+    project_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ProjectSummary:
+    """Re-enqueue a failed github import (idempotent; read-only re-fetch by resolved OID
+    → identical bytes). `409` once the project has an active snapshot."""
+    try:
+        await pimp.retry_github_import(db, _caller(ctx), project_id=project_id)
+        await db.commit()
+    except ServiceError as e:
+        await db.rollback()
+        raise _http(e) from None
+    try:
+        await queue.enqueue_project_import(ctx.tenant_id, project_id)
+    except Exception as exc:  # noqa: BLE001 - the recovery tick is the safety net
+        logger.warning("github import retry enqueue skipped: %s", exc)
+    item = await svc.get_list_item(db, _caller(ctx), project_id=project_id)
+    src = await svc.get_source(db, _caller(ctx), project_id=project_id)
+    return _summary(item, src)
+
+
+@router.get("/projects/github/repos")
+async def github_repos(
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+    query: str | None = None,
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+) -> GithubRepoPage:
+    """Read-only repo picker, proxied server-side through the stored connection
+    credential (the token never reaches the client). `409` when not connected, `502`
+    on a redacted upstream GitHub error."""
+    try:
+        repos, next_cursor = await gh.list_repos(
+            db, _caller(ctx), query=query, cursor=cursor, limit=limit
+        )
+    except ServiceError as e:
+        raise _http(e) from None
+    return GithubRepoPage(
+        items=[
+            GithubRepoOut(
+                repo_external_id=r.repo_external_id,
+                owner=r.owner,
+                repo=r.repo,
+                private=r.private,
+                default_branch=r.default_branch,
+            )
+            for r in repos
+        ],
+        next_cursor=next_cursor,
+    )
+
+
+@router.get("/projects/github/refs")
+async def github_refs(
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+    repo_external_id: str,
+    kind: str | None = None,
+    query: str | None = None,
+) -> list[GithubRefOut]:
+    """Read-only ref picker (branches/tags) for a repo by stable numeric id."""
+    try:
+        refs = await gh.list_refs(
+            db, _caller(ctx), repo_external_id=repo_external_id, kind=kind, query=query
+        )
+    except ServiceError as e:
+        raise _http(e) from None
+    return [GithubRefOut(ref_type=r.ref_type, name=r.name, oid=r.oid) for r in refs]  # type: ignore[arg-type]
+
+
 @router.get("/projects/{project_id}")
 async def get_project(
     project_id: uuid.UUID,
@@ -213,9 +407,10 @@ async def get_project(
 ) -> ProjectSummary:
     try:
         item = await svc.get_list_item(db, _caller(ctx), project_id=project_id)
+        src = await svc.get_source(db, _caller(ctx), project_id=project_id)
     except ServiceError as e:
         raise _http(e) from None
-    return _summary(item)
+    return _summary(item, src)
 
 
 @router.get("/projects/{project_id}/tree")
