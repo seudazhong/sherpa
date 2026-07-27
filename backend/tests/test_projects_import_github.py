@@ -39,7 +39,7 @@ async def _seed(s) -> CallerContext:  # type: ignore[no-untyped-def]
 
 
 async def _connect(s, ctx, mock: GithubMock) -> None:  # type: ignore[no-untyped-def]
-    await gh.create_connection(s, ctx, auth_kind="pat", token="secret_pat")  # noqa: S106
+    await gh.create_connection(s, ctx, auth_kind="pat", token="github_pat_secret")  # noqa: S106
 
 
 @pytest.mark.asyncio

@@ -63,6 +63,34 @@ async def test_connect_seals_and_validates(monkeypatch) -> None:  # type: ignore
 
 
 @pytest.mark.asyncio
+async def test_connect_rejects_non_fine_grained_prefix(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    # GET /user would succeed if reached — prove the prefix guard rejects BEFORE any call.
+    mock = GithubMock(login="octocat")
+    monkeypatch.setattr(gh, "_make_async_client", mock.client_factory())
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            for bad in ("ghp_classic", "gho_oauth", "ghs_install", "", "   ", "not-a-token"):
+                with pytest.raises(Invalid):
+                    await gh.create_connection(s, ctx, auth_kind="pat", token=bad)  # noqa: S106
+            # Nothing was validated upstream and nothing was stored.
+            assert mock.seen_auth == []
+            assert (await gh.get_status(s, ctx)).connected is False
+            # The accepted fine-grained prefix still connects.
+            conn = await gh.create_connection(
+                s,
+                ctx,
+                auth_kind="pat",
+                token="github_pat_ok",  # noqa: S106
+            )
+            assert conn.status == "active"
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
 async def test_connect_rejects_bad_token(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     if not await ping_db():
         pytest.skip("database not reachable")
@@ -72,7 +100,8 @@ async def test_connect_rejects_bad_token(monkeypatch) -> None:  # type: ignore[n
         try:
             ctx = await _seed(s)
             with pytest.raises(Invalid):
-                await gh.create_connection(s, ctx, auth_kind="pat", token="bad")  # noqa: S106
+                # Valid prefix so we exercise the GET /user (401) rejection path.
+                await gh.create_connection(s, ctx, auth_kind="pat", token="github_pat_bad")  # noqa: S106
         finally:
             await s.rollback()
 
@@ -90,7 +119,7 @@ async def test_pickers_and_no_connection_guard(monkeypatch) -> None:  # type: ig
             with pytest.raises(Conflict):
                 await gh.list_repos(s, ctx, query=None, cursor=None, limit=30)
 
-            await gh.create_connection(s, ctx, auth_kind="pat", token="tok")  # noqa: S106
+            await gh.create_connection(s, ctx, auth_kind="pat", token="github_pat_tok")  # noqa: S106
             repos, cursor = await gh.list_repos(s, ctx, query=None, cursor=None, limit=30)
             assert repos and repos[0].repo == "hello"
             assert repos[0].repo_external_id == "123"

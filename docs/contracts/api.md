@@ -1774,7 +1774,10 @@ class GithubConnectionStatus(StrictModel):
 
 class GithubConnectionCreate(StrictModel):
     # v1 first-version credential = a fine-grained PAT with contents:read. The token is AEAD-sealed
-    # server-side on receipt and never returned. app_installation (GitHub App) is the forward path.
+    # server-side on receipt and never returned. The service rejects any token whose shape is not a
+    # fine-grained PAT (`github_pat_` prefix) BEFORE any GitHub call — classic PAT (`ghp_`), OAuth
+    # (`gho_`), and GitHub App (`ghs_`/`ghu_`) tokens are refused with a stable, non-echoing reason.
+    # app_installation (GitHub App) remains the forward path (not accepted yet).
     auth_kind: Literal["pat"] = "pat"
     token: Annotated[SecretStr, Field(min_length=1)]
 
@@ -1853,7 +1856,9 @@ class ProjectSource(StrictModel):
   client); `409` when there is no active connection, `502` on a redacted upstream GitHub error.
 - **`GET /connections/github`** returns connection status for the UI (id + display login + scopes +
   status) — **never** the token. `POST` seals a fine-grained PAT into the AEAD vault on receipt and
-  returns only status; `DELETE` revokes + deletes the sealed token.
+  returns only status; it **rejects any non fine-grained-PAT token shape** (must start with
+  `github_pat_`; classic `ghp_` / OAuth `gho_` / GitHub App `ghs_`,`ghu_` are refused up front with a
+  stable, non-echoing `422`) before contacting GitHub. `DELETE` revokes + deletes the sealed token.
 - **Idempotency / effect semantics:** the GitHub fetch is **read-only** (no remote mutation), so —
   unlike a W4 push — there is no `effect_unknown` remote reconciliation: a failed/partial fetch is
   safely retryable (re-fetch by resolved OID → identical bytes). Idempotency key `(project_id,

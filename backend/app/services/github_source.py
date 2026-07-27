@@ -30,8 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import GithubConnection
 from app.security import (
+    FINE_GRAINED_PAT_PREFIX,
     GithubSeal,
     GithubTokenIdentity,
+    classify_github_token,
     connector_vault_capability,
     load_keyring,
     open_github_token,
@@ -160,7 +162,10 @@ async def create_connection(
     """Seal a GitHub PAT into the AEAD vault and validate it against GitHub. Any prior
     connection is soft-revoked first (one active connection per owner). Caller commits.
 
-    Validation calls ``GET /user`` so a bad/expired token is rejected synchronously
+    v1 accepts ONLY a fine-grained PAT (``github_pat_`` prefix); classic PAT / OAuth /
+    GitHub App tokens are rejected at this input boundary BEFORE any network call. The
+    rejection reason is a stable category label and never echoes the submitted token.
+    Validation then calls ``GET /user`` so a bad/expired token is rejected synchronously
     (422); the account login is stored for display. The plaintext token never leaves
     this function."""
     uid = _require_user(ctx)
@@ -169,6 +174,14 @@ async def create_connection(
     token = (token or "").strip()
     if not token:
         raise Invalid("token is required")
+    category = classify_github_token(token)
+    if category != "fine_grained_pat":
+        # Reject non fine-grained credentials up front. Report only the category label —
+        # never the token, its length, a fragment, or a hash.
+        logger.warning("github token rejected: unsupported category", extra={"category": category})
+        raise Invalid(
+            f"only fine-grained PAT ({FINE_GRAINED_PAT_PREFIX}...) tokens are accepted in v1"
+        )
 
     # Validate + learn the login BEFORE sealing, so we never persist a dead credential.
     try:

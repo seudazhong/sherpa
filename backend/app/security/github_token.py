@@ -1,10 +1,13 @@
 """Direct AES-256-GCM GitHub-connection-token sealing (ADR-019/038; data-model
 ``github_connections``).
 
-W2b stores a GitHub credential (a fine-grained PAT with ``contents:read``, or a
-GitHub App installation token) in ``github_connections`` reusing the connectors AEAD
+W2b stores a GitHub credential in ``github_connections`` reusing the connectors AEAD
 column shape (``token_enc/nonce/kek_id/key_version/token_algorithm/aad_version``). The
-token is sealed DIRECTLY under the active KEK with AAD recomputed from row identity
+**first version accepts ONLY a fine-grained PAT** (``github_pat_`` prefix, with
+``contents:read``); classic PAT / OAuth / GitHub App installation tokens are rejected at
+the input boundary. GitHub App installation tokens remain a *forward* ``auth_kind`` (not
+built yet), so the schema keeps the column extensible without widening what v1 accepts.
+The token is sealed DIRECTLY under the active KEK with AAD recomputed from row identity
 (mirrors :mod:`app.security.connector_token`). Decrypt is gated behind the same
 connector-vault capability and happens ONLY at the import-worker/connector boundary;
 the plaintext token never enters a project tree, snapshot, prompt, log, event journal,
@@ -30,6 +33,38 @@ from app.security.vault import (
 
 ALGORITHM = "AES-256-GCM"
 AAD_VERSION = 1
+
+# Fine-grained PAT prefix — the ONLY GitHub credential shape v1 accepts (ADR-038).
+FINE_GRAINED_PAT_PREFIX = "github_pat_"
+
+# Documented GitHub credential type prefixes, most-specific first (``github_pat_`` must be
+# matched before any shorter ``gh*_`` prefix). Used ONLY to derive a non-sensitive category
+# label for gating/reporting — classification never returns the token, its length, any
+# fragment, or a hash.
+_GITHUB_TOKEN_PREFIXES: tuple[tuple[str, str], ...] = (
+    (FINE_GRAINED_PAT_PREFIX, "fine_grained_pat"),
+    ("ghp_", "classic_pat"),
+    ("gho_", "oauth"),
+    ("ghu_", "app_user_to_server"),
+    ("ghs_", "app_installation"),
+    ("ghr_", "refresh"),
+)
+
+
+def classify_github_token(token: str) -> str:
+    """Return a stable, non-sensitive category label for a GitHub credential.
+
+    Categories mirror GitHub's documented token type prefixes (``fine_grained_pat`` /
+    ``classic_pat`` / ``oauth`` / ``app_user_to_server`` / ``app_installation`` /
+    ``refresh``), falling back to ``other``. This is a pure classifier: it inspects only
+    the leading prefix and NEVER discloses the token, its length, any fragment, or a hash.
+    Safe to log/report (the label alone carries no secret material).
+    """
+    stripped = (token or "").strip()
+    for prefix, label in _GITHUB_TOKEN_PREFIXES:
+        if stripped.startswith(prefix):
+            return label
+    return "other"
 
 
 @dataclasses.dataclass(frozen=True)

@@ -107,7 +107,7 @@ async def test_github_import_rest_flow(monkeypatch) -> None:  # type: ignore[no-
         assert no_conn.status_code == 409, no_conn.text
 
         # Connect, then pickers work.
-        await client.post("/connections/github", json={"token": "tok"}, headers=headers)
+        await client.post("/connections/github", json={"token": "github_pat_tok"}, headers=headers)
         repos = await client.get("/projects/github/repos")
         assert repos.status_code == 200
         assert repos.json()["items"][0]["repo_external_id"] == "123"
@@ -161,7 +161,7 @@ async def test_github_import_failure_then_retry_rest(monkeypatch) -> None:  # ty
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
         headers = await _login(client)
-        await client.post("/connections/github", json={"token": "tok"}, headers=headers)
+        await client.post("/connections/github", json={"token": "github_pat_tok"}, headers=headers)
         spec = {
             "kind": "github",
             "name": "GH retry",

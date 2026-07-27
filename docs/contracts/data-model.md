@@ -2728,7 +2728,9 @@ Notes:
 -- boundary and never leaves it. auth_kind is extensible: 'pat' = fine-grained PAT (contents:read,
 -- first-version, lowest setup for self-hosted single-user); 'app_installation' = GitHub App
 -- installation token (contents:read, <=8h, not user-bound) — the recommended/forward path, added
--- later WITHOUT a schema change. Public-repo import may use no token.
+-- later WITHOUT a schema change. v1 accepts ONLY a fine-grained PAT: the input boundary requires the
+-- 'github_pat_' token prefix and refuses classic/OAuth/App token shapes (see api.md GithubConnectionCreate).
+-- Public-repo import may use no token.
 CREATE TABLE github_connections (
     tenant_id       uuid NOT NULL,
     id              uuid NOT NULL,
