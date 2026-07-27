@@ -621,6 +621,48 @@ async def knowledge_ingest_tick(ctx: dict[str, Any]) -> str:
     return f"redispatched={len(jobs)}"
 
 
+async def project_import_job(ctx: dict[str, Any], tenant_id: str, project_id: str) -> str:
+    """Process one durable Project archive-import job (ADR-037 W2a): stage → bounded
+    expand → materialize the initial immutable snapshot → atomic activate. Re-entrant;
+    the project/snapshot/job rows are the recovery source of truth."""
+    from app.files import build_object_store
+    from app.services import projects_import as pimp
+
+    async with SessionLocal() as session:
+        reason, staging_key = await pimp.process_import(
+            session,
+            tenant_id=uuid.UUID(tenant_id),
+            project_id=uuid.UUID(project_id),
+            lease_owner=worker_identity(),
+        )
+        await session.commit()
+    # Post-commit: drop the transient staging object for terminal jobs (best-effort).
+    if reason in ("done", "failed", "already_done", "already_failed") and staging_key:
+        try:
+            await build_object_store().delete(staging_key)
+        except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
+            logger.warning("project import staging cleanup skipped: %s", exc)
+    logger.info(
+        "project import job",
+        extra={"project_id": project_id, "reason": reason},
+    )
+    return reason
+
+
+async def project_import_tick(ctx: dict[str, Any]) -> str:
+    """Leader-gated at-least-once recovery: (re)dispatch queued or lease-expired
+    Project import jobs (crash-safety net for the explicit enqueue on create)."""
+    if not await try_acquire_leader("project_import_tick", ttl_ms=55_000):
+        return "not_leader"
+    from app.services import projects_import as pimp
+
+    async with SessionLocal() as session:
+        jobs = await pimp.recover_stuck_imports(session)
+    for tid, pid in jobs:
+        await queue.enqueue_project_import(tid, pid)
+    return f"redispatched={len(jobs)}"
+
+
 class WorkerSettings:
     functions = [
         ping,
@@ -630,6 +672,7 @@ class WorkerSettings:
         approval_resume_job,
         agent_task_dispatch_job,
         knowledge_ingest_job,
+        project_import_job,
     ]
     cron_jobs = [
         cron(scheduler_tick, second=0),
@@ -639,6 +682,7 @@ class WorkerSettings:
         cron(drive_maintenance, minute=set(range(0, 60, 10))),
         cron(knowledge_ingest_tick, second={10, 40}),
         cron(knowledge_maintenance, minute=set(range(5, 60, 10))),
+        cron(project_import_tick, second={20, 50}),
     ]
     on_startup = _startup
     on_shutdown = _shutdown

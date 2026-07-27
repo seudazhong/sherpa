@@ -67,6 +67,17 @@ class Settings(BaseSettings):
     drive_trash_retention_days: int = 30
     drive_blob_gc_retention_hours: int = 24
 
+    # Projects — Workspace W2a (ADR-037): blank/template/archive projects. GitHub
+    # import is W2b; working-copy/sandbox is W3. These bound the archive-import +
+    # snapshot paths only. Project snapshots reuse the ADR-030 immutable, deduped,
+    # ref-counted storage_blobs + the shared per-user storage account/quota.
+    project_max_archive_bytes: int = 200 * 1024 * 1024  # compressed archive upload cap
+    project_max_expanded_bytes: int = 500 * 1024 * 1024  # expanded tree cap
+    project_max_entries: int = 20000  # file/dir count cap per snapshot
+    project_max_expansion_ratio: int = 100  # zip-bomb guard: expanded/compressed
+    project_max_path_depth: int = 40
+    project_snapshot_retention_days: int = 30  # unpinned snapshot GC window (pinned kept)
+
     # Recurring scheduled agent tasks (ADR-031). Guardrails on autonomous runs.
     scheduled_task_max_concurrency: int = 3
     scheduled_task_min_interval_seconds: int = 300

@@ -31,6 +31,12 @@ from app.models.knowledge import (
 )
 from app.models.memory import MemoryPassage, UserMemory
 from app.models.observability import Trace
+from app.models.projects import (
+    Project,
+    ProjectImportJob,
+    ProjectSnapshot,
+    ProjectSnapshotEntry,
+)
 from app.models.schedules import Schedule, ScheduleFiring
 from app.models.search import SessionSearchEntry
 from app.models.settings import UserSettings
@@ -76,4 +82,8 @@ __all__ = [
     "KnowledgeChunk",
     "KnowledgeIngestionJob",
     "KnowledgeRetrievalEvidence",
+    "Project",
+    "ProjectSnapshot",
+    "ProjectSnapshotEntry",
+    "ProjectImportJob",
 ]

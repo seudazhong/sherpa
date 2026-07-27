@@ -121,6 +121,7 @@ class Session(Base):
     cost_usd_rollup: Mapped[Decimal] = mapped_column(Numeric(20, 8), server_default="0")
     last_activity_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     title: Mapped[str | None] = mapped_column(Text)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at = _ts()
     updated_at = _ts()
 

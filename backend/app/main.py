@@ -25,6 +25,7 @@ from app.api.knowledge import router as knowledge_router
 from app.api.memory import router as memory_router
 from app.api.notifications import router as notifications_router
 from app.api.permissions import router as permissions_router
+from app.api.projects import router as projects_router
 from app.api.prompt import router as prompt_router
 from app.api.schedules import router as schedules_router
 from app.api.sessions import router as sessions_router
@@ -58,6 +59,7 @@ app.include_router(memory_router)
 app.include_router(knowledge_router)
 app.include_router(files_router)
 app.include_router(drive_router)
+app.include_router(projects_router)
 app.include_router(grants_router)
 app.include_router(channels_router)
 app.include_router(sse_router)

@@ -83,3 +83,13 @@ async def enqueue_agent_task_dispatch() -> None:
         await pool.enqueue_job("agent_task_dispatch_job")
     finally:
         await pool.aclose()
+
+
+async def enqueue_project_import(tenant_id: uuid.UUID, project_id: uuid.UUID) -> None:
+    """Enqueue a durable Project archive-import job (builds one project's initial
+    immutable snapshot). At-least-once; a recovery tick re-dispatches stuck jobs."""
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job("project_import_job", str(tenant_id), str(project_id))
+    finally:
+        await pool.aclose()
