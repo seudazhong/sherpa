@@ -1,17 +1,20 @@
-# design-workspace — Projects (Workspace W2a + W2b) static UI
+# design-workspace — Projects (Workspace W2a + W2b + W3) static UI
 
 Static, self-contained mockups for the **Projects** slice, landing the ADR-037 /
-ADR-038 Workspace product model on the production **Quiet Work** design system
+ADR-038 / ADR-040 Workspace product model on the production **Quiet Work** design system
 ([`../design-refined/README.md`](../design-refined/README.md)). Open the `.html`
 files directly in a browser (no build).
 
 - [`index.html`](index.html) — **W2a** (blank / template / archive import; ADR-037).
 - [`github-import.html`](github-import.html) — **W2b** (GitHub one-time import; ADR-038).
+- [`w3-change-review.html`](w3-change-review.html) — **W3** (task working copy + one-time
+  scratch-copy sandbox + change review; ADR-040 product/data + ADR-039 isolation).
 
-> **Design/contract-first only (ADR-037 / ADR-038).** These are static design drafts —
-> the capability is **not implemented** and production Projects navigation is **not
-> exposed**. Do not read the mocks as shipped behaviour. Implementation starts only
-> after owner review of the ADRs + the frozen contract deltas.
+> **Design/contract-first only (ADR-037 / ADR-038 / ADR-040 / ADR-039).** These are static design
+> drafts — the capability is **not implemented** and production Projects navigation is **not
+> exposed** (W2a/W2b are shipped; **W3 is design/contract-first only**). Do not read the mocks as
+> shipped behaviour. W3 implementation starts only after owner review of ADR-039 (isolation) +
+> ADR-040 (product/data/tool/lifecycle) + the ADR-025 revision + the frozen contract deltas.
 
 **Owner-approved decisions (2026-07-27):**
 
@@ -61,6 +64,30 @@ files directly in a browser (no build).
 W2b flow reuses that route; **no W2b production navigation is exposed** and the capability
 matrix UI cells stay ⬜ until implementation lands. GitHub import is **human-only** (not an
 agent tool — it crosses the credential boundary and pulls untrusted external content).
+
+**Surfaces (W3 — `w3-change-review.html`, ADR-040 + ADR-039):** Project-bound Chat working
+copy + one-time scratch-copy sandbox + change review. **Design/contract-first only — not
+implemented, no real sandbox mount, no W3 navigation exposed.**
+
+1. **Project Chat（执行态）** — a Project-bound chat whose first mutating action opens a
+   **durable task working copy**; the sandbox-run status card shows the lifecycle (acquire
+   lease + fence → materialize a **one-time scratch copy** → hardened offline execution →
+   persist overlay + change-set boundary), `project_run` built-in file/edit/run/test tool
+   calls, and an explicit **`environment_missing_dependencies`** (offline; no package install).
+2. **变更评审（Change Review）** — added/modified/deleted counts + artifacts + an explicit
+   **truncated/partial** note when bounds are hit; a file list with per-file **selection
+   checkboxes**, a unified diff, a binary-file note, and the artifacts section (ephemeral →
+   **Keep** / **Export → Drive**, charges quota only when kept). Action bar: **Save selected /
+   Save + checkpoint / Discard** (Save is a **human review** action — not an agent tool).
+3. **Stale / 冲突** — a moved Project head → **`409 head_moved`** (`head_generation` CAS); the
+   working copy is preserved, and the user reviews a **rebased** change set. Explains the
+   **single-writer lease + fence** (a stale sandbox can never publish an overlay) and isolated
+   per-chat working copies.
+4. **隔离与真相源** — the authoritative-state hierarchy (snapshot head → working-copy overlay →
+   scratch → container), the **sandbox mount boundary** (only the disposable scratch; **never**
+   the snapshot / blob store / credentials / other Project / Drive / `docker.sock`), the ADR-025
+   hardening retained, idempotency/recovery facts, and the **ADR-039 do-not-ship conditions**
+   for multi-user (gVisor / microVM + no shared socket + per-tenant scratch/egress/quota).
 
 **Notes:** SPA route is `/work/projects` (avoids the REST `/projects` proxy prefix).
 Responsive: desktop sidebar + a single-column layout under 900 px; verified at 390 px

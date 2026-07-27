@@ -1883,3 +1883,184 @@ class ProjectSource(StrictModel):
   source metadata / failure + retry) is **shipped** on the production `/work/projects` page (ported
   from the [static draft](../design-workspace/github-import.html) onto the Quiet Work system); the
   capability-matrix UI cells (docs/11 §9) are ✅ and the W2b GitHub create path is exposed.
+
+### 10.7 Projects — Workspace W3 task working copy + scratch-copy sandbox change review (ADR-040 + ADR-039)
+
+> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-040 product/data + ADR-039 isolation).** These routes/schemas
+> are **frozen but NOT implemented** — no production code, no migration, no real sandbox mount, and **no
+> W3 navigation exposed** in this batch. W3 = a Project-bound Chat's first mutating action opens a
+> **durable task working copy** (spans turns) from the current Project head; each execution materializes
+> a **one-time disposable scratch copy** into a **hardened, network-disabled** sandbox (ADR-039) — the
+> sandbox **never** mounts the Project snapshot / blob store / credentials / another Project / Drive.
+> Built-in file/edit/run/test tools work on scratch; a bounded overlay is persisted after each batch;
+> **Change Review** shows added/modified/deleted files + artifacts; the user chooses **Save selected**,
+> **Save + checkpoint**, or **Discard**; a moved Project head **rejects** a stale Save. All routes are
+> `Session`-authenticated, tenant + user scoped; writes require CSRF. GitHub sync/push/PR is **W4**.
+
+```python
+class SandboxRunState(StrictModel):
+    run_id: UUID                                       # the durable model-loop run (event journal)
+    state: Literal["materializing", "running", "persisted", "failed", "timed_out"]
+    warm: bool                                         # a warm container is holding the scratch cache
+    exit_code: int | None
+    timed_out: bool
+    # done | environment_missing_dependencies | wall_timeout | mem_limit | pids_limit |
+    # output_limit | changeset_bounds | path_escape | fence_lost | sandbox_unavailable | error:...
+    termination_reason: str | None
+
+class WorkingCopySummary(StrictModel):
+    id: UUID
+    project_id: UUID
+    session_id: UUID
+    base_snapshot_id: UUID
+    state: Literal["open", "ready_for_review", "saved", "discarded", "conflicted", "expired"]
+    overlay_entry_count: int
+    overlay_bytes: int
+    reserved_bytes: int
+    head_moved: bool                                   # projects.head_generation != base_head_generation (Save will conflict)
+    open_change_set_id: UUID | None                    # the current reviewable change set, if any
+    sandbox: SandboxRunState | None                    # latest sandbox run for this working copy
+    last_boundary_at: datetime | None                  # last persisted execution boundary (durability marker)
+    expires_at: datetime | None                        # idle-TTL expiry
+    updated_at: datetime
+
+class SandboxRunRequest(StrictModel):
+    # The human "Run" control; the agent uses the equivalent project_run tool. The command runs ONLY
+    # with runtimes/tools already present in the approved base image + dependencies already in the
+    # Project snapshot (report §10.7). It NEVER installs packages or enables network; a missing
+    # dependency returns termination_reason='environment_missing_dependencies'.
+    command: Annotated[str, Field(min_length=1, max_length=4000)]
+
+class ChangeSetEntrySummary(StrictModel):
+    id: UUID
+    path: str
+    change_kind: Literal["added", "modified", "deleted"]
+    size_bytes: int
+    executable: bool
+    is_binary: bool
+    has_diff: bool                                      # a bounded textual diff is available
+    diff_truncated: bool                               # per-file diff exceeded the cap
+    selected: bool                                      # default-selected for Save; user may deselect
+
+class ChangeSet(StrictModel):
+    id: UUID
+    project_id: UUID
+    working_copy_id: UUID
+    base_snapshot_id: UUID
+    state: Literal["open", "applied", "discarded", "superseded", "conflicted"]
+    added_count: int
+    modified_count: int
+    deleted_count: int
+    artifact_count: int
+    changed_bytes: int
+    diff_bytes: int
+    truncated: bool                                     # bounds hit ⇒ review shows an EXPLICIT partial
+    entries: list[ChangeSetEntrySummary]               # bounded page (path-ordered)
+    returned_count: int
+    created_at: datetime
+
+class Artifact(StrictModel):
+    id: UUID
+    name: str
+    kind: Literal["file", "log", "report"]
+    size_bytes: int
+    mime: str | None
+    retention: Literal["ephemeral", "retained", "expired"]  # charges quota only when 'retained'
+    created_at: datetime
+
+class CheckpointSpec(StrictModel):
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    note: str | None = None
+
+class ChangeSetApply(StrictModel):
+    # Save selected: apply a SUBSET of the change set. None => every currently-selected entry.
+    selected_entry_ids: list[UUID] | None = None
+    checkpoint: CheckpointSpec | None = None           # present ⇒ Save + checkpoint (pin the new snapshot)
+
+class SaveConflict(StrictModel):
+    # 409 body when the Project head moved since the working copy's base (Save CAS failed).
+    error: Literal["head_moved"] = "head_moved"
+    base_snapshot_id: UUID                              # the working copy's base
+    current_snapshot_id: UUID                           # the project head now
+    message: str                                        # human-readable; must review a rebased change set
+
+class ArtifactExport(StrictModel):
+    drive_folder_id: UUID | None = None                # target Drive folder (None => Drive root)
+    name: str | None = None                            # optional rename on export
+```
+
+`ProjectContext` (api §10.5) is extended for W3 with the live working copy of a Project-bound chat:
+
+```python
+class ProjectContext(StrictModel):        # extended
+    session_id: UUID
+    project_id: UUID | None
+    project_name: str | None
+    bound: bool
+    working_copy: WorkingCopySummary | None            # null until the first mutating action opens one
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /sessions/{id}/working-copy` | none → `WorkingCopySummary \| null` | Session | `200`, `401`, `404` |
+| `POST /projects/{id}/sandbox-runs` | `SandboxRunRequest` → `SandboxRunState` | Session + CSRF | `202`, `401`, `404`, `409`, `422`, `507` |
+| `GET /projects/{id}/working-copies/{wc_id}` | none → `WorkingCopySummary` | Session | `200`, `401`, `404` |
+| `GET /projects/{id}/change-sets/{cs_id}?cursor=&limit=` | none → `ChangeSet` | Session | `200`, `401`, `404`, `422` |
+| `GET /projects/{id}/change-sets/{cs_id}/entries/{entry_id}/diff` | none → bounded unified-diff text | Session | `200`, `401`, `404`, `413` |
+| `POST /projects/{id}/change-sets/{cs_id}/apply` | `ChangeSetApply` → `ProjectSummary` | Session + CSRF | `200`, `401`, `404`, `409`, `422`, `507` |
+| `POST /projects/{id}/change-sets/{cs_id}/discard` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404` |
+| `POST /projects/{id}/working-copies/{wc_id}/discard` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404` |
+| `GET /projects/{id}/artifacts?working_copy_id=` | none → `list[Artifact]` | Session | `200`, `401`, `404` |
+| `POST /projects/{id}/artifacts/{art_id}/keep` | none → `Artifact` | Session + CSRF | `200`, `401`, `404`, `507` |
+| `POST /projects/{id}/artifacts/{art_id}/export` | `ArtifactExport` → `DriveNode` | Session + CSRF | `201`, `401`, `404`, `507` |
+
+- **Working copy is lazy + immutable-per-chat.** A Project-bound chat reads the Project head until its
+  **first mutating action** (a `project_run`/edit), which atomically opens the durable working copy at
+  `base_snapshot_id = current_snapshot_id` (and records `base_head_generation`). `GET
+  /sessions/{id}/working-copy` returns `null` before that. Multiple chats on one Project get
+  **isolated** working copies (report §10.4); a General chat (`project_id=null`) has none.
+- **`POST /projects/{id}/sandbox-runs`** acquires the working copy's single-writer lease/fence,
+  materializes `base snapshot + persisted overlay` into a **fresh disposable scratch tree**, and runs
+  the **hardened, network-disabled** sandbox (ADR-039) against **only** that scratch (never the
+  snapshot/blob store/credentials). `202` returns the run state; the durable run/event journal carries
+  progress. After the bounded batch the overlay + change set are persisted **before** the run is
+  reported durably complete. `409` if a live run already holds the lease or the working copy is
+  `conflicted`/closed; `507` if the reservation would exceed quota. A missing dependency ends the run
+  with `environment_missing_dependencies` — **never** an undeclared package install or network enable.
+- **Change Review.** `GET /projects/{id}/change-sets/{cs_id}` returns a bounded, path-ordered page of
+  added/modified/deleted entries + counts + `truncated` (bounds hit ⇒ **explicit partial**, never a
+  silent full-looking diff). Per-file bounded unified diffs come from the `.../diff` sub-route
+  (`413` if the single-file diff exceeds the cap → download/summary only). Binary files carry
+  `is_binary=true` and no inline diff.
+- **Save selected / Save + checkpoint (report §10.6).** `POST .../apply` applies the subset
+  `selected_entry_ids` (or all currently-selected), building a **new immutable snapshot**
+  (`reason='save'`), atomically advancing `current_snapshot_id` **and** bumping `head_generation`; a
+  `checkpoint` also pins it (`reason='checkpoint'`). The apply is a **compare-and-set** on
+  `(current_snapshot_id, head_generation)`: if the head moved it returns **`409` `SaveConflict`
+  (`head_moved`)** and applies nothing — the client must review a rebased change set. `507` if applying
+  new bytes would exceed quota. Unselected entries remain in the working copy for later turns.
+- **Discard.** `POST .../change-sets/{cs_id}/discard` or `.../working-copies/{wc_id}/discard` deletes
+  the overlay/staged bytes, releases the reservation, and leaves the Project head **byte-identical** to
+  the base snapshot (`state='discarded'`).
+- **Artifacts.** Run outputs are `ephemeral` and charge **no** quota until **Keep** (`.../keep` →
+  `retention='retained'`, reserves quota, `507` over quota) or **Export** (`.../export` copies into
+  Drive via the Drive service → `DriveNode`). Credentials and running processes are **absent** from
+  every artifact/snapshot (report §10.6).
+- **Tool surface (W3, ADR-023 dual adapter):**
+  - `project_run` — run built-in **file/edit/run/test** tools against the **current Project-bound
+    chat's working copy** in the hardened offline sandbox. Effect `idempotent_write` (the durable
+    overlay/change-set persist is fence-guarded + idempotent per boundary); policy **allow** (own-data,
+    sandboxed, network-off) — but **only** in a Project-bound chat, and **only** with the hardened
+    scratch-only mount from ADR-039. There is **no** `delegate_coding_agent` tool.
+  - `project_review_changes` — read the current change set (added/modified/deleted + bounded diffs).
+    Effect `read_only`; policy **allow**.
+  - **Not given to the agent (human review gate):** `project_save` / `project_checkpoint` /
+    `project_discard` / artifact `keep`/`export` are **user-only** — advancing the Project head is an
+    explicit human Change-Review decision, never an agent auto-apply (deferred: a grant-gated
+    agent-save is a later ADR). `project_push` (W4), any destructive purge, and dependency install are
+    also **not** agent tools. Project files + sandbox output remain **untrusted content** (ADR-009).
+- **UI:** the W3 flow (Project-bound Chat execution state / diff Change Review / artifacts / Save
+  selected · Save + checkpoint · Discard / stale-head + conflict) is a **design/contract-first static
+  draft only** ([`../design-workspace/w3-change-review.html`](../design-workspace/w3-change-review.html));
+  the capability-matrix UI cells (docs/11 §9) stay **⬜** and **no W3 production navigation is exposed**
+  until implementation lands after owner review.

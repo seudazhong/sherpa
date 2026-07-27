@@ -772,6 +772,63 @@ decrypted only by the import worker at the connector boundary and never enter an
 prompt, tool result, snapshot, or (W3) sandbox (ADR-019). Establishing/removing a GitHub connection
 is an owner user-level operation and emits no `project.lifecycle` event (it touches no project).
 
+### 2.11 Project sandbox run + working-copy save — Workspace W3 (ADR-040 + ADR-039, design/contract-first — additive)
+
+> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-040 product/data + ADR-039 isolation).** Frozen shape for the
+> W3 slice (task working copy + one-time scratch-copy sandbox + change review). **Not implemented** in
+> this batch. Project **file bytes and all credentials never enter the append-only journal** — bytes
+> live in immutable ADR-030 `storage_blobs`; the journal/log carries only ids + bounded metadata +
+> named termination reasons (ADR-016/019/021).
+
+W3 execution runs **inside** a Project-bound chat's durable **model-loop run** (the frozen `run`/
+`event_journal` machinery, ADR-016). It reuses the run lifecycle (`run.started`/`run.settled`),
+streaming, and tool events (§2.1/§2.2); a `project_run` tool call is an ordinary `tool-call`/
+`tool-result` on that run. W3 adds **no new run event type** — the durable project-side record is the
+W3 tables (data-model §Projects W3) + structured logs. The **new effect discipline** is:
+
+**① Sandbox execution has no external side effect ⇒ no `effect_unknown` for the run.** The sandbox is
+**network-disabled** and mounts **only** a disposable node-local scratch copy (ADR-039); it mutates no
+external system, no remote, no source of truth. Killing the container, losing the node, or a redelivered
+job therefore never produces an `effect_unknown` external outcome — the run simply **rematerializes**
+`base snapshot + persisted overlay` into a fresh scratch tree and continues from the last persisted
+boundary (report §10.4). `effect_unknown`/remote reconciliation belongs to **W4** push, not W3.
+
+**② The only durable effect is the fence-guarded overlay/change-set persist (idempotent).** After each
+**bounded tool batch, before waiting for the user, and before teardown**, the worker persists the
+scratch delta into `project_working_copy_entries` + a `project_change_sets` projection, stamped with the
+working copy's `fence_token`. This write is **idempotent**: a replay with the same fence + boundary
+re-produces the same overlay (content-addressed blobs dedupe); a **stale** sandbox whose fence is behind
+the working copy's current `fence_token` is **rejected** and cannot publish (data-model §Projects W3,
+"single-writer lease + fence"). A run is **not** reported successfully durable until this boundary
+commits (`project_sandbox_runs.persisted_boundary_at` set). Unpersisted scratch writes are never shown
+as completed work.
+
+**③ Save is a compare-and-set head advance (idempotent per change set).** *Save selected* / *Save +
+checkpoint* build a new immutable snapshot and advance `projects.current_snapshot_id` **and**
+`head_generation` in one transaction, **gated by a CAS** on `(current_snapshot_id == base_snapshot_id
+AND head_generation == base_head_generation)`. If the head moved (another chat Saved, W4 apply-remote),
+the CAS fails ⇒ the change set goes `conflicted` and **nothing is applied** (api §10.7 `409
+head_moved`); the user must review a rebased change set. Re-applying an already-applied change set is a
+no-op (its `state='applied'` + `created_snapshot_id` are terminal). *Discard* releases the reservation
+and leaves the head byte-identical to the base. Idle-expiry release and reservation release are **one
+atomic transition** (an open working copy cannot keep reserved bytes after an independent sweep).
+
+**④ Named termination reasons (every exit).** A `project_sandbox_runs.termination_reason` is one of:
+`done | environment_missing_dependencies | wall_timeout | mem_limit | pids_limit | output_limit |
+changeset_bounds | path_escape | fence_lost | sandbox_unavailable | error:...`. A missing dependency is
+an **explicit** `environment_missing_dependencies` result — the offline sandbox **never** silently
+enables network to fetch packages (report §10.7). Change-set bounds (`WORKING_COPY_MAX_*`, config §1.7)
+overflow ⇒ `changeset_bounds` + a `truncated` change set (explicit partial), never a silent full diff.
+
+**⑤ Crash recovery (reuse §5 turn-granular replay).** Recovery rebuilds the working copy from durable
+state at the last committed boundary and rematerializes an equivalent scratch tree; `project_run` tool
+replays are safe because the persist is fence-guarded + idempotent and the sandbox has no external
+effect. Container/node loss cannot lose the last persisted boundary; two chats on one Project cannot
+observe or mutate each other's pending working copies (isolated rows, per-session live-uniqueness).
+**Credentials never enter** the scratch tree, overlay, change set, artifact, snapshot, journal, or log
+(ADR-019/039); the scratch tree, warm container, and prepared image are rebuildable caches, never the
+recovery source of truth.
+
 ## 3. Delivery and SSE
 
 ### 3.1 Required path
