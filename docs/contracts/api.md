@@ -1752,9 +1752,9 @@ class ProjectContext(StrictModel):
 
 ### 10.6 Projects — Workspace W2b GitHub one-time import (ADR-038)
 
-> **Design/contract-first only (ADR-038).** These routes are **not yet implemented** and no W2b
-> production navigation is exposed; the shape is frozen here so the implementation (after owner
-> review) matches exactly. W2b upgrades `POST /projects/imports kind='github'` from **`501` to a
+> **✅ W2b SHIPPED (routes implemented; SPA `/work/projects` GitHub path exposed).** (This
+> banner was the design/contract-first note; W2b is now implemented — see the "UI" bullet at
+> the end of this section.) W2b upgrades `POST /projects/imports kind='github'` from **`501` to a
 > durable `202`** and adds read-only **repo/ref pickers** + **GitHub connection** management. It is
 > a **one-time import** (select repo + ref → bounded archive fetch → immutable initial snapshot →
 > record source repo/ref/OID); **no sync/fetch loop, working copy, push, or PR** (those are W3/W4).
@@ -1866,6 +1866,6 @@ class ProjectSource(StrictModel):
   **untrusted content**, ADR-009). **Not given to the agent:** `project_push` (W4), `project_run`
   (W3), any destructive purge.
 - **UI:** the W2b flow (GitHub connection status / repo + ref selection / import progress / success
-  source metadata / failure + retry) is delivered in this batch as a **static draft only**
-  ([`github-import.html`](../design-workspace/github-import.html)); the capability-matrix UI cells
-  (docs/11 §9) stay ⬜ and **no W2b production navigation is exposed** until implementation lands.
+  source metadata / failure + retry) is **shipped** on the production `/work/projects` page (ported
+  from the [static draft](../design-workspace/github-import.html) onto the Quiet Work system); the
+  capability-matrix UI cells (docs/11 §9) are ✅ and the W2b GitHub create path is exposed.

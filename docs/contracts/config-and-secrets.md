@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     # Projects — Workspace W2b (ADR-038): GitHub ONE-TIME import (select repo + ref -> bounded
     # archive fetch -> immutable initial snapshot -> record source repo/ref/OID). No sync/push/PR
     # (W4), no sandbox (W3). The archive-fetch path reuses the PROJECT_MAX_* bounds above.
-    # (Design/contract-first — not yet wired; frozen here so the W2b impl reads them exactly.)
+    # (✅ W2b SHIPPED — migration 0029; wired by the import worker + connection service.)
     github_api_base: str = Field(default="https://api.github.com")          # override for GHE
     github_default_auth_kind: str = Field(default="pat")                    # pat | app_installation
     github_import_ref_types: list[str] = Field(default_factory=lambda: ["branch", "tag", "commit"])
@@ -419,7 +419,7 @@ Design/contract-first (ADR-037); the settings above are frozen but **not yet wir
 
 ### 1.6 GitHub source boundary — Workspace W2b (ADR-038)
 
-Design/contract-first (ADR-038); the `GITHUB_*` settings above are frozen but **not yet wired**. W2b is a **one-time GitHub import** (select repo + ref → bounded archive fetch → immutable initial snapshot → record source repo/ref/OID); the remote is **not** authoritative after import. When the W2b implementation lands it MUST honor this boundary:
+**✅ W2b SHIPPED (migration `0029`); the `GITHUB_*` settings are wired.** W2b is a **one-time GitHub import** (select repo + ref → bounded archive fetch → immutable initial snapshot → record source repo/ref/OID); the remote is **not** authoritative after import. The W2b implementation honors this boundary:
 
 - **Credentials live only in the vault/connector boundary (ADR-019).** The GitHub token (a fine-grained PAT with `contents:read`, or a GitHub App installation token) is AEAD-sealed in `github_connections` and decrypted **only** by the import worker at the connector boundary. It MUST NOT appear in a project file tree, snapshot, snapshot entry, prompt, log, tool result, the event journal, an export, or (W3) a sandbox. `project_sources.connection_id` is a reference, never the token. `GITHUB_APP_PRIVATE_KEY` is a secret handled like other AEAD/KEK material (never logged).
 - **The fetched archive is untrusted input.** The worker resolves the ref → a concrete commit OID, fetches the **tarball** of that OID (contents only, no git history — no `git clone`, no `.git`, no working copy), and expands it through the **same W2a isolated, bounded, in-memory safe expander**: enforce `PROJECT_MAX_ARCHIVE_BYTES`/`PROJECT_MAX_EXPANDED_BYTES`/`PROJECT_MAX_ENTRIES`/`PROJECT_MAX_EXPANSION_RATIO`/`PROJECT_MAX_PATH_DEPTH` and reject absolute/traversal (`..`)/NUL paths, device/FIFO nodes, hard links, and escaping symlinks before materializing. Do not trust upstream file names as safe.

@@ -714,7 +714,7 @@ run/message events carry `session_id` as usual.
 
 ### 2.10 Project lifecycle — Workspace W2b GitHub one-time import (ADR-038, additive)
 
-> **Design/contract-first only (ADR-038).** Extends §2.9 for the W2b GitHub one-time import.
+> **✅ W2b SHIPPED (migration `0029`).** Extends §2.9 for the W2b GitHub one-time import.
 > No new event **type** — the `project.lifecycle` shape is reused with `create_kind='github'`.
 > Project **file bytes and GitHub credentials never appear anywhere in the durable record**
 > (bytes → immutable ADR-030 `storage_blobs`; token → the AEAD vault only). As in §2.9 the

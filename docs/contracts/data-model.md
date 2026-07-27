@@ -2705,9 +2705,12 @@ Notes:
 
 ### Projects — Workspace W2b GitHub one-time import (ADR-038, additive, post-v1)
 
-> **Design/contract-first only (ADR-038).** These deltas are **not yet migrated** and no W2b
-> production navigation is exposed; this section freezes the W2b shape so the implementation
-> (after owner review) writes to it exactly. **W2b = GitHub *one-time* import** — select a
+> **✅ W2b SHIPPED (migration `0029`; `/work/projects` GitHub path exposed).** (The banner
+> below was the design/contract-first note; W2b is now implemented — `github_connections` +
+> `project_sources` + `source_status` widen + `project_import_jobs` github columns all live
+> at migration 0029, `services/github_source.py` + the `projects_import.py` github branch,
+> REST §10.6, and the production GitHub connect/repo·ref/import UI.) **W2b = GitHub
+> *one-time* import** — select a
 > repository + ref (branch/tag/commit), bounded **archive fetch** of that ref's tree (no git
 > history), record source repo/ref/OID provenance, materialize an **immutable initial snapshot**.
 > After import the project lives independently; **the remote is not the source of truth.** No

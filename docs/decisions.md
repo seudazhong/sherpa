@@ -492,7 +492,7 @@
 
 ### ADR-038 · Projects W2b = GitHub 一次性导入（选 repo/ref + 有界归档获取 + 记录 source OID + 物化不可变初始快照）——契约与设计先行（延伸 ADR-037；复用 ADR-019/030；源自 R-WORKSPACE-PRODUCT §9）
 
-> **状态：方向由负责人拍板（2026-07-27，「按 W2a→W2b→W3→W4 正常顺序继续，现执行 W2b 的研究收敛 + ADR/契约/设计先行」）；本批次先契约后代码——只写 ADR-038 + 冻结契约增量（data-model/api/events/config）+ 能力矩阵行 + W2b 静态 UI 稿，禁止写生产代码、禁止迁移、禁止暴露新生产入口/导航。** 完整调研见 [`research/workspace-product-report.md`](research/workspace-product-report.md) §9（Project 与 Git 语义）；本批 W2b 生产设计系统静态稿见 [`design-workspace/github-import.html`](design-workspace/github-import.html)。
+> **状态：方向由负责人拍板（2026-07-27）；契约先行批次已完成，随后负责人批准 W2b **生产实现**（2026-07-27）——本 ADR 的契约增量（data-model/api §10.6/events §2.10/config §1.6）已落地为代码：migration `0029`（`github_connections`/`project_sources`/`source_status` 扩展/`project_import_jobs` github 列）+ `security/github_token.py`（AEAD）+ `services/github_source.py` + `services/projects_import.py` github 分支 + `api/connections.py` + `api/projects.py` §10.6 + 生产 `/work/projects` GitHub UI，两栈验证通过。** 完整调研见 [`research/workspace-product-report.md`](research/workspace-product-report.md) §9（Project 与 Git 语义）；W2b 生产设计系统静态稿见 [`design-workspace/github-import.html`](design-workspace/github-import.html)。
 
 - **背景（承接谁、为何要）**：ADR-037 把 Projects 分四步落地并在 §决策2 明确「**W2b = GitHub 一次性分支导入**（浅拉取分支头 → 初始快照 + 记录稳定 repo id/branch/source OID；不保留全量远程历史、不后台合并/推送），需**后续 ADR**（`project_sources` 契约 + GitHub App 凭据边界）」。W2a（空/模板/归档）已上线（migration `0028`、`/work/projects`）。本 ADR 就是 ADR-037 预告的那个「后续 ADR」，把 GitHub 一次性导入的**契约与设计**冻结下来，实现待本批评审通过再开始。
 
