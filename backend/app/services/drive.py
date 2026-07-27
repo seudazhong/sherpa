@@ -36,7 +36,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.files import build_object_store
-from app.models import DriveNode, DriveVersion, ProjectSnapshotEntry, StorageAccount, StorageBlob
+from app.models import (
+    DriveNode,
+    DriveVersion,
+    ProjectArtifact,
+    ProjectSnapshotEntry,
+    StorageAccount,
+    StorageBlob,
+)
 from app.services.context import CallerContext
 from app.services.errors import (
     Conflict,
@@ -152,7 +159,24 @@ async def _recompute_blob(
             ProjectSnapshotEntry.content_hash == content_hash,
         )
     )
-    total = int(node_refs or 0) + int(version_refs or 0) + int(project_refs or 0)
+    # W3 (ADR-040): a RETAINED project artifact keeps its blob referenced + counted
+    # (ephemeral artifacts have retention='ephemeral' and do NOT charge quota).
+    artifact_refs = await db.scalar(
+        select(func.count())
+        .select_from(ProjectArtifact)
+        .where(
+            ProjectArtifact.tenant_id == ctx.tenant_id,
+            ProjectArtifact.user_id == uid,
+            ProjectArtifact.content_hash == content_hash,
+            ProjectArtifact.retention == "retained",
+        )
+    )
+    total = (
+        int(node_refs or 0)
+        + int(version_refs or 0)
+        + int(project_refs or 0)
+        + int(artifact_refs or 0)
+    )
     blob.ref_count = total
     if total == 0 and blob.unreferenced_at is None:
         blob.unreferenced_at = _now()

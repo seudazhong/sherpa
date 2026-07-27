@@ -100,9 +100,69 @@ async def test_project_tree_tool_marks_truncated_page(monkeypatch) -> None:  # t
 
 def test_project_tools_are_allow_policy() -> None:
     reg = build_default_registry()
-    for name in ("list_projects", "create_project", "project_tree", "project_read"):
+    # W2a own-data tools + the W3 sandbox/review tools all classify as allow.
+    for name in (
+        "list_projects",
+        "create_project",
+        "project_tree",
+        "project_read",
+        "project_run",
+        "project_review_changes",
+    ):
         assert evaluate(reg.get(name)) == "allow", name
-    # Destructive project execution/push are not exposed as tools in W2a.
-    for absent in ("project_run", "project_push", "project_delete"):
+    # Save-to-head, push (W4), and destructive delete are NOT agent tools.
+    for absent in ("project_save", "project_checkpoint", "project_push", "project_delete"):
         with pytest.raises(ToolError):
             reg.get(absent)
+
+
+@pytest.mark.asyncio
+async def test_project_run_and_review_tools(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    from app.config import settings
+    from app.models import Session as SessionModel
+    from app.services import projects as svc
+
+    monkeypatch.setattr(settings, "sandbox_scratch_root", str(tmp_path / "scratch"))
+    async with SessionLocal() as s:
+        try:
+            tid, uid = await _seed(s)
+            from app.services.context import CallerContext
+
+            cc = CallerContext(tenant_id=tid, user_id=uid, actor="user")
+            project = await svc.create_project(s, cc, name="Run proj", template_id="python-basic")
+            sid = uuid.uuid4()
+            s.add(
+                SessionModel(
+                    tenant_id=tid,
+                    id=sid,
+                    user_id=uid,
+                    umo_key=f"web:chat:{sid}",
+                    channel="web",
+                    channel_installation_id="local",
+                    scope_type="chat",
+                    external_scope_id=str(sid),
+                    status="open",
+                    project_id=project.id,
+                    admitted_seq=1,
+                )
+            )
+            await s.flush()
+
+            reg = build_default_registry()
+            tctx = ToolContext(
+                tenant_id=tid, user_id=uid, session_id=sid, run_id=uuid.uuid4(), session=s
+            )
+            run = await reg.get("project_run").execute(
+                tctx,
+                {"writes": [{"path": "notes.txt", "content": "hello from the agent\n"}]},
+            )
+            assert "Pending changes" in run.llm_content
+            assert "+1" in run.llm_content
+            # Review lists the staged change; Save stays a human action.
+            review = await reg.get("project_review_changes").execute(tctx, {})
+            assert "notes.txt" in review.llm_content
+            assert "user" in review.llm_content.lower()
+        finally:
+            await s.rollback()

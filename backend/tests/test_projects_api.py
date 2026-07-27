@@ -219,3 +219,81 @@ async def test_open_in_chat_on_failed_import_is_rejected() -> None:
         # Open in Chat on the snapshotless project → 422, no bound session created.
         chat = await client.post(f"/projects/{pid}/chats", json={"title": "x"}, headers=headers)
         assert chat.status_code == 422, chat.text
+
+
+@pytest.mark.asyncio
+async def test_project_workcopy_change_review_rest_flow(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """W3 §10.7: a Project-bound chat's staged changes flow through the REST change-review
+    surface — working-copy summary, change set, Save (CSRF-gated) advancing the head."""
+    if not await ping_db() or not await ping_redis():
+        pytest.skip("database or redis not reachable")
+    monkeypatch.setattr(settings, "sandbox_scratch_root", str(tmp_path / "scratch"))
+    await _drop_owner()
+    from app.sandbox.project_sandbox import ScratchEdit
+    from app.services import project_sandbox as sbx_svc
+    from app.services import project_workcopy as wc_svc
+    from app.services.context import CallerContext
+
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        login = await client.post(
+            "/auth/login",
+            json={"email": settings.owner_email, "password": settings.owner_password},
+        )
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
+
+        tmpl = await client.post(
+            "/projects", json={"name": "WC", "template_id": "python-basic"}, headers=headers
+        )
+        pid = tmpl.json()["id"]
+        chat = await client.post(f"/projects/{pid}/chats", json={"title": "work"}, headers=headers)
+        sid = chat.json()["id"]
+
+        # No mutating action yet → working copy is null.
+        empty = await client.get(f"/sessions/{sid}/working-copy")
+        assert empty.status_code == 200 and empty.json() is None
+
+        # Stage a change the way project_run does (host-side edit, offline sandbox).
+        tid, uid = owner_ids()
+        cc = CallerContext(tenant_id=tid, user_id=uid, actor="user")
+        async with SessionLocal() as s:
+            wc = await wc_svc.open_working_copy(s, cc, session_id=uuid.UUID(sid))
+            out = await sbx_svc.run_sandbox(
+                s,
+                cc,
+                wc,
+                run_id=uuid.uuid4(),
+                request=sbx_svc.SandboxRequest(
+                    edits=[ScratchEdit(path="notes.txt", op="write", data=b"hi\n")]
+                ),
+            )
+            cs_id = str(out.change_set_id)
+            await s.commit()
+
+        # Working-copy summary now reflects the pending change.
+        wcs = await client.get(f"/sessions/{sid}/working-copy")
+        assert wcs.status_code == 200
+        wc_body = wcs.json()
+        assert wc_body["overlay_entry_count"] == 1
+        assert wc_body["open_change_set_id"] == cs_id
+        assert wc_body["head_moved"] is False
+
+        # Change set + entry.
+        cs = await client.get(f"/projects/{pid}/change-sets/{cs_id}")
+        assert cs.status_code == 200
+        assert cs.json()["added_count"] == 1
+        assert any(e["path"] == "notes.txt" for e in cs.json()["entries"])
+
+        # Save requires CSRF.
+        no_csrf = await client.post(f"/projects/{pid}/change-sets/{cs_id}/apply", json={})
+        assert no_csrf.status_code == 403
+        applied = await client.post(
+            f"/projects/{pid}/change-sets/{cs_id}/apply", json={}, headers=headers
+        )
+        assert applied.status_code == 200, applied.text
+        # Head advanced to a new save snapshot.
+        assert applied.json()["current_snapshot_id"] != tmpl.json()["current_snapshot_id"]
+
+        # After a full Save the working copy is closed.
+        after = await client.get(f"/sessions/{sid}/working-copy")
+        assert after.json() is None or after.json()["state"] == "saved"

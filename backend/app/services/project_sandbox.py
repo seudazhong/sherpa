@@ -30,6 +30,7 @@ from app.files import build_object_store
 from app.models import ProjectSandboxRun, ProjectWorkingCopy, StorageBlob
 from app.sandbox import project_sandbox as psbx
 from app.services import drive as drive_svc
+from app.services import project_changes as changes_svc
 from app.services import project_workcopy as wc_svc
 from app.services.context import CallerContext
 from app.services.errors import Conflict
@@ -55,6 +56,7 @@ class SandboxOutcome:
     sandbox_run: ProjectSandboxRun
     stdout: str
     stderr: str
+    change_set_id: uuid.UUID | None = None
 
 
 def _materialize_entries(
@@ -209,7 +211,21 @@ async def run_sandbox(
         sr.timed_out = timed_out
         sr.termination_reason = reason if published else "fence_lost"
         await db.flush()
-        return SandboxOutcome(sandbox_run=sr, stdout=stdout, stderr=stderr)
+
+        change_set_id: uuid.UUID | None = None
+        if published:
+            # Record the command output as an ephemeral artifact (charges no quota until
+            # Keep/Export) + (re)build the reviewable change set from the overlay.
+            if request.command and (stdout or stderr):
+                combined = (stdout + ("\n" + stderr if stderr else "")).encode("utf-8", "replace")
+                await changes_svc.record_artifact(
+                    db, ctx, wc, run_id=run_id, name="run-output.log", data=combined
+                )
+            cs = await changes_svc.build_change_set(db, ctx, wc, run_id=run_id)
+            change_set_id = cs.id if cs is not None else None
+        return SandboxOutcome(
+            sandbox_run=sr, stdout=stdout, stderr=stderr, change_set_id=change_set_id
+        )
     finally:
         # The scratch tree is a rebuildable cache — always torn down; the durable boundary
         # is the persisted overlay, never the container/scratch.

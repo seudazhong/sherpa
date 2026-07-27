@@ -16,17 +16,30 @@ import uuid
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import queue
+from app.api.drive import DriveNode, _node
 from app.api.schemas import SessionSummary
 from app.api.sessions import _summary as _session_summary
 from app.auth import RequestContext, require_context, require_csrf
 from app.db import get_session
-from app.models import ProjectSource
+from app.models import (
+    Project,
+    ProjectArtifact,
+    ProjectChangeSet,
+    ProjectSandboxRun,
+    ProjectSource,
+    ProjectWorkingCopy,
+)
 from app.services import CallerContext, ServiceError
 from app.services import github_source as gh
+from app.services import project_changes as changes_svc
+from app.services import project_sandbox as sbx_svc
+from app.services import project_workcopy as wc_svc
 from app.services import projects as svc
 from app.services import projects_import as pimp
 from app.services import sessions as sessions_svc
@@ -109,11 +122,38 @@ class ProjectChatCreate(BaseModel):
     title: str | None = None
 
 
+class SandboxRunState(BaseModel):
+    run_id: uuid.UUID
+    state: Literal["materializing", "running", "persisted", "failed", "timed_out"]
+    warm: bool
+    exit_code: int | None
+    timed_out: bool
+    termination_reason: str | None
+
+
+class WorkingCopySummary(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    session_id: uuid.UUID
+    base_snapshot_id: uuid.UUID
+    state: Literal["open", "ready_for_review", "saved", "discarded", "conflicted", "expired"]
+    overlay_entry_count: int
+    overlay_bytes: int
+    reserved_bytes: int
+    head_moved: bool
+    open_change_set_id: uuid.UUID | None
+    sandbox: SandboxRunState | None
+    last_boundary_at: datetime.datetime | None
+    expires_at: datetime.datetime | None
+    updated_at: datetime.datetime
+
+
 class ProjectContextOut(BaseModel):
     session_id: uuid.UUID
     project_id: uuid.UUID | None
     project_name: str | None
     bound: bool
+    working_copy: WorkingCopySummary | None = None
 
 
 class TemplateOut(BaseModel):
@@ -495,6 +535,8 @@ async def get_project_context(
 ) -> ProjectContextOut:
     try:
         pc = await svc.project_context(db, _caller(ctx), session_id=session_id)
+        wc = await wc_svc.get_live(db, _caller(ctx), session_id=session_id)
+        wc_out = await _wc_summary(db, _caller(ctx), wc) if wc is not None else None
     except ServiceError as e:
         raise _http(e) from None
     return ProjectContextOut(
@@ -502,4 +544,412 @@ async def get_project_context(
         project_id=pc.project_id,
         project_name=pc.project_name,
         bound=pc.bound,
+        working_copy=wc_out,
     )
+
+
+# --- Workspace W3: working copy / sandbox / change review (api.md §10.7) -----
+
+
+class SandboxRunRequest(BaseModel):
+    command: Annotated[str, Field(min_length=1, max_length=4000)]
+
+
+class ChangeSetEntrySummary(BaseModel):
+    id: uuid.UUID
+    path: str
+    change_kind: Literal["added", "modified", "deleted"]
+    size_bytes: int
+    executable: bool
+    is_binary: bool
+    has_diff: bool
+    diff_truncated: bool
+    selected: bool
+
+
+class ChangeSetOut(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    working_copy_id: uuid.UUID
+    base_snapshot_id: uuid.UUID
+    state: Literal["open", "applied", "discarded", "superseded", "conflicted"]
+    added_count: int
+    modified_count: int
+    deleted_count: int
+    artifact_count: int
+    changed_bytes: int
+    diff_bytes: int
+    truncated: bool
+    entries: list[ChangeSetEntrySummary]
+    returned_count: int
+    created_at: datetime.datetime
+
+
+class ArtifactOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    kind: Literal["file", "log", "report"]
+    size_bytes: int
+    mime: str | None
+    retention: Literal["ephemeral", "retained", "expired"]
+    created_at: datetime.datetime
+
+
+class CheckpointSpec(BaseModel):
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    note: str | None = None
+
+
+class ChangeSetApply(BaseModel):
+    selected_entry_ids: list[uuid.UUID] | None = None
+    checkpoint: CheckpointSpec | None = None
+
+
+class SaveConflict(BaseModel):
+    error: Literal["head_moved"] = "head_moved"
+    base_snapshot_id: uuid.UUID
+    current_snapshot_id: uuid.UUID
+    message: str
+
+
+class ArtifactExport(BaseModel):
+    drive_folder_id: uuid.UUID | None = None
+    name: str | None = None
+
+
+def _artifact_out(art: ProjectArtifact) -> ArtifactOut:
+    return ArtifactOut(
+        id=art.id,
+        name=art.name,
+        kind=art.kind,  # type: ignore[arg-type]
+        size_bytes=art.size_bytes,
+        mime=art.mime,
+        retention=art.retention,  # type: ignore[arg-type]
+        created_at=art.created_at,
+    )
+
+
+async def _sandbox_state(
+    db: AsyncSession, ctx: CallerContext, wc: ProjectWorkingCopy
+) -> SandboxRunState | None:
+    sr = await db.scalar(
+        select(ProjectSandboxRun)
+        .where(
+            ProjectSandboxRun.tenant_id == ctx.tenant_id,
+            ProjectSandboxRun.working_copy_id == wc.id,
+        )
+        .order_by(ProjectSandboxRun.created_at.desc())
+        .limit(1)
+    )
+    if sr is None:
+        return None
+    return SandboxRunState(
+        run_id=sr.run_id,
+        state=sr.state,  # type: ignore[arg-type]
+        warm=sr.warm_until is not None,
+        exit_code=sr.exit_code,
+        timed_out=sr.timed_out,
+        termination_reason=sr.termination_reason,
+    )
+
+
+async def _wc_summary(
+    db: AsyncSession, ctx: CallerContext, wc: ProjectWorkingCopy
+) -> WorkingCopySummary:
+    project = await db.get(Project, (ctx.tenant_id, wc.project_id))
+    moved = bool(project is not None and wc_svc.head_moved(project, wc))
+    open_cs = await changes_svc.open_change_set(db, ctx, wc)
+    sandbox = await _sandbox_state(db, ctx, wc)
+    return WorkingCopySummary(
+        id=wc.id,
+        project_id=wc.project_id,
+        session_id=wc.session_id,
+        base_snapshot_id=wc.base_snapshot_id,
+        state=wc.state,  # type: ignore[arg-type]
+        overlay_entry_count=wc.overlay_entry_count,
+        overlay_bytes=wc.overlay_bytes,
+        reserved_bytes=wc.reserved_bytes,
+        head_moved=moved,
+        open_change_set_id=open_cs.id if open_cs is not None else None,
+        sandbox=sandbox,
+        last_boundary_at=wc.last_boundary_at,
+        expires_at=wc.expires_at,
+        updated_at=wc.updated_at,
+    )
+
+
+@router.get("/sessions/{session_id}/working-copy")
+async def get_working_copy(
+    session_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> WorkingCopySummary | None:
+    cc = _caller(ctx)
+    wc = await wc_svc.get_live(db, cc, session_id=session_id)
+    if wc is None:
+        return None
+    return await _wc_summary(db, cc, wc)
+
+
+@router.post("/projects/{project_id}/sandbox-runs", status_code=status.HTTP_202_ACCEPTED)
+async def create_sandbox_run(
+    project_id: uuid.UUID,
+    body: SandboxRunRequest,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+    session_id: Annotated[uuid.UUID, Query()],
+) -> SandboxRunState:
+    cc = _caller(ctx)
+    try:
+        wc = await wc_svc.open_working_copy(db, cc, session_id=session_id)
+        if wc.project_id != project_id:
+            raise HTTPException(status_code=404, detail="not_found")
+        outcome = await sbx_svc.run_sandbox(
+            db,
+            cc,
+            wc,
+            run_id=uuid.uuid4(),
+            request=sbx_svc.SandboxRequest(command=body.command),
+        )
+        await db.commit()
+    except ServiceError as e:
+        await db.rollback()
+        raise _http(e) from None
+    sr = outcome.sandbox_run
+    return SandboxRunState(
+        run_id=sr.run_id,
+        state=sr.state,  # type: ignore[arg-type]
+        warm=sr.warm_until is not None,
+        exit_code=sr.exit_code,
+        timed_out=sr.timed_out,
+        termination_reason=sr.termination_reason,
+    )
+
+
+@router.get("/projects/{project_id}/working-copies/{wc_id}")
+async def get_working_copy_by_id(
+    project_id: uuid.UUID,
+    wc_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> WorkingCopySummary:
+    cc = _caller(ctx)
+    try:
+        wc = await wc_svc.get_by_id(db, cc, project_id=project_id, wc_id=wc_id)
+    except ServiceError as e:
+        raise _http(e) from None
+    return await _wc_summary(db, cc, wc)
+
+
+@router.get("/projects/{project_id}/change-sets/{cs_id}")
+async def get_change_set(
+    project_id: uuid.UUID,
+    cs_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 200,
+) -> ChangeSetOut:
+    cc = _caller(ctx)
+    try:
+        cs = await changes_svc.get_change_set(db, cc, project_id=project_id, cs_id=cs_id)
+        entries, returned = await changes_svc.get_change_set_entries(
+            db, cc, cs, cursor=cursor, limit=limit
+        )
+    except ServiceError as e:
+        raise _http(e) from None
+    return ChangeSetOut(
+        id=cs.id,
+        project_id=cs.project_id,
+        working_copy_id=cs.working_copy_id,
+        base_snapshot_id=cs.base_snapshot_id,
+        state=cs.state,  # type: ignore[arg-type]
+        added_count=cs.added_count,
+        modified_count=cs.modified_count,
+        deleted_count=cs.deleted_count,
+        artifact_count=cs.artifact_count,
+        changed_bytes=cs.changed_bytes,
+        diff_bytes=cs.diff_bytes,
+        truncated=cs.truncated,
+        entries=[
+            ChangeSetEntrySummary(
+                id=e.id,
+                path=e.path,
+                change_kind=e.change_kind,  # type: ignore[arg-type]
+                size_bytes=e.size_bytes,
+                executable=e.executable,
+                is_binary=e.is_binary,
+                has_diff=e.diff_object_key is not None,
+                diff_truncated=e.diff_truncated,
+                selected=e.selected,
+            )
+            for e in entries
+        ],
+        returned_count=returned,
+        created_at=cs.created_at,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/change-sets/{cs_id}/entries/{entry_id}/diff",
+    response_class=PlainTextResponse,
+)
+async def get_change_set_diff(
+    project_id: uuid.UUID,
+    cs_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> str:
+    try:
+        return await changes_svc.get_entry_diff(
+            db, _caller(ctx), project_id=project_id, cs_id=cs_id, entry_id=entry_id
+        )
+    except ServiceError as e:
+        raise _http(e) from None
+
+
+@router.post("/projects/{project_id}/change-sets/{cs_id}/apply")
+async def apply_change_set(
+    project_id: uuid.UUID,
+    cs_id: uuid.UUID,
+    body: ChangeSetApply,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ProjectSummary:
+    from app.services.errors import Conflict as _Conflict
+
+    cc = _caller(ctx)
+    try:
+        await changes_svc.apply_change_set(
+            db,
+            cc,
+            project_id=project_id,
+            cs_id=cs_id,
+            selected_entry_ids=body.selected_entry_ids,
+            checkpoint_name=(body.checkpoint.name if body.checkpoint else None),
+        )
+        item = await svc.get_list_item(db, cc, project_id=project_id)
+        src = await svc.get_source(db, cc, project_id=project_id)
+        await db.commit()
+    except _Conflict as e:
+        await db.rollback()
+        if e.message == "head_moved":
+            # Rebuild the conflict envelope from the (now reloaded) working copy + head.
+            body_out = await _save_conflict(db, cc, project_id=project_id, cs_id=cs_id)
+            raise HTTPException(status_code=409, detail=body_out.model_dump(mode="json")) from None
+        raise _http(e) from None
+    except ServiceError as e:
+        await db.rollback()
+        raise _http(e) from None
+    return _summary(item, src)
+
+
+async def _save_conflict(
+    db: AsyncSession, ctx: CallerContext, *, project_id: uuid.UUID, cs_id: uuid.UUID
+) -> SaveConflict:
+    cs = await db.get(ProjectChangeSet, (ctx.tenant_id, cs_id))
+    project = await db.get(Project, (ctx.tenant_id, project_id))
+    base = cs.base_snapshot_id if cs is not None else project_id
+    current = project.current_snapshot_id if project and project.current_snapshot_id else base
+    return SaveConflict(
+        base_snapshot_id=base,
+        current_snapshot_id=current,
+        message="the project head moved since this working copy opened; review the rebased changes",
+    )
+
+
+@router.post("/projects/{project_id}/change-sets/{cs_id}/discard")
+async def discard_change_set(
+    project_id: uuid.UUID,
+    cs_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> WorkingCopySummary:
+    cc = _caller(ctx)
+    try:
+        wc = await changes_svc.discard_change_set(db, cc, project_id=project_id, cs_id=cs_id)
+        out = await _wc_summary(db, cc, wc)
+        await db.commit()
+    except ServiceError as e:
+        await db.rollback()
+        raise _http(e) from None
+    return out
+
+
+@router.post("/projects/{project_id}/working-copies/{wc_id}/discard")
+async def discard_working_copy(
+    project_id: uuid.UUID,
+    wc_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> WorkingCopySummary:
+    cc = _caller(ctx)
+    try:
+        wc = await changes_svc.discard_working_copy(db, cc, project_id=project_id, wc_id=wc_id)
+        out = await _wc_summary(db, cc, wc)
+        await db.commit()
+    except ServiceError as e:
+        await db.rollback()
+        raise _http(e) from None
+    return out
+
+
+@router.get("/projects/{project_id}/artifacts")
+async def list_artifacts(
+    project_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+    working_copy_id: uuid.UUID | None = None,
+) -> list[ArtifactOut]:
+    try:
+        arts = await changes_svc.list_artifacts(
+            db, _caller(ctx), project_id=project_id, working_copy_id=working_copy_id
+        )
+    except ServiceError as e:
+        raise _http(e) from None
+    return [_artifact_out(a) for a in arts]
+
+
+@router.post("/projects/{project_id}/artifacts/{art_id}/keep")
+async def keep_artifact(
+    project_id: uuid.UUID,
+    art_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ArtifactOut:
+    try:
+        art = await changes_svc.keep_artifact(
+            db, _caller(ctx), project_id=project_id, artifact_id=art_id
+        )
+        await db.commit()
+    except ServiceError as e:
+        await db.rollback()
+        raise _http(e) from None
+    return _artifact_out(art)
+
+
+@router.post(
+    "/projects/{project_id}/artifacts/{art_id}/export", status_code=status.HTTP_201_CREATED
+)
+async def export_artifact(
+    project_id: uuid.UUID,
+    art_id: uuid.UUID,
+    body: ArtifactExport,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> DriveNode:
+    try:
+        node = await changes_svc.export_artifact(
+            db,
+            _caller(ctx),
+            project_id=project_id,
+            artifact_id=art_id,
+            drive_folder_id=body.drive_folder_id,
+            name=body.name,
+        )
+        await db.commit()
+    except ServiceError as e:
+        await db.rollback()
+        raise _http(e) from None
+    return _node(node)
