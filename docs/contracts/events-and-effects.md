@@ -667,6 +667,41 @@ The provider-visible excerpts for these refs are persisted to
 replay resolves each ref through that store and the source tombstone state; a deleted
 source renders as `[knowledge source deleted]`, never a replayed excerpt.
 
+### 2.9 Project lifecycle — Workspace W2a (ADR-037, post-v1 — additive)
+
+> **Design/contract-first only (ADR-037).** Frozen shape for the W2a Projects slice
+> (blank/template/archive; **no GitHub** — that is W2b). Project **file bytes never enter
+> the append-only journal** — bytes live in immutable ADR-030 `storage_blobs`; the journal
+> carries only ids + bounded metadata + a named termination reason (ADR-016/021).
+
+#### `project.lifecycle`
+
+One event per project creation/import stage transition (observability + recovery).
+
+```text
+{
+  project_id: uuid,
+  snapshot_id: uuid | null,
+  create_kind: string,           // blank | template | archive   (github = W2b)
+  stage: string,                 // created | import_staged | snapshot_activated | failed
+  entry_count: integer | null,
+  size_bytes: integer | null,
+  termination_reason: string | null  // done | unsafe_archive | too_large | expansion_ratio | error:...
+}
+```
+
+An **archive** import is a durable job (outbox + lease, §4): claim → expand in isolated
+staging (verify bounds/safety) → build the initial immutable snapshot → **atomically set
+`projects.current_snapshot_id`**. The activate is idempotent on the import idempotency key
+`(project_id, import_idempotency_key)`; a crash/replay never produces a half-built or
+duplicate project. On any failure the project stays `failed` with **no** snapshot (visible +
+deletable), never a snapshot over the wrong bytes. **blank**/**template** creation is a single
+committed transaction (no staging) that emits `created` + `snapshot_activated`.
+
+Project-bound Chat (`sessions.project_id`, api §10.5) creates no new event type: the binding
+is set at session creation and is immutable after the first admitted user message; the existing
+run/message events carry `session_id` as usual.
+
 ## 3. Delivery and SSE
 
 ### 3.1 Required path

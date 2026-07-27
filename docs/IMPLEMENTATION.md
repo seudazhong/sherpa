@@ -252,6 +252,23 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ---
 
+## Phase W2a — Workspace Projects: contracts + design first (ADR-037) — ✅ **DESIGN/CONTRACT-FIRST COMPLETE (2026-07-27); implementation awaiting owner review**
+
+> Land the ADR-037 Workspace product model as a **contracts + design-first** batch: freeze the W2a shape (**blank / template / archive** projects — **no GitHub**) and ship the production-design static draft, **without** writing production backend/frontend code, running migrations, or exposing production Projects navigation. Owner-approved decisions: Workspace is the umbrella (Projects + Drive siblings); order **W2a→W2b→W3→W4**; **W3** mounts only a one-time scratch copy (never the source of truth) with the ADR-025 revision gated on an isolated review + `docker.sock`/multi-user hardening **before** W3 starts. This phase = W2a-DESIGN only; the tasks below (W2a.1…) are the **future implementation phase**, unstarted.
+
+| # | Task | refs | AC | status |
+|---|---|---|---|---|
+| **W2a-DESIGN.0** | **ADR-037 accepted + contracts frozen + static draft**: ADR-037 (decisions.md) + decisions-log row; data-model (`projects`, `project_snapshots`, `project_snapshot_entries`, `sessions.project_id` immutable binding — canonical vs derived, immutable snapshots, `tenant_id` composite keys); api §10.5 (Projects REST + schemas + Open-in-Chat); events §2.9 (`project.lifecycle` + idempotency/outbox); config (`PROJECT_*` + §1.5 security boundary); capability matrix §9 (Projects rows, **UI ⬜**); W2a static draft `design-workspace/` (Quiet Work, desktop + 390px). **No code / no migration / nav not exposed.** | ADR-037; contracts | contracts merged; static draft renders desktop + 390px; docs validate; no production code/migration/nav | ✅ this batch |
+| W2a.1 | **(impl, owner-gated)** Schema + `services/projects.py`: `projects`/`project_snapshots`/`project_snapshot_entries` migration; blank/template create + immutable-snapshot store reusing ADR-030 `storage_blobs`; `sessions.project_id` binding. | data-model §Projects; ADR-037 | migration head advances; blob-shared snapshots; binding immutable; tests | ⬜ awaiting review |
+| W2a.2 | **(impl)** Archive import durable job: isolated staging expand (bounded size/count/ratio/depth/path-safety) → initial immutable snapshot → atomic activate; outbox + idempotency (`project_id`, import key); `project.lifecycle` events. | events §2.9; config §1.5 | crash/replay safe; unsafe archive rejected; failed→no snapshot; tests | ⬜ |
+| W2a.3 | **(impl)** REST §10.5 + W2a tools (`project_list`/`create`/`tree`/`read`; github→501); Open-in-Chat (`POST /projects/{id}/chats`, `GET /sessions/{id}/project-context`). ADR-023 dual adapter. | api §10.5; ADR-023 | REST+tools green; CSRF; 404/409/507; tests | ⬜ |
+| W2a.4 | **(impl)** Frontend `/work/projects`: Projects list, new-project (blank/template/archive), project detail (read-only tree + snapshots + activity), Open-in-Chat binding; port `design-workspace/` into the SPA; responsive. Fill capability-matrix UI cells. | design-workspace; matrix §9 | build/lint green; renders; matrix UI ✅ | ⬜ |
+| W2a.V | **(impl)** Verify: backend gate + two-lane Playwright (agent: `project_*` tools; human: create/import/detail/Open-in-Chat + UX review; 390px). | AGENTS §2 | verified two-lane; UX notes | ⬜ |
+
+**W2a-DESIGN exit:** ADR-037 accepted; frozen contract deltas (data-model/api §10.5/events §2.9/config) + capability-matrix rows (UI ⬜) + the production static draft (`design-workspace/`, desktop + 390px) are in; **no production code, no migration, no exposed Projects navigation.** W2a implementation (W2a.1…W2a.V) starts after owner review. **Non-goals (each a later ADR):** GitHub one-time import (W2b); task working copy + scratch-copy sandbox + change review (W3, gated on the ADR-025 revision + `docker.sock`/multi-user isolation hardening); GitHub sync/push/PR (W4).
+
+---
+
 
 ## Cross-cutting (do continuously, not a separate phase)
 - **Tests with every task** — deterministic, mock provider, `pytest-asyncio`. No real model calls in tests.

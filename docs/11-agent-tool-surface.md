@@ -192,6 +192,13 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 会话内容搜索(P1) | ✅ search | GET /sessions?query= ✅ | ❌ 不给 agent | Sessions 搜索框 ✅ | read_only | allow |
 | 个人网盘:列/建夹/上传/下载/改名·移动/版本·恢复版本/回收站·恢复(P2) | ✅ drive | /drive/* ✅ | `drive_list`/`search`/`make_folder`/`write`/`read`/`move`/`trash`/`restore` ✅ | Drive(/workspace)✅ | idempotent_write | allow |
 | 个人网盘:永久删除(purge) | ✅ drive | DELETE /drive/nodes/{id} ✅ | ❌ **不给 agent**(人工/审批专属) | Drive(Delete forever + 确认)✅ | non_idempotent_write | user-only |
+| 项目:列/新建(空·模板)(ADR-037, W2a) | ⬜ projects(契约先行) | GET·POST /projects(契约) | `project_list`/`project_create`(契约) | ⬜ **仅静态稿**(/work/projects;生产导航未暴露) | idempotent_write | allow |
+| 项目:归档导入(ZIP/TAR)(ADR-037, W2a) | ⬜ projects(契约先行) | POST /projects/imports(契约;github→501) | ❌ 不给 agent(人工上传) | ⬜ **仅静态稿**(新建项目·上传归档) | idempotent_write(durable job) | allow |
+| 项目:详情·文件树·快照(ADR-037, W2a) | ⬜ projects(契约先行) | GET /projects/{id}·/tree(契约) | `project_tree`/`project_read`(契约) | ⬜ **仅静态稿**(项目详情) | read_only | allow |
+| 项目:Open in Chat(project 绑定会话)(ADR-037, W2a) | ⬜ projects(契约先行) | POST /projects/{id}/chats·GET /sessions/{id}/project-context(契约) | ❌ 不给 agent(会话创建) | ⬜ **仅静态稿**(project 绑定 Chat) | idempotent_write | user-only |
+| 项目:GitHub 导入 | ❌ **W2b**(后续 ADR) | POST /projects/imports kind=github → 501 | — | ⬜ **W2b** | — | — |
+| 项目:任务工作副本 + sandbox 变更评审 | ❌ **W3**(后续 ADR;仅挂一次性 scratch 副本、绝不挂真相源;ADR-025 修订 + docker.sock/多用户隔离加固前置) | — | `project_run`(W3) | ⬜ **W3** | — | — |
+| 项目:GitHub 同步 / push / PR(对外写) | ❌ **W4**(后续 ADR;走 ADR-020 审批) | POST /projects/{id}/push 等(W4) | `project_push`(W4,ask) | ⬜ **W4** | non_idempotent_write | **ask** |
 | 发邮件(外部) | — | ❌(仅 Tool) | `send_email` ✅ | ⬜ 审批渲染器(v1 收尾) | non_idempotent_write | **ask** |
 | 连接 Gmail(OAuth) | — | connect/callback ✅ | ❌ | ⬜(需真实 Google 凭据) | — | — |
 | 列/解决审批 | — | GET /permissions·/resolve ✅ | ❌ **不给 agent**(不自批) | Approvals(/approvals，可解析后台/定时审批)✅ | — | user-only |
@@ -205,7 +212,7 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 知识库:重建来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | POST /knowledge/sources/{id}/reindex ✅ | `reindex_knowledge_source` ✅ | 来源详情「重建」+ 全部重建 ✅ | idempotent_write | allow |
 | 知识库:删除来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | DELETE /knowledge/sources/{id} ✅ | `remove_knowledge_source`(破坏性→审批) ✅ | 来源详情/列表「移除」+ 确认 ✅ | non_idempotent_write | **ask** |
 
-**剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)。~~Knowledge(/library)页~~ **✅ KB5 已交付**(主页/来源详情/检索测试 + Chat 引用 chips + 无依据态;Sidebar/路由/API/Vite proxy 就位)。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
+**剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)。~~Knowledge(/library)页~~ **✅ KB5 已交付**(主页/来源详情/检索测试 + Chat 引用 chips + 无依据态;Sidebar/路由/API/Vite proxy 就位)。**Projects(/work/projects)= 契约与设计先行(ADR-037, W2a)**:上面 6 行的 service/REST/Tool/UI 单元格全部 ⬜,只交付**生产设计系统静态稿**([`design-workspace/index.html`](design-workspace/index.html)),生产导航**未暴露**,待负责人审核后才进入 W2a 实现(届时逐行填 ✅);W2b(GitHub)/W3(sandbox)/W4(对外写)为后续 ADR。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
 
 ---
 

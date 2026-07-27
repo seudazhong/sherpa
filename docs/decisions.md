@@ -21,6 +21,7 @@
 | 2026-07-22 | QQ 用官方平台还是 OneBot | ✅ **改用腾讯官方 api-v2（qq-botpy / WebSocket），弃用 OneBot**（自建 bridge + 非官方登录，封号/合规风险）；复用现有入站管线+审批基座；配置进复活的 Connectors 页 | 新增 ADR-028（**部分取代 ADR-026**）|
 | 2026-07-23 | 记忆机制重构 + embedding 用自带 ollama | ✅ **分层记忆**（核心 blocks + 自动形成语义层 + 会话搜索情景层）+ **确定性 ADD/UPDATE/INVALIDATE/NOOP 写合并** + **双时态软失效** + **缓存稳定注入**；embedding 走**自带 ollama**(bge-m3 1024d)，与聊天 provider 解耦 | 新增 ADR-032（扩展 ADR-004、修订 ADR-012；源自 R-MEMORY）|
 | 2026-07-23 | Agent 可观测性 + 是否用 OpenTelemetry | ✅ 用 **OTel `gen_ai` span** 作 ADR-016 日志之上的**薄诊断层**（日志仍真相源；内容默认不采集；`InMemorySpanExporter` 确定性测试）；后端首选自托管 **Phoenix**（复用现有 Postgres），**修订 docs/07 的 Langfuse 默认**；补上 STATUS item0 的 LLM 调用级观测 | 新增 ADR-033（源自 R-OBSERVABILITY）|
+| 2026-07-27 | Workspace 产品模型 + Projects 上线顺序 | ✅ **Workspace 为总入口**，Projects 与 Drive 并列；实现顺序 **W2a→W2b→W3→W4**；**W2a=空/模板/归档导入（不含 GitHub）**，GitHub 一次性导入放 W2b；W3 沙箱**仅挂一次性 scratch 副本**、绝不挂项目真相源，且 ADR-025 正式修订在 W3 开始前经隔离评审后进行；W3 前先加固 docker.sock/多用户隔离。本批次**只做契约与设计先行**（不写生产代码/迁移/不暴露 Projects 导航） | 新增 ADR-037（延伸 ADR-030；源自 R-WORKSPACE-PRODUCT）|
 
 ---
 
@@ -441,3 +442,45 @@
 - **验收关键**：加一个 Drive 文件为来源→看到诚实的索引阶段与有界失败原因→检索看到带 源/页/标题 的摘录→chat 里 `search_knowledge` 作答并给**可点回原文精确位置**的引用；覆盖文件→源转 `stale` 可重建到新版本而不暴露半成品索引；删来源→即时消失且派生行持久清除；中文精确词命中**词法分支**；无依据**显式**说明；每表带 `tenant_id` + 复合键。契约**先于代码**（本 ADR 同批）。
 
 - **来源**：R-KNOWLEDGE-BASE 调研 [`research/knowledge-base.md`](research/knowledge-base.md)（OpenAI file search · Anthropic Contextual Retrieval · Open WebUI · Dify · pgvector/PostgreSQL）；用户输入「用zhparser吧，其他4个问题按你的建议来。开始起草，然后我想先看看静态UI什么样」「ok，我对UI也没太大问题」。
+
+### ADR-037 · Workspace 产品模型 + Projects 上线顺序（W2a→W2b→W3→W4）——落地 W2a「空/模板/归档项目」的契约与设计先行（延伸 ADR-030；源自 R-WORKSPACE-PRODUCT）
+
+> **状态：方向已由负责人拍板（2026-07-27）；本批次先契约后代码——只写 ADR + 冻结契约增量（data-model/api/events/config）+ 能力矩阵行 + W2a 静态 UI 稿，不写业务代码、不做迁移、不暴露生产 Projects 导航（AGENTS.md §1/§2）。** 完整调研见 [`research/workspace-product-report.md`](research/workspace-product-report.md)；研究态未来全景静态稿见 [`research/workspace-product-prototype/index.html`](research/workspace-product-prototype/index.html)；本批 W2a 生产设计系统静态稿见 [`design-workspace/index.html`](design-workspace/index.html)。
+
+- **背景（为何要、承接谁）**：ADR-030（Personal Drive / W1）已把扁平 Files 升级为 Drive，并**有意不暴露 Projects 导航、不把 Drive 挂进 sandbox、不做 GitHub 同步**（那些是 W2/W3/W4）。R-WORKSPACE-PRODUCT 调研确立了完整词汇与信息架构（Workspace 为所有权/配额umbrella；Drive=通用私有文件；Project=可开发的持久状态，带文件树/快照/活动/可选源绑定/沙箱动作；Sandbox=一次性执行层；Project Chat=不可变绑定一个 Project 的会话）。负责人现批准**分四步落地 Projects**，并要求**先做契约与设计先行**，W2a 的实现待本批评审通过后再开始。
+
+- **决策（负责人拍板 2026-07-27，5 条）**：
+  1. **Workspace 是总入口**；其下 **Projects 与 Drive 并列**为两个不同的产品名词（Drive 面向文件管理；Projects 增加源/快照/活动/执行语义）。SPA 未来路由 `/work`、`/work/projects`、`/work/drive`（避开 REST 前缀 `/projects`、`/drive`、`/storage`）。**W2a 阶段生产导航仍不暴露 Projects 项**——只落契约 + 静态稿。
+  2. **实现顺序固定为 W2a → W2b → W3 → W4**，逐步交付、每步独立评审：
+     - **W2a**（本 ADR 契约化）= **空项目 / 模板 / 归档导入**三条创建路径 + Projects 库 + Project 详情（文件树/活动/存储/快照）+ **Open in Chat**（创建一个**不可变绑定**该 Project 的会话，`sessions.project_id`）。**W2a 明确不含 GitHub**。
+     - **W2b** = **GitHub 一次性分支导入**（浅拉取分支头 → 初始快照 + 记录稳定 repo id/branch/source OID；不保留全量远程历史、不后台合并/推送）。**GitHub 一次性导入放 W2b**。需**后续 ADR**（`project_sources` 契约 + GitHub App 凭据边界）。
+     - **W3** = **Project Chat 任务工作副本 + sandbox 变更评审**。**W3 允许且仅允许 Sandbox 挂载一次性 scratch 副本，绝不挂载项目真相源**；持久权威=`project head snapshot` + 任务工作副本 overlay，scratch 卷/热容器都是可重建缓存。需**后续 ADR**（`project_working_copies`/`project_change_sets`/`project_artifacts` 契约）。
+     - **W4** = **GitHub 同步 + 对外写**（后台 fetch 只更新状态；apply/merge 显式；push/建远程分支/建 PR 走 ADR-020 审批信封、带期望远程 OID、首版不 force push）。需**后续 ADR**。
+  3. **W3 的 ADR-025 修订受隔离评审门控**：W3 会**有意 supersede ADR-025 现在的「不挂 workspace 卷」排除项**——但**仅**放开「挂一次性 scratch 副本」这一点，同时保留 ADR-025 的断网/掉权/非 root/只读 rootfs/资源+时间上限。**ADR-025 的正式修订必须在 W3 开始前、经一次隔离的安全评审后进行**，不在本批次内改 ADR-025 正文。
+  4. **W3 前置硬门**：在 W3 动工前，**必须先评审并加固 `docker.sock` 挂载 + 多用户隔离边界**。当前单用户自托管下 worker 挂 `docker.sock`（ADR-025 记录的信任让步）在引入「用项目字节喂容器」后风险上升（容器逃逸=宿主 root、跨会话/跨用户 scratch 串扰）。这是 W3 的进入条件，不是 W3 内的一个任务。
+  5. **本批次=契约与设计先行**：**只**写 ADR-037 + 冻结契约增量（data-model/api/events/config）+ 能力矩阵行（Projects UI 仍 ⬜）+ W2a 生产设计系统静态稿。**不**写生产后端/前端代码、**不**做迁移、**不**暴露生产 Projects 导航。研究建议不得写成已实现能力。
+
+- **数据模型（W2a；canonical 与派生分离；名义命名，见 data-model 契约）**：
+  - `projects`（用户可见的持久开发状态：name/description/owner/status、`current_snapshot_id`、`default_branch_label`、`source_status`（W2a 恒 `unbound`）、存储 rollup、`last_activity_at`）。
+  - `project_snapshots`（**不可变**、父链接的快照，`reason ∈ import|save|checkpoint|sync`；W2a 只产生 `import`（blank/template/archive 的初始快照）；带 manifest/tree 引用、size rollup、pinned 状态；源 OID 留给 W2b）。
+  - `project_snapshot_entries`（快照内条目：归一化 path、entry kind、**blob 引用**（复用 ADR-030 `storage_blobs` 不可变去重字节）、可执行位、受限安全相对 symlink；后续可用紧凑 manifest/tree 表示替换该投影而不改 Project 语义）。
+  - `sessions.project_id`（**契约扩展**）：可空，`null`=General chat；**首条已 admit 的用户消息后不可变**；建会话时与每次 Project 操作都校验 Project 归属；换 Project = **新建会话**，绝不原地改 transcript/工具上下文。
+  - **W2a 明确不建的表**（留后续 ADR）：`project_sources`（W2b）、`project_working_copies`/`project_change_sets`/`project_artifacts`（W3）。均带 `tenant_id`+复合键（ADR-015 前向兼容）。
+
+- **存储真相源（复用 ADR-030/ADR-012）**：Postgres 存 project 元数据/快照/条目/存储 rollup；快照条目指向 **ADR-030 的不可变、内容寻址、引用计数 `storage_blobs`**（同一未变字节多快照共享、不翻倍计费；配额记账复用 Drive 的「每 owner 每不同 durable blob 计一次」规则）；MinIO 存字节；**不引入独立 Git 存储**（被否的 Option 2）。归档导入在**隔离 staging**中安全解压（有界大小/文件数/膨胀比/嵌套深度/时限；拒绝绝对/穿越路径、设备、FIFO、硬链接、逃逸 symlink），验证后才进初始快照。
+
+- **能力面（ADR-023 单能力层 + 薄 REST/Tool 双适配）**：service `services/projects.py`（`list/create/get/tree/open_in_chat`；W2a 只读+自有幂等写）。**REST**（见 api §10.5）：`GET/POST /projects`、`POST /projects/imports`（模板/归档；GitHub 留 W2b 返回 `not_implemented`）、`GET /projects/{id}`、`GET /projects/{id}/tree`、`POST /projects/{id}/chats`（建 Project 绑定会话）、`GET /sessions/{id}/project-context`。**Tool（W2a）**：`project_list`/`project_create`/`project_tree`/`project_read`（只读或自有幂等写→allow）。**W2a 不给 agent** 的工具：无破坏性 purge、无 `project_run`（W3）、无 `project_push`（W4）。**UI**：SPA 路由 `/work/projects`——**W2a 只交付静态稿，生产导航不暴露、能力矩阵 UI 列保持 ⬜**。
+
+- **事件/幂等/outbox（复用 ADR-016/017）**：项目创建/导入/快照发一条 `project.lifecycle` 事件（stage：`created|import_staged|snapshot_activated|failed`，带 `project_id`/`snapshot_id`/具名 `termination_reason`）；归档导入是**durable job**（认领→隔离 staging 解压校验→建初始不可变快照→原子激活 `current_snapshot_id`）——同事务写 outbox/恢复记录，至少一次、幂等键=`(project_id, import_idempotency_key)`，worker 崩溃/重放不产生半成品或重复项目。失败保留无快照的 `failed` project（可见、可删），绝不激活错误字节。文档正文/文件字节**不进** append-only journal（journal 只存引用+有界元数据）。
+
+- **安全边界（守 ADR-009/019/021）**：路径/名字归一化 + 拒绝绝对/`..`/NUL/设备/保留名 + 深度/长度/兄弟数上限；上传/归档不信任扩展名或 client Content-Type、服务端生成对象键、隔离 staging 解压、有界解压、扫描接口 `pending|clean|rejected|unavailable`；**Project 源凭据（W2b+）永远留在 vault/connector 边界，绝不进 Project 树/快照/sandbox/prompt/日志/工具结果**；**W2a 不涉及沙箱**（Open in Chat 只读/讨论 Project，不建工作副本、不挂 sandbox——那是 W3）。
+
+- **W2b/W3/W4 非目标与后续 ADR 边界（明确不做）**：
+  - **W2a 不做**：GitHub 导入/源绑定（W2b）；任务工作副本/sandbox 变更评审/`project_run`（W3）；GitHub 同步/push/PR/对外写（W4）；生产 Projects 导航暴露；后台合并、force push、submodule、Git LFS、多 remote、全历史镜像、网络化开发环境、依赖安装策略、prebuild、live preview、团队/共享 Drive、内嵌 coding-agent 执行器（均 later）。
+  - **后续每步各带自己的 ADR + 契约先行**：W2b（`project_sources` + GitHub App 凭据边界）、W3（`project_working_copies`/`project_change_sets`/`project_artifacts` + **ADR-025 修订** + docker.sock/多用户隔离加固评审）、W4（对外 Git 写 + ADR-020 审批集成）。
+
+- **取代/延伸关系**：**延伸 ADR-030**（Workspace 从「只有 Drive」扩为「Projects + Drive 并列」，Projects 快照复用 ADR-030 的不可变去重 blob 与配额记账）；**复用** ADR-012 存储选型（不引独立 Git/向量库）、ADR-023 能力层双适配、ADR-016/017 journal+outbox 真相源与 effect 语义、ADR-015 租户键、ADR-009/019/021 不可信内容/密钥/审计边界。**预告将修订 ADR-025**（W3 放开「一次性 scratch 副本」挂载，但正式修订在 W3 开始前经隔离评审）。**不改**任何既有 ADR 正文（本批只新增 ADR-037 + 契约增量）。
+
+- **验收关键（本契约先行批次）**：ADR-037 被接受；data-model 有 `projects`/`project_snapshots`/`project_snapshot_entries` + `sessions.project_id` 不可变绑定（canonical vs 派生清晰、快照不可变、每表 `tenant_id`+复合键）；api 有 §10.5 Projects REST + schema；events 有项目生命周期事件 + 幂等/outbox；config 有 `PROJECT_*` + 安全边界；能力矩阵有 Projects 行且 **UI 列 ⬜**；W2a 静态稿（Projects 列表/新建/详情/Open in Chat）落在生产 Quiet Work 设计系统、桌面与 390px 均合理；**无生产代码/迁移/导航暴露**；W2b/W3/W4 非目标与后续 ADR 边界写清。契约**先于代码**（本 ADR 同批）。
+
+- **来源**：R-WORKSPACE-PRODUCT 调研 [`research/workspace-product-report.md`](research/workspace-product-report.md)（Google Drive · Dropbox · OneDrive · Notion · GitHub Codespaces · Replit · Gitpod/Ona · Devin · OpenAI Codex · Firebase Studio）；负责人输入「批准 Workspace 建议，执行第一阶段：顺序 W2a→W2b→W3→W4；Workspace 总入口、Projects 与 Drive 并列；W2a 仅空/模板/归档导入不含 GitHub，GitHub 一次性导入放 W2b；W3 仅挂一次性 scratch 副本、绝不挂真相源、ADR-025 修订在 W3 前经隔离评审；W3 前先加固 docker.sock/多用户隔离；本阶段只做契约与设计先行」。

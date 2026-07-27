@@ -1649,3 +1649,92 @@ class KnowledgeSearchResult(StrictModel):
   `add_knowledge_source` / `reindex_knowledge_source` are `allow`; `remove_knowledge_source`
   is **`ask`** (approval-gated). Retrieval results are **untrusted evidence** (`role=tool`),
   never instructions (ADR-009); a document cannot grant permission or change tool scope.
+
+### 10.5 Projects — Workspace W2a (ADR-037)
+
+> **Design/contract-first only (ADR-037).** These routes are **not yet implemented** and the
+> SPA route `/work/projects` is **not exposed in production navigation** in W2a — the shape is
+> frozen here so implementation (after owner review) matches exactly. W2a covers **blank /
+> template / archive** projects + Project detail + **Open in Chat**. **GitHub import is W2b**;
+> working-copy/sandbox/change-review is W3; Git sync/push is W4 (each its own ADR). Capability
+> layer `services/projects.py` behind thin REST (below) + the W2a agent tools (ADR-023 dual
+> adapter). All routes are `Session`-authenticated, tenant + user scoped.
+
+```python
+class ProjectSummary(StrictModel):
+    id: UUID
+    name: str
+    description: str | None
+    status: Literal["active", "archived", "deleting"]
+    source_status: Literal["unbound"]          # W2b adds clean/remote_ahead/diverged/...
+    current_snapshot_id: UUID | None
+    used_bytes: int
+    last_activity_at: datetime | None
+    updated_at: datetime
+
+class ProjectCreate(StrictModel):
+    # Blank or template project. Archive/GitHub go through POST /projects/imports.
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    description: str | None = None
+    template_id: str | None = None             # None => blank project
+
+class ProjectImportRequest(StrictModel):
+    kind: Literal["archive", "github"]         # 'github' returns 501 in W2a (W2b)
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    # archive: multipart file part; github: repo/branch (W2b) — validated per kind.
+
+class ProjectEntry(StrictModel):
+    path: str
+    entry_kind: Literal["file", "dir", "symlink"]
+    size_bytes: int
+    executable: bool
+
+class ProjectTree(StrictModel):
+    project_id: UUID
+    snapshot_id: UUID
+    entries: list[ProjectEntry]                # bounded page of the head snapshot
+
+class ProjectChatCreate(StrictModel):
+    title: str | None = None
+
+class ProjectContext(StrictModel):
+    session_id: UUID
+    project_id: UUID | None                    # null => General chat
+    project_name: str | None
+    bound: bool                                # true once the binding is immutable
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /projects?query=&status=&sort=&cursor=&limit=` | none → `CursorPage[ProjectSummary]` | Session | `200`, `400`, `401`, `422` |
+| `POST /projects` | `ProjectCreate` → `ProjectSummary` | Session + CSRF | `201`, `401`, `409`, `422`, `507` |
+| `POST /projects/imports` | `ProjectImportRequest` (+ multipart for archive) → `ProjectSummary` | Session + CSRF | `202`, `401`, `409`, `413`, `422`, `501`, `507` |
+| `GET /projects/{id}` | none → `ProjectSummary` | Session | `200`, `401`, `404` |
+| `GET /projects/{id}/tree?snapshot=&path=&cursor=&limit=` | none → `ProjectTree` | Session | `200`, `401`, `404`, `422` |
+| `POST /projects/{id}/chats` | `ProjectChatCreate` → `SessionSummary` | Session + CSRF | `201`, `401`, `404`, `422` |
+| `GET /sessions/{id}/project-context` | none → `ProjectContext` | Session | `200`, `401`, `404` |
+
+- `POST /projects` creates a **blank** project (empty initial `import` snapshot) or, with
+  `template_id`, a **template** project (copies template entries, severs template history). It is
+  `source_status='unbound'` in W2a.
+- `POST /projects/imports` with `kind='archive'` runs a **durable, async** import (`202`;
+  `status` starts pre-snapshot) — the archive is expanded in isolated staging (bounded
+  size/count/expansion-ratio/depth; `413` over the cap; `422` on unsafe/traversal/device
+  entries) then materialized into the initial immutable snapshot. `kind='github'` returns
+  **`501 not_implemented`** in W2a (it lands in **W2b** with `project_sources`).
+- `POST /projects/{id}/chats` creates a **new Project-bound session** (`sessions.project_id`);
+  the binding is **immutable** after the first admitted message. Switching Project is always a
+  new chat — an existing session's `project_id` is never re-pointed.
+- `GET /sessions/{id}/project-context` returns the (possibly null) binding for chat-header
+  display; `project_id=null` is General chat.
+- Reservation/quota reuse ADR-030: a project's snapshot bytes are the same content-addressed,
+  ref-counted `storage_blobs`; `507 insufficient_storage` when a reservation would exceed quota.
+- **Tool surface (W2a, ADR-023):** `project_list` / `project_create` / `project_tree` /
+  `project_read` are `allow` (read-only or own-data idempotent write). **Not given to the agent
+  in W2a:** any destructive purge, `project_run` (W3), `project_push` (W4). Project files remain
+  **untrusted content** (ADR-009); source credentials (W2b+) never enter a project tree, prompt,
+  log, or tool result.
+- **UI:** SPA route `/work/projects` (avoids the REST `/projects` proxy prefix). **W2a ships the
+  static design draft only** ([`design-workspace/index.html`](../design-workspace/index.html)) —
+  production navigation is **not** exposed and the capability-matrix UI cells stay ⬜ until the
+  W2a implementation phase (owner-gated).

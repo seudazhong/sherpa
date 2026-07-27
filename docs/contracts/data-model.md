@@ -2523,3 +2523,136 @@ Notes:
   the journal; excerpts live in `knowledge_retrieval_evidence` (retention-scoped). History
   replay resolves a ref there + the source tombstone state; a deleted source renders as
   `[knowledge source deleted]`.
+
+### Projects — Workspace W2a (ADR-037, source-backed development state — additive, post-v1)
+
+> **Design/contract-first only (ADR-037).** These tables are **not yet migrated** and
+> production Projects navigation is **not exposed**; this section freezes the W2a shape so
+> implementation (after owner review) writes to it exactly. W2a = **blank / template /
+> archive** projects (no GitHub — that is W2b). Every table carries `tenant_id` + composite
+> tenant-scoped keys (ADR-015). **Canonical** = `projects` + immutable `project_snapshots` +
+> `project_snapshot_entries` pointing at ADR-030 `storage_blobs`; **no derived/rebuildable**
+> tables in W2a. Deferred to later ADRs (do **not** add in W2a): `project_sources` (W2b),
+> `project_working_copies` / `project_change_sets` / `project_artifacts` (W3).
+
+```sql
+-- A Project = a named, durable, user-visible development state. Its current_snapshot_id
+-- points at the immutable head snapshot. source_status stays 'unbound' in W2a (GitHub = W2b).
+CREATE TABLE projects (
+    tenant_id           uuid NOT NULL,
+    id                  uuid NOT NULL,
+    user_id             uuid NOT NULL,
+    name                text NOT NULL,
+    description         text,
+    status              text NOT NULL DEFAULT 'active',   -- active|archived|deleting
+    current_snapshot_id uuid,                             -- immutable head; NULL only mid-create/failed
+    default_branch_label text NOT NULL DEFAULT 'main',    -- label only in W2a; real branches = W2b
+    source_status       text NOT NULL DEFAULT 'unbound',  -- W2a: always 'unbound' (W2b adds the rest)
+    used_bytes          bigint NOT NULL DEFAULT 0,        -- durable rollup: distinct blobs charged once
+    last_activity_at    timestamptz,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    updated_at          timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_projects PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_projects_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_projects_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_projects_status CHECK (status IN ('active','archived','deleting')),
+    CONSTRAINT ck_projects_source_status CHECK (source_status IN ('unbound')),
+    CONSTRAINT ck_projects_name CHECK (char_length(name) BETWEEN 1 AND 200),
+    CONSTRAINT ck_projects_used CHECK (used_bytes >= 0)
+);
+-- Unique live project name per owner.
+CREATE UNIQUE INDEX uq_projects_name
+    ON projects (tenant_id, user_id, name)
+    WHERE status <> 'deleting';
+CREATE INDEX ix_projects_recent
+    ON projects (tenant_id, user_id, last_activity_at DESC);
+
+-- Immutable, parent-linked snapshots. W2a only ever creates reason='import' (the initial
+-- snapshot for a blank/template/archive project). save/checkpoint/sync are W3/W4.
+CREATE TABLE project_snapshots (
+    tenant_id      uuid NOT NULL,
+    id             uuid NOT NULL,
+    project_id     uuid NOT NULL,
+    parent_id      uuid,                       -- prior snapshot; NULL for the initial import
+    reason         text NOT NULL,              -- import|save|checkpoint|sync  (W2a: import)
+    entry_count    integer NOT NULL DEFAULT 0,
+    size_bytes     bigint NOT NULL DEFAULT 0,  -- sum of distinct entry blob sizes
+    source_oid     text,                       -- W2b GitHub commit OID; NULL in W2a
+    pinned         boolean NOT NULL DEFAULT false,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_project_snapshots PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_ps_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ps_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_ps_parent FOREIGN KEY (tenant_id, parent_id)
+        REFERENCES project_snapshots (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT ck_ps_reason CHECK (reason IN ('import','save','checkpoint','sync')),
+    CONSTRAINT ck_ps_counts CHECK (entry_count >= 0 AND size_bytes >= 0)
+);
+CREATE INDEX ix_ps_project ON project_snapshots (tenant_id, project_id, created_at DESC);
+
+-- One row per path in a snapshot's tree. File entries reference an immutable, content-
+-- addressed ADR-030 storage_blobs row (shared/deduped/ref-counted like Drive). A compact
+-- manifest/tree representation MAY replace this projection later without changing Project
+-- semantics (canonical bytes stay in storage_blobs + snapshot identity).
+CREATE TABLE project_snapshot_entries (
+    tenant_id     uuid NOT NULL,
+    id            uuid NOT NULL,
+    snapshot_id   uuid NOT NULL,
+    user_id       uuid NOT NULL,               -- charging owner for the referenced blob
+    path          text NOT NULL,               -- normalized, relative, POSIX; no '..'/NUL/abs
+    entry_kind    text NOT NULL,               -- file|dir|symlink
+    content_hash  bytea,                        -- storage_blobs ref (entry_kind='file')
+    size_bytes    bigint NOT NULL DEFAULT 0,
+    executable    boolean NOT NULL DEFAULT false,
+    symlink_target text,                        -- safe relative target (entry_kind='symlink')
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_pse PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_pse_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pse_snapshot FOREIGN KEY (tenant_id, snapshot_id)
+        REFERENCES project_snapshots (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_pse_blob FOREIGN KEY (tenant_id, user_id, content_hash)
+        REFERENCES storage_blobs (tenant_id, user_id, content_hash) ON DELETE RESTRICT,
+    CONSTRAINT ck_pse_kind CHECK (entry_kind IN ('file','dir','symlink')),
+    CONSTRAINT ck_pse_path CHECK (
+        char_length(path) BETWEEN 1 AND 1024
+        AND path NOT LIKE '/%' AND path NOT LIKE '%..%' AND position(E'\\000' IN path) = 0),
+    CONSTRAINT ck_pse_file_blob CHECK (entry_kind <> 'file' OR content_hash IS NOT NULL)
+);
+CREATE UNIQUE INDEX uq_pse_path ON project_snapshot_entries (tenant_id, snapshot_id, path);
+
+-- Project-bound Chat: immutable binding of a session to one Project. NULL = General chat.
+ALTER TABLE sessions ADD COLUMN project_id uuid;
+ALTER TABLE sessions
+    ADD CONSTRAINT fk_sessions_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE RESTRICT;
+CREATE INDEX ix_sessions_project
+    ON sessions (tenant_id, project_id)
+    WHERE project_id IS NOT NULL;
+```
+
+Notes:
+
+- **Immutable snapshots + shared blobs:** `project_snapshots`/`project_snapshot_entries` are
+  never mutated after creation; the head advances by pointing `projects.current_snapshot_id`
+  at a new snapshot (W3+). File bytes are the **same immutable, content-addressed, ref-counted
+  `storage_blobs`** as Drive (ADR-030): many snapshots referencing unchanged bytes do **not**
+  multiply quota, and dedup credit never crosses owner/tenant boundaries. `used_bytes` counts
+  each distinct referenced blob once.
+- **`sessions.project_id` immutability:** `null` = General chat; after the first admitted user
+  message the binding is **immutable** (enforced by the service/API, not a DB trigger in v1).
+  Choosing another Project **creates a new session** — the transcript/tool context is never
+  re-pointed in place. `ON DELETE RESTRICT` stops deleting a Project out from under a bound
+  chat; project deletion archives/handles bound sessions explicitly (W-later).
+- **W2a creation paths (all produce reason='import'):** *blank* = empty snapshot (0 entries);
+  *template* = copy template entries, sever any template history; *archive* = safely expand a
+  ZIP/TAR in isolated staging (bounded size/count/ratio/depth; reject abs/traversal paths,
+  devices, FIFOs, hard links, escaping symlinks) then materialize verified entries. **GitHub
+  import is W2b** and adds `project_sources` + `source_oid`.
+- **Deferred tables (NOT W2a):** `project_sources` (W2b), and
+  `project_working_copies`/`project_change_sets`/`project_artifacts` (W3) each land with their
+  own ADR + contract-first batch; do not create them in W2a.

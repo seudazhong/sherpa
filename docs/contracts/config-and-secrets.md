@@ -118,6 +118,16 @@ class Settings(BaseSettings):
     knowledge_retrieval_min_score: float = Field(default=0.35, ge=0.0)   # vector cosine-similarity floor (0..1); below on all branches => "insufficient evidence"
     knowledge_evidence_retention_days: int = Field(default=30, ge=1)     # knowledge_retrieval_evidence TTL
 
+    # Projects — Workspace W2a (ADR-037): blank/template/archive projects. GitHub import is
+    # W2b; working-copy/sandbox is W3. These bound the archive-import + snapshot paths only.
+    # (Design/contract-first — not yet wired; frozen here so the W2a impl reads them exactly.)
+    project_max_archive_bytes: int = Field(default=200 * 1024 * 1024, ge=1)  # compressed archive upload cap
+    project_max_expanded_bytes: int = Field(default=500 * 1024 * 1024, ge=1) # expanded tree cap (reserved before import)
+    project_max_entries: int = Field(default=20000, ge=1)                    # file/dir count cap per snapshot
+    project_max_expansion_ratio: int = Field(default=100, ge=1)             # zip-bomb guard: expanded/compressed
+    project_max_path_depth: int = Field(default=40, ge=1)
+    project_snapshot_retention_days: int = Field(default=30, ge=1)          # unpinned snapshot GC (pinned kept)
+
     # Agent observability (ADR-033): OpenTelemetry gen_ai spans, off by default.
     # A derived diagnostic layer over the ADR-016 journal — never a source of truth.
     otel_enabled: bool = False
@@ -336,6 +346,12 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Knowledge | `KNOWLEDGE_RETRIEVAL_K` | `int`, 1–50 | `6` | No | No | Hits returned to the model per `search_knowledge`. |
 | Knowledge | `KNOWLEDGE_RETRIEVAL_MIN_SCORE` | `float` ≥ 0 | `0.35` | No | No | Vector cosine-similarity floor (0..1); a query clearing no branch ⇒ `sufficient=false` ("insufficient evidence"). |
 | Knowledge | `KNOWLEDGE_EVIDENCE_RETENTION_DAYS` | `int` ≥ 1 | `30` | No | No | `knowledge_retrieval_evidence` TTL (GC sweep). |
+| Projects (W2a) | `PROJECT_MAX_ARCHIVE_BYTES` | `int` ≥ 1 | `209715200` | No | No | Compressed archive upload cap for archive-import (ADR-037; 200 MiB). |
+| Projects (W2a) | `PROJECT_MAX_EXPANDED_BYTES` | `int` ≥ 1 | `524288000` | No | No | Expanded-tree cap, reserved before import (500 MiB). |
+| Projects (W2a) | `PROJECT_MAX_ENTRIES` | `int` ≥ 1 | `20000` | No | No | File/dir count cap per snapshot. |
+| Projects (W2a) | `PROJECT_MAX_EXPANSION_RATIO` | `int` ≥ 1 | `100` | No | No | Zip-bomb guard: expanded/compressed ratio. |
+| Projects (W2a) | `PROJECT_MAX_PATH_DEPTH` | `int` ≥ 1 | `40` | No | No | Max path component depth in a snapshot entry. |
+| Projects (W2a) | `PROJECT_SNAPSHOT_RETENTION_DAYS` | `int` ≥ 1 | `30` | No | No | Unpinned snapshot GC window; pinned checkpoints kept. |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
 | Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | `AnyHttpUrl` | None | No | No | OTLP endpoint (e.g. self-hosted Phoenix `http://phoenix:4317`); unset = console/in-memory exporter only. |
 | Observability | `OTEL_CAPTURE_MESSAGE_CONTENT` | `bool` | `false` | No | No | Opt-in capture of prompt/completion/tool content into spans (PII); redacted when on. Also set the upstream `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` if using OTel auto-instrumentation. |
@@ -374,6 +390,15 @@ Large tool output is an ephemeral runtime artifact, not a database record, user 
 - v1 workspace tools are read-only. Compose mounts the selected host directory into the worker with `:ro`; no web, migration, frontend, backup, connector, or tool-output service path is mounted beneath it.
 - The deployment MUST NOT select the Sherpa repository/deployment root or any directory containing `.env`, Docker secrets, KEKs, database files, Docker sockets, or service credentials.
 - APIs, events, and logs use workspace-relative paths only and never reveal the configured host path. File content remains bounded/redacted according to [api.md](api.md).
+
+### 1.5 Projects security boundary — Workspace W2a (ADR-037)
+
+Design/contract-first (ADR-037); the settings above are frozen but **not yet wired**. When the W2a implementation lands it MUST honor this boundary:
+
+- **Archive imports are untrusted input.** Expand in an isolated staging area — never directly into a canonical snapshot. Enforce `PROJECT_MAX_ARCHIVE_BYTES`, `PROJECT_MAX_EXPANDED_BYTES`, `PROJECT_MAX_ENTRIES`, `PROJECT_MAX_EXPANSION_RATIO`, and `PROJECT_MAX_PATH_DEPTH` before materializing. Reject absolute/traversal (`..`) paths, NUL, device/FIFO nodes, hard links, and symlinks that escape the project root. Do not trust the client `Content-Type` or file extension; generate server-side object keys.
+- **Project bytes are content-addressed and reference-counted** via the ADR-030 `storage_blobs`/quota ledger (reserve before write, `507` over quota; distinct blobs charged once). Snapshot entries are immutable; snapshot bytes are never in the append-only journal (events §2.9).
+- **No credentials in project state.** Project file trees, snapshots, prompts, logs, and tool results MUST NOT contain provider/model/storage/source credentials. GitHub source credentials arrive only in **W2b** and stay in the vault/connector boundary (ADR-019); they never enter a snapshot or (W3) a sandbox.
+- **W2a has no sandbox.** Open in Chat is read/discuss only — no working copy, no container, no mount. The scratch-copy sandbox and the `docker.sock`/multi-user isolation hardening are **W3 preconditions** governed by a later ADR-025 revision (ADR-037 §决策3/4).
 
 ## 2. Frozen `.env.example`
 
