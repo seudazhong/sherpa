@@ -160,9 +160,7 @@ def upgrade() -> None:
         "CREATE INDEX ix_pij_recover ON project_import_jobs (tenant_id, stage, lease_expires_at) "
         "WHERE stage NOT IN ('done','failed');"
     )
-    op.execute(
-        "CREATE INDEX ix_pij_project ON project_import_jobs (tenant_id, project_id);"
-    )
+    op.execute("CREATE INDEX ix_pij_project ON project_import_jobs (tenant_id, project_id);")
 
     # Project-bound Chat: immutable binding of a session to one Project (NULL = General).
     op.execute("ALTER TABLE sessions ADD COLUMN project_id uuid;")
