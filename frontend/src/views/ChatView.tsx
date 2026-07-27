@@ -16,8 +16,10 @@ import {
   type PendingApproval,
   type ProjectContext,
   type SessionSummary,
+  type WorkingCopySummary,
 } from "../api";
 import { useAuth } from "../auth";
+import { ChangeReview } from "../components/ChangeReview";
 import Sidebar from "../components/Sidebar";
 
 interface Bubble {
@@ -294,6 +296,10 @@ export default function ChatView() {
   const [draft, setDraft] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [projectCtx, setProjectCtx] = useState<ProjectContext | null>(null);
+  const [workingCopy, setWorkingCopy] = useState<WorkingCopySummary | null>(
+    null,
+  );
+  const [showReview, setShowReview] = useState(false);
   const [running, setRunning] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -498,6 +504,8 @@ export default function ChatView() {
       setApprovals([]);
       setCites({});
       setProjectCtx(null);
+      setWorkingCopy(null);
+      setShowReview(false);
       insufficientRef.current = false;
       setRunning(false);
       const mp = await api.listMessages(sid);
@@ -512,11 +520,29 @@ export default function ChatView() {
       void backfillCitations(sid);
       void api
         .projectContext(sid)
-        .then((pc) => setProjectCtx(pc.project_id ? pc : null))
+        .then((pc) => {
+          setProjectCtx(pc.project_id ? pc : null);
+          setWorkingCopy(pc.working_copy ?? null);
+        })
         .catch(() => setProjectCtx(null));
     },
     [openStream, backfillCitations],
   );
+
+  // W3 (ADR-040): after each run settles, refresh the Project-bound chat's task
+  // working copy so newly-staged changes surface in Change Review.
+  const refreshWorkingCopy = useCallback(async () => {
+    if (!sessionId || !projectCtx?.project_id) return;
+    try {
+      setWorkingCopy(await api.getWorkingCopy(sessionId));
+    } catch {
+      /* transient; leave the prior state */
+    }
+  }, [sessionId, projectCtx?.project_id]);
+
+  useEffect(() => {
+    if (!running) void refreshWorkingCopy();
+  }, [running, refreshWorkingCopy]);
 
   useEffect(() => {
     let cancelled = false;
@@ -674,14 +700,44 @@ export default function ChatView() {
                 : "Loading model…"}
             </span>
             {projectCtx?.project_id && (
-              <span className="chip project-chip" title="This chat is bound to a project (read/discuss only in W2a)">
+              <span
+                className="chip project-chip"
+                title="This chat is bound to a project; edits stage into a task working copy you review before saving."
+              >
                 ▦ {projectCtx.project_name ?? "Project"}
                 <span className="project-chip-note">
-                  {projectCtx.bound ? "bound · read-only" : "read-only"}
+                  {workingCopy
+                    ? `working copy · ${workingCopy.state}`
+                    : projectCtx.bound
+                      ? "bound"
+                      : "project"}
                 </span>
               </span>
             )}
+            {projectCtx?.project_id &&
+              workingCopy &&
+              (workingCopy.open_change_set_id ||
+                workingCopy.overlay_entry_count > 0) && (
+                <button
+                  className="btn btn-small review-toggle"
+                  onClick={() => setShowReview((v) => !v)}
+                >
+                  {showReview ? "Hide review" : "Review changes"}
+                  <span className="review-count">
+                    {workingCopy.overlay_entry_count}
+                  </span>
+                </button>
+              )}
           </div>
+
+          {projectCtx?.project_id && showReview && workingCopy && (
+            <ChangeReview
+              projectId={projectCtx.project_id}
+              csrf={csrf}
+              workingCopy={workingCopy}
+              onChanged={() => void refreshWorkingCopy()}
+            />
+          )}
 
           {running && (
             <section className="run-banner" role="status" aria-live="polite">

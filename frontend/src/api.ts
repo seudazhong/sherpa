@@ -530,11 +530,84 @@ export interface ProjectTemplate {
   description: string;
 }
 
+export interface SandboxRunState {
+  run_id: string;
+  state: "materializing" | "running" | "persisted" | "failed" | "timed_out";
+  warm: boolean;
+  exit_code: number | null;
+  timed_out: boolean;
+  termination_reason: string | null;
+}
+
+export interface WorkingCopySummary {
+  id: string;
+  project_id: string;
+  session_id: string;
+  base_snapshot_id: string;
+  state:
+    | "open"
+    | "ready_for_review"
+    | "saved"
+    | "discarded"
+    | "conflicted"
+    | "expired";
+  overlay_entry_count: number;
+  overlay_bytes: number;
+  reserved_bytes: number;
+  head_moved: boolean;
+  open_change_set_id: string | null;
+  sandbox: SandboxRunState | null;
+  last_boundary_at: string | null;
+  expires_at: string | null;
+  updated_at: string;
+}
+
+export interface ChangeSetEntry {
+  id: string;
+  path: string;
+  change_kind: "added" | "modified" | "deleted";
+  size_bytes: number;
+  executable: boolean;
+  is_binary: boolean;
+  has_diff: boolean;
+  diff_truncated: boolean;
+  selected: boolean;
+}
+
+export interface ChangeSet {
+  id: string;
+  project_id: string;
+  working_copy_id: string;
+  base_snapshot_id: string;
+  state: "open" | "applied" | "discarded" | "superseded" | "conflicted";
+  added_count: number;
+  modified_count: number;
+  deleted_count: number;
+  artifact_count: number;
+  changed_bytes: number;
+  diff_bytes: number;
+  truncated: boolean;
+  entries: ChangeSetEntry[];
+  returned_count: number;
+  created_at: string;
+}
+
+export interface ProjectArtifact {
+  id: string;
+  name: string;
+  kind: "file" | "log" | "report";
+  size_bytes: number;
+  mime: string | null;
+  retention: "ephemeral" | "retained" | "expired";
+  created_at: string;
+}
+
 export interface ProjectContext {
   session_id: string;
   project_id: string | null;
   project_name: string | null;
   bound: boolean;
+  working_copy?: WorkingCopySummary | null;
 }
 
 export interface QQStatus {
@@ -620,6 +693,17 @@ export class ApiError extends Error {
     this.status = status;
     this.name = "ApiError";
   }
+}
+
+async function reqText(path: string, init: RequestInit = {}): Promise<string> {
+  const res = await fetch(path, { credentials: "include", ...init });
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      `${init.method ?? "GET"} ${path} -> ${res.status}`,
+    );
+  }
+  return await res.text();
 }
 
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -1090,6 +1174,61 @@ export const api = {
     ),
   retryProjectImport: (csrf: string, id: string) =>
     req<Project>(`/projects/${id}/imports/retry`, jsonInit("POST", csrf)),
+  // W3 — task working copy + one-time scratch sandbox + change review (ADR-040/039).
+  getWorkingCopy: (sid: string) =>
+    req<WorkingCopySummary | null>(`/sessions/${sid}/working-copy`),
+  createSandboxRun: (csrf: string, pid: string, sid: string, command: string) =>
+    req<SandboxRunState>(
+      `/projects/${pid}/sandbox-runs?session_id=${encodeURIComponent(sid)}`,
+      jsonInit("POST", csrf, { command }),
+    ),
+  getChangeSet: (pid: string, csId: string) =>
+    req<ChangeSet>(`/projects/${pid}/change-sets/${csId}`),
+  getChangeSetDiff: (pid: string, csId: string, entryId: string) =>
+    reqText(
+      `/projects/${pid}/change-sets/${csId}/entries/${entryId}/diff`,
+    ),
+  applyChangeSet: (
+    csrf: string,
+    pid: string,
+    csId: string,
+    body: { selected_entry_ids?: string[] | null; checkpoint?: { name: string; note?: string | null } | null },
+  ) =>
+    req<Project>(
+      `/projects/${pid}/change-sets/${csId}/apply`,
+      jsonInit("POST", csrf, body),
+    ),
+  discardChangeSet: (csrf: string, pid: string, csId: string) =>
+    req<WorkingCopySummary>(
+      `/projects/${pid}/change-sets/${csId}/discard`,
+      jsonInit("POST", csrf),
+    ),
+  discardWorkingCopy: (csrf: string, pid: string, wcId: string) =>
+    req<WorkingCopySummary>(
+      `/projects/${pid}/working-copies/${wcId}/discard`,
+      jsonInit("POST", csrf),
+    ),
+  listProjectArtifacts: (pid: string, workingCopyId?: string) => {
+    const suffix = workingCopyId
+      ? `?working_copy_id=${encodeURIComponent(workingCopyId)}`
+      : "";
+    return req<ProjectArtifact[]>(`/projects/${pid}/artifacts${suffix}`);
+  },
+  keepProjectArtifact: (csrf: string, pid: string, artId: string) =>
+    req<ProjectArtifact>(
+      `/projects/${pid}/artifacts/${artId}/keep`,
+      jsonInit("POST", csrf),
+    ),
+  exportProjectArtifact: (
+    csrf: string,
+    pid: string,
+    artId: string,
+    body?: { drive_folder_id?: string | null; name?: string | null },
+  ) =>
+    req<DriveNode>(
+      `/projects/${pid}/artifacts/${artId}/export`,
+      jsonInit("POST", csrf, body ?? {}),
+    ),
   channelsStatus: () => req<ChannelsStatus>("/channels"),
   simulateQQ: (csrf: string, text: string, fromId?: string) =>
     req<SimulateResult>(
