@@ -391,6 +391,47 @@ export interface StorageAccount {
   available_bytes: number;
 }
 
+export type KnowledgeStatus =
+  | "queued"
+  | "parsing"
+  | "chunking"
+  | "embedding"
+  | "ready"
+  | "stale"
+  | "failed"
+  | "deleting";
+
+export interface KnowledgeSource {
+  id: string;
+  file_id: string | null;
+  display_name: string;
+  status: KnowledgeStatus;
+  active_version: number | null;
+  language: string | null;
+  chunk_count: number;
+  failure_code: string | null;
+  updated_at: string;
+}
+
+export interface KnowledgeHit {
+  citation_ref: string;
+  source_id: string;
+  source_version_id: string;
+  chunk_id: string;
+  title: string;
+  locator: { page?: number | null; heading?: string | null };
+  excerpt: string;
+  score: number;
+  matched_by: Array<"lexical" | "vector">;
+}
+
+export interface KnowledgeSearchResult {
+  query: string;
+  retrieval_invocation_id: string;
+  hits: KnowledgeHit[];
+  sufficient: boolean;
+}
+
 export interface QQStatus {
   enabled: boolean;
   configured: boolean;
@@ -833,6 +874,30 @@ export const api = {
     req<DriveNode>(`/drive/nodes/${id}/restore`, jsonInit("POST", csrf)),
   drivePurge: (csrf: string, id: string) =>
     req<void>(`/drive/nodes/${id}`, jsonInit("DELETE", csrf)),
+  listKnowledgeSources: () =>
+    req<KnowledgeSource[]>("/knowledge/sources"),
+  getKnowledgeSource: (id: string) =>
+    req<KnowledgeSource>(`/knowledge/sources/${id}`),
+  addKnowledgeSource: (csrf: string, fileId: string, displayName?: string) =>
+    req<KnowledgeSource>(
+      "/knowledge/sources",
+      jsonInit("POST", csrf, {
+        file_id: fileId,
+        ...(displayName ? { display_name: displayName } : {}),
+      }),
+    ),
+  reindexKnowledgeSource: (csrf: string, id: string) =>
+    req<KnowledgeSource>(
+      `/knowledge/sources/${id}/reindex`,
+      jsonInit("POST", csrf),
+    ),
+  removeKnowledgeSource: (csrf: string, id: string) =>
+    req<void>(`/knowledge/sources/${id}`, jsonInit("DELETE", csrf)),
+  knowledgeSearch: (query: string, k?: number) =>
+    req<KnowledgeSearchResult>(
+      "/knowledge/search",
+      jsonInit("POST", null, { query, ...(k ? { k } : {}) }),
+    ),
   channelsStatus: () => req<ChannelsStatus>("/channels"),
   simulateQQ: (csrf: string, text: string, fromId?: string) =>
     req<SimulateResult>(

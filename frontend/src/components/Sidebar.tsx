@@ -11,6 +11,7 @@ type IconName =
   | "connectors"
   | "files"
   | "inbox"
+  | "knowledge"
   | "memory"
   | "messaging"
   | "schedules"
@@ -39,6 +40,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     items: [
       { label: "Schedules", path: "/reminders", icon: "schedules" },
       { label: "Memory", path: "/remember", icon: "memory" },
+      { label: "Knowledge", path: "/library", icon: "knowledge" },
       { label: "Drive", path: "/workspace", icon: "files" },
     ],
   },
@@ -105,6 +107,12 @@ function NavIcon({ name }: { name: IconName }) {
       <>
         <path d="M5 3.5h8l4 4V20H5z" />
         <path d="M13 3.5V8h4M8 12h6M8 15h6" />
+      </>
+    ),
+    knowledge: (
+      <>
+        <path d="M5 4.5h6a2 2 0 0 1 2 2V20a2.2 2.2 0 0 0-2-1.2H5z" />
+        <path d="M19 4.5h-6a2 2 0 0 0-2 2V20a2.2 2.2 0 0 1 2-1.2h6z" />
       </>
     ),
     messaging: (

@@ -6,6 +6,7 @@ import ApprovalsView from "./views/ApprovalsView";
 import ChatView from "./views/ChatView";
 import ConnectorsView from "./views/ConnectorsView";
 import InboxView from "./views/InboxView";
+import LibraryView from "./views/LibraryView";
 import LoginView from "./views/LoginView";
 import MemoryView from "./views/MemoryView";
 import MessagingView from "./views/MessagingView";
@@ -97,6 +98,14 @@ export default function App() {
         element={
           <Protected>
             <WorkspaceView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/library"
+        element={
+          <Protected>
+            <LibraryView />
           </Protected>
         }
       />
