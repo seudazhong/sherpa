@@ -115,8 +115,46 @@ class Settings(BaseSettings):
     knowledge_chunk_target_tokens: int = Field(default=450, ge=64, le=2048)
     knowledge_chunk_overlap_tokens: int = Field(default=64, ge=0, le=512)
     knowledge_retrieval_k: int = Field(default=6, ge=1, le=50)            # hits returned to the model
-    knowledge_retrieval_min_score: float = Field(default=0.0, ge=0.0)    # below => "insufficient evidence"
+    knowledge_retrieval_min_score: float = Field(default=0.35, ge=0.0)   # vector cosine-similarity floor (0..1); below on all branches => "insufficient evidence"
     knowledge_evidence_retention_days: int = Field(default=30, ge=1)     # knowledge_retrieval_evidence TTL
+
+    # Projects — Workspace W2a (ADR-037): blank/template/archive projects. GitHub import is
+    # W2b; working-copy/sandbox is W3. These bound the archive-import + snapshot paths only.
+    # (Design/contract-first — not yet wired; frozen here so the W2a impl reads them exactly.)
+    project_max_archive_bytes: int = Field(default=200 * 1024 * 1024, ge=1)  # compressed archive upload cap
+    project_max_expanded_bytes: int = Field(default=500 * 1024 * 1024, ge=1) # expanded tree cap (reserved before import)
+    project_max_entries: int = Field(default=20000, ge=1)                    # file/dir count cap per snapshot
+    project_max_expansion_ratio: int = Field(default=100, ge=1)             # zip-bomb guard: expanded/compressed
+    project_max_path_depth: int = Field(default=40, ge=1)
+    project_snapshot_retention_days: int = Field(default=30, ge=1)          # unpinned snapshot GC (pinned kept)
+
+    # Projects — Workspace W2b (ADR-038): GitHub ONE-TIME import (select repo + ref -> bounded
+    # archive fetch -> immutable initial snapshot -> record source repo/ref/OID). No sync/push/PR
+    # (W4), no sandbox (W3). The archive-fetch path reuses the PROJECT_MAX_* bounds above.
+    # (✅ W2b SHIPPED — migration 0029; wired by the import worker + connection service.)
+    github_api_base: str = Field(default="https://api.github.com")          # override for GHE
+    github_default_auth_kind: str = Field(default="pat")                    # pat | app_installation
+    github_import_ref_types: list[str] = Field(default_factory=lambda: ["branch", "tag", "commit"])
+    github_app_id: str | None = None                                        # GitHub App (app_installation)
+    github_app_private_key: SecretStr | None = None                        # PEM; vault/secret, never logged
+    github_archive_timeout_seconds: int = Field(default=120, ge=1)          # bounded archive fetch deadline
+
+    # Projects — Workspace W3 (ADR-040 product/data + ADR-039 isolation): task working copy +
+    # one-time scratch-copy sandbox + change review. DESIGN/CONTRACT-FIRST — frozen here, NOT wired
+    # (no migration, no real sandbox mount) until the W3 implementation lands after owner review.
+    # The sandbox mounts ONLY a disposable scratch copy of the working copy — never the Project
+    # snapshot/blob store/credentials/another Project/Drive (see §1.7). Reuses the hardened offline
+    # container from ADR-025 (network_disabled, cap_drop ALL, no-new-privileges, non-root, read-only
+    # rootfs + tmpfs, mem/pids/cpu/wall caps); W3 adds ONLY the disposable scratch RW mount.
+    working_copy_idle_ttl_seconds: int = Field(default=86400, ge=60)        # durable working-copy idle expiry (24h)
+    sandbox_warm_ttl_seconds: int = Field(default=900, ge=0)               # warm-container idle TTL cache hint (15m; 0=off)
+    sandbox_scratch_root: str = Field(default=".sherpa/scratch")            # node-local disposable scratch dir (NOT a source of truth; wiped freely)
+    sandbox_scratch_max_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1)  # per-run materialized scratch cap (2 GiB)
+    working_copy_max_changed_files: int = Field(default=5000, ge=1)         # change-set bound: changed-file count
+    working_copy_max_changed_bytes: int = Field(default=500 * 1024 * 1024, ge=1)  # change-set bound: total changed bytes
+    working_copy_max_artifact_bytes: int = Field(default=200 * 1024 * 1024, ge=1) # change-set bound: total artifact bytes
+    working_copy_max_diff_bytes: int = Field(default=2 * 1024 * 1024, ge=1)  # per-file spilled unified-diff cap (2 MiB)
+    sandbox_run_timeout_seconds: int = Field(default=120, ge=1)             # per project_run wall-clock deadline
 
     # Agent observability (ADR-033): OpenTelemetry gen_ai spans, off by default.
     # A derived diagnostic layer over the ADR-016 journal — never a source of truth.
@@ -334,8 +372,29 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Knowledge | `KNOWLEDGE_CHUNK_TARGET_TOKENS` | `int`, 64–2048 | `450` | No | No | Structural chunk target; tune against the golden set. |
 | Knowledge | `KNOWLEDGE_CHUNK_OVERLAP_TOKENS` | `int`, 0–512 | `64` | No | No | Chunk overlap. |
 | Knowledge | `KNOWLEDGE_RETRIEVAL_K` | `int`, 1–50 | `6` | No | No | Hits returned to the model per `search_knowledge`. |
-| Knowledge | `KNOWLEDGE_RETRIEVAL_MIN_SCORE` | `float` ≥ 0 | `0.0` | No | No | Below this top score ⇒ `sufficient=false` ("insufficient evidence"). |
+| Knowledge | `KNOWLEDGE_RETRIEVAL_MIN_SCORE` | `float` ≥ 0 | `0.35` | No | No | Vector cosine-similarity floor (0..1); a query clearing no branch ⇒ `sufficient=false` ("insufficient evidence"). |
 | Knowledge | `KNOWLEDGE_EVIDENCE_RETENTION_DAYS` | `int` ≥ 1 | `30` | No | No | `knowledge_retrieval_evidence` TTL (GC sweep). |
+| Projects (W2a) | `PROJECT_MAX_ARCHIVE_BYTES` | `int` ≥ 1 | `209715200` | No | No | Compressed archive upload cap for archive-import (ADR-037; 200 MiB). |
+| Projects (W2a) | `PROJECT_MAX_EXPANDED_BYTES` | `int` ≥ 1 | `524288000` | No | No | Expanded-tree cap, reserved before import (500 MiB). |
+| Projects (W2a) | `PROJECT_MAX_ENTRIES` | `int` ≥ 1 | `20000` | No | No | File/dir count cap per snapshot. |
+| Projects (W2a) | `PROJECT_MAX_EXPANSION_RATIO` | `int` ≥ 1 | `100` | No | No | Zip-bomb guard: expanded/compressed ratio. |
+| Projects (W2a) | `PROJECT_MAX_PATH_DEPTH` | `int` ≥ 1 | `40` | No | No | Max path component depth in a snapshot entry. |
+| Projects (W2a) | `PROJECT_SNAPSHOT_RETENTION_DAYS` | `int` ≥ 1 | `30` | No | No | Unpinned snapshot GC window; pinned checkpoints kept. |
+| Projects (W2b) | `GITHUB_API_BASE` | `str` | `https://api.github.com` | `web`, `worker` | No | GitHub REST base (override for GitHub Enterprise); ref-resolve + archive fetch (ADR-038). |
+| Projects (W2b) | `GITHUB_DEFAULT_AUTH_KIND` | `pat \| app_installation` | `pat` | No | No | First-version credential kind; `app_installation` (GitHub App) is the forward path. |
+| Projects (W2b) | `GITHUB_IMPORT_REF_TYPES` | JSON list of `branch \| tag \| commit` | `["branch","tag","commit"]` | No | No | Accepted one-time-import ref kinds (all three first-version, ADR-038). |
+| Projects (W2b) | `GITHUB_APP_ID` | `str` | None | `web`, `worker` | No | GitHub App id (only when `app_installation`). |
+| Projects (W2b) | `GITHUB_APP_PRIVATE_KEY` | `SecretStr` | None | `worker` | **Yes** | GitHub App PEM for minting installation tokens; vault/secret, never logged or in project content. |
+| Projects (W2b) | `GITHUB_ARCHIVE_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Bounded deadline for the archive (tarball) fetch. |
+| Projects (W3) | `WORKING_COPY_IDLE_TTL_SECONDS` | `int` ≥ 60 | `86400` | No | No | Durable task working-copy idle expiry (ADR-040; expiry + reservation release are one atomic transition). |
+| Projects (W3) | `SANDBOX_WARM_TTL_SECONDS` | `int` ≥ 0 | `900` | No | No | Warm-container idle TTL (cache hint only; `0`=always cold). Never a recovery source of truth. |
+| Projects (W3) | `SANDBOX_SCRATCH_ROOT` | `str` | `.sherpa/scratch` | `worker` | No | Node-local disposable scratch dir (per-run copy; wiped freely). NOT a source of truth; NOT a user workspace. |
+| Projects (W3) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `2147483648` | No | No | Per-run materialized scratch cap (2 GiB). |
+| Projects (W3) | `WORKING_COPY_MAX_CHANGED_FILES` | `int` ≥ 1 | `5000` | No | No | Change-set bound: changed-file count; overflow ⇒ explicit truncated review. |
+| Projects (W3) | `WORKING_COPY_MAX_CHANGED_BYTES` | `int` ≥ 1 | `524288000` | No | No | Change-set bound: total changed bytes (500 MiB). |
+| Projects (W3) | `WORKING_COPY_MAX_ARTIFACT_BYTES` | `int` ≥ 1 | `209715200` | No | No | Change-set bound: total artifact bytes (200 MiB); artifacts charge quota only when kept. |
+| Projects (W3) | `WORKING_COPY_MAX_DIFF_BYTES` | `int` ≥ 1 | `2097152` | No | No | Per-file spilled unified-diff cap (2 MiB); over ⇒ `diff_truncated`. |
+| Projects (W3) | `SANDBOX_RUN_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Per `project_run` wall-clock deadline; over ⇒ `wall_timeout`. |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
 | Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | `AnyHttpUrl` | None | No | No | OTLP endpoint (e.g. self-hosted Phoenix `http://phoenix:4317`); unset = console/in-memory exporter only. |
 | Observability | `OTEL_CAPTURE_MESSAGE_CONTENT` | `bool` | `false` | No | No | Opt-in capture of prompt/completion/tool content into spans (PII); redacted when on. Also set the upstream `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` if using OTel auto-instrumentation. |
@@ -374,6 +433,37 @@ Large tool output is an ephemeral runtime artifact, not a database record, user 
 - v1 workspace tools are read-only. Compose mounts the selected host directory into the worker with `:ro`; no web, migration, frontend, backup, connector, or tool-output service path is mounted beneath it.
 - The deployment MUST NOT select the Sherpa repository/deployment root or any directory containing `.env`, Docker secrets, KEKs, database files, Docker sockets, or service credentials.
 - APIs, events, and logs use workspace-relative paths only and never reveal the configured host path. File content remains bounded/redacted according to [api.md](api.md).
+
+### 1.5 Projects security boundary — Workspace W2a (ADR-037)
+
+Design/contract-first (ADR-037); the settings above are frozen but **not yet wired**. When the W2a implementation lands it MUST honor this boundary:
+
+- **Archive imports are untrusted input.** Expand in an isolated staging area — never directly into a canonical snapshot. Enforce `PROJECT_MAX_ARCHIVE_BYTES`, `PROJECT_MAX_EXPANDED_BYTES`, `PROJECT_MAX_ENTRIES`, `PROJECT_MAX_EXPANSION_RATIO`, and `PROJECT_MAX_PATH_DEPTH` before materializing. Reject absolute/traversal (`..`) paths, NUL, device/FIFO nodes, hard links, and symlinks that escape the project root. Do not trust the client `Content-Type` or file extension; generate server-side object keys.
+- **Project bytes are content-addressed and reference-counted** via the ADR-030 `storage_blobs`/quota ledger (reserve before write, `507` over quota; distinct blobs charged once). Snapshot entries are immutable; snapshot bytes are never in the append-only journal (events §2.9).
+- **No credentials in project state.** Project file trees, snapshots, prompts, logs, and tool results MUST NOT contain provider/model/storage/source credentials. GitHub source credentials arrive only in **W2b** and stay in the vault/connector boundary (ADR-019); they never enter a snapshot or (W3) a sandbox.
+- **W2a has no sandbox.** Open in Chat is read/discuss only — no working copy, no container, no mount. The scratch-copy sandbox and the `docker.sock`/multi-user isolation hardening are **W3 preconditions** governed by a later ADR-025 revision (ADR-037 §决策3/4).
+
+### 1.6 GitHub source boundary — Workspace W2b (ADR-038)
+
+**✅ W2b SHIPPED (migration `0029`); the `GITHUB_*` settings are wired.** W2b is a **one-time GitHub import** (select repo + ref → bounded archive fetch → immutable initial snapshot → record source repo/ref/OID); the remote is **not** authoritative after import. The W2b implementation honors this boundary:
+
+- **Credentials live only in the vault/connector boundary (ADR-019).** The GitHub token (a fine-grained PAT with `contents:read`, or a GitHub App installation token) is AEAD-sealed in `github_connections` and decrypted **only** by the import worker at the connector boundary. It MUST NOT appear in a project file tree, snapshot, snapshot entry, prompt, log, tool result, the event journal, an export, or (W3) a sandbox. `project_sources.connection_id` is a reference, never the token. `GITHUB_APP_PRIVATE_KEY` is a secret handled like other AEAD/KEK material (never logged).
+- **The fetched archive is untrusted input.** The worker resolves the ref → a concrete commit OID, fetches the **tarball** of that OID (contents only, no git history — no `git clone`, no `.git`, no working copy), and expands it through the **same W2a isolated, bounded, in-memory safe expander**: enforce `PROJECT_MAX_ARCHIVE_BYTES`/`PROJECT_MAX_EXPANDED_BYTES`/`PROJECT_MAX_ENTRIES`/`PROJECT_MAX_EXPANSION_RATIO`/`PROJECT_MAX_PATH_DEPTH` and reject absolute/traversal (`..`)/NUL paths, device/FIFO nodes, hard links, and escaping symlinks before materializing. Do not trust upstream file names as safe.
+- **Bytes are content-addressed + reference-counted** via the ADR-030 `storage_blobs`/quota ledger (reserve before write, `507` over quota; distinct blobs charged once) — the same as Drive/archive imports. Snapshot bytes are never in the append-only journal (events §2.10).
+- **Read-only fetch ⇒ idempotent; no external write.** The archive fetch does not mutate the remote, so there is no `effect_unknown` remote reconciliation in W2b (that is W4 push). A failed/partial fetch is retryable by resolved OID. `source_oid` is recorded as provenance; W2b never re-fetches or tracks the remote.
+- **No sandbox / no external write in W2b.** Working copy + scratch-copy sandbox is W3; GitHub sync/push/PR (ADR-020 approval, expected remote OID, no first-version force push) is W4. Each is a later ADR.
+
+### 1.7 Sandbox mount / lifecycle / resource / network / credential boundary — Workspace W3 (ADR-039 isolation + ADR-040 product/data)
+
+**⚠️ DESIGN / CONTRACT-FIRST ONLY.** The `SANDBOX_*`/`WORKING_COPY_*` settings above are frozen but **NOT wired**; no real sandbox mount ships in this batch. When the W3 implementation lands (after owner review of ADR-039 + ADR-040 + the ADR-025 revision + the `docker.sock`/multi-user hardening) it MUST honor this boundary. This section governs the one change W3 makes to the ADR-025 sandbox: **it adds a single read-write mount of a disposable scratch copy, and nothing else.**
+
+- **Mount boundary (the core W3 rule).** The sandbox mounts **only** a per-run **disposable node-local scratch copy** of the current working copy (`SANDBOX_SCRATCH_ROOT/<run>`), read-write, with `nosuid,nodev`. It **MUST NOT** mount, and receives no path to: the Project `project_snapshots`/`project_snapshot_entries`, the MinIO/`storage_blobs` object store, another Project or working copy, Drive, `WORKSPACE_ROOT`, `TOOL_OUTPUT_ROOT`, the `.env`/KEK/Docker socket, or any credential file. Canonical source-of-truth storage is **never** mounted read-write (ADR-025 revision; report §10.2/§11). The orchestrator validates the constructed `src=` scratch path as **untrusted input** (must resolve inside `SANDBOX_SCRATCH_ROOT`, no traversal) — the socket-holding orchestrator is the trust boundary and must never be influenced by agent/project content.
+- **Materialize from durable state, never from a live mount.** A run materializes `base snapshot + persisted overlay` into a fresh scratch tree (bounded by `SANDBOX_SCRATCH_MAX_BYTES`). The scratch tree, warm container (`SANDBOX_WARM_TTL_SECONDS`), and prepared image are **rebuildable caches**, never a recovery source of truth (events §2.11). **No credential is ever written into the scratch tree** during materialization (project bytes only).
+- **Lifecycle + orphan sweep.** The orchestrator persists the overlay/change-set boundary **before** teardown, then removes the scratch tree in a `finally` (container `--rm`). A worker-startup sweep purges orphaned `SANDBOX_SCRATCH_ROOT/*` from crashed runs. A durable working copy idle for `WORKING_COPY_IDLE_TTL_SECONDS` expires; idle-expiry release and quota-reservation release are **one atomic transition** (data-model §Projects W3).
+- **Resource bounds (reuse ADR-025 + add scratch/change-set caps).** Keep the ADR-025 hardened container: `network_disabled`, `cap_drop=ALL`, `no-new-privileges`, non-root (`nobody`), read-only rootfs + `tmpfs /tmp`, mem/pids/cpu limits, and a wall-clock kill (`SANDBOX_RUN_TIMEOUT_SECONDS`). Add: `SANDBOX_SCRATCH_MAX_BYTES` (materialized scratch cap) and the `WORKING_COPY_MAX_*` change-set bounds (changed-file count, changed bytes, artifact bytes, per-file diff bytes) — overflow ⇒ a named termination reason + an **explicit truncated** change set, never a silent full-looking diff.
+- **Network + dependency policy.** The sandbox stays **network-disabled**; there is **no egress and no package installation** in W3. A command needing an unavailable runtime/dependency ends with `environment_missing_dependencies` (events §2.11) — the sandbox **never** silently enables network to fetch packages. Commands run only with runtimes/tools already in the approved base image and dependencies already present in the Project snapshot (report §10.7).
+- **Credential boundary (ADR-019/039).** No model/provider/storage/GitHub/KEK credential is ever passed into the sandbox environment, command line, scratch tree, overlay, change set, artifact, snapshot, prompt, log, or tool result — reaffirming §1.5/§1.6 and the ADR-025 rule "无任何密钥注入". Artifacts and checkpoints never contain credentials or running-process state (report §10.6).
+- **`docker.sock` / multi-user gate (ADR-039 do-not-ship conditions).** W3's single change (scratch RW mount) is acceptable **only** on the self-hosted single-user profile with the socket scoped to the trusted orchestrator, patched runc, and (recommended) rootless Docker. **Do NOT ship multi-user or genuinely-untrusted-third-party code** on the shared-`docker.sock`/shared-kernel runc baseline: per ADR-039 that requires a gVisor (`runsc`) or microVM (Kata/Firecracker) runtime for untrusted containers, per-tenant scratch/socket isolation, a tenant-aware egress policy, and aggregate per-tenant quotas — with a threat review — first. This boundary must be reported truthfully in readiness/docs and never overclaimed.
 
 ## 2. Frozen `.env.example`
 

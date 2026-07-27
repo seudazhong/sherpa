@@ -391,6 +391,152 @@ export interface StorageAccount {
   available_bytes: number;
 }
 
+export type KnowledgeStatus =
+  | "queued"
+  | "parsing"
+  | "chunking"
+  | "embedding"
+  | "ready"
+  | "stale"
+  | "failed"
+  | "deleting";
+
+export interface KnowledgeSource {
+  id: string;
+  file_id: string | null;
+  display_name: string;
+  status: KnowledgeStatus;
+  active_version: number | null;
+  language: string | null;
+  chunk_count: number;
+  failure_code: string | null;
+  updated_at: string;
+}
+
+export interface KnowledgeHit {
+  citation_ref: string;
+  source_id: string;
+  source_version_id: string;
+  chunk_id: string;
+  title: string;
+  locator: { page?: number | null; heading?: string | null };
+  excerpt: string;
+  score: number;
+  matched_by: Array<"lexical" | "vector">;
+}
+
+export interface KnowledgeSearchResult {
+  query: string;
+  retrieval_invocation_id: string;
+  hits: KnowledgeHit[];
+  sufficient: boolean;
+}
+
+export type ProjectImportStatus = "none" | "importing" | "ready" | "failed";
+export type ProjectSourceStatus =
+  | "unbound"
+  | "importing"
+  | "imported"
+  | "import_failed";
+
+export interface ProjectSource {
+  provider: "github";
+  repo_external_id: string;
+  owner: string;
+  repo: string;
+  ref_type: "branch" | "tag" | "commit";
+  ref_name: string;
+  source_oid: string | null;
+  status: "importing" | "imported" | "import_failed";
+  imported_at: string | null;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  status: "active" | "archived" | "deleting";
+  source_status: ProjectSourceStatus;
+  current_snapshot_id: string | null;
+  used_bytes: number;
+  last_activity_at: string | null;
+  updated_at: string;
+  import_status: ProjectImportStatus;
+  import_failure_reason: string | null;
+  source?: ProjectSource | null;
+}
+
+export interface GithubConnectionStatus {
+  id: string | null;
+  connected: boolean;
+  auth_kind: "pat" | "app_installation" | null;
+  account_login: string | null;
+  scopes: string[];
+  status: "pending" | "active" | "revoked" | "error" | null;
+  last_error_redacted: string | null;
+}
+
+export interface GithubRepo {
+  repo_external_id: string;
+  owner: string;
+  repo: string;
+  private: boolean;
+  default_branch: string;
+}
+
+export interface GithubRepoPage {
+  items: GithubRepo[];
+  next_cursor: string | null;
+}
+
+export interface GithubRef {
+  ref_type: "branch" | "tag";
+  name: string;
+  oid: string;
+}
+
+export interface ProjectPage {
+  items: Project[];
+  next_cursor: string | null;
+}
+
+export interface ProjectEntry {
+  path: string;
+  entry_kind: "file" | "dir" | "symlink";
+  size_bytes: number;
+  executable: boolean;
+}
+
+export interface ProjectTree {
+  project_id: string;
+  snapshot_id: string | null;
+  entries: ProjectEntry[];
+  returned_count: number;
+  truncated: boolean;
+}
+
+export interface ProjectSnapshot {
+  id: string;
+  reason: string;
+  entry_count: number;
+  size_bytes: number;
+  pinned: boolean;
+  created_at: string;
+}
+
+export interface ProjectTemplate {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface ProjectContext {
+  session_id: string;
+  project_id: string | null;
+  project_name: string | null;
+  bound: boolean;
+}
+
 export interface QQStatus {
   enabled: boolean;
   configured: boolean;
@@ -833,6 +979,117 @@ export const api = {
     req<DriveNode>(`/drive/nodes/${id}/restore`, jsonInit("POST", csrf)),
   drivePurge: (csrf: string, id: string) =>
     req<void>(`/drive/nodes/${id}`, jsonInit("DELETE", csrf)),
+  listKnowledgeSources: () =>
+    req<KnowledgeSource[]>("/knowledge/sources"),
+  getKnowledgeSource: (id: string) =>
+    req<KnowledgeSource>(`/knowledge/sources/${id}`),
+  addKnowledgeSource: (csrf: string, fileId: string, displayName?: string) =>
+    req<KnowledgeSource>(
+      "/knowledge/sources",
+      jsonInit("POST", csrf, {
+        file_id: fileId,
+        ...(displayName ? { display_name: displayName } : {}),
+      }),
+    ),
+  reindexKnowledgeSource: (csrf: string, id: string) =>
+    req<KnowledgeSource>(
+      `/knowledge/sources/${id}/reindex`,
+      jsonInit("POST", csrf),
+    ),
+  removeKnowledgeSource: (csrf: string, id: string) =>
+    req<void>(`/knowledge/sources/${id}`, jsonInit("DELETE", csrf)),
+  knowledgeSearch: (query: string, k?: number) =>
+    req<KnowledgeSearchResult>(
+      "/knowledge/search",
+      jsonInit("POST", null, { query, ...(k ? { k } : {}) }),
+    ),
+  listProjects: (params?: { query?: string; status?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set("query", params.query);
+    if (params?.status) qs.set("status", params.status);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return req<ProjectPage>(`/projects${suffix}`);
+  },
+  getProject: (id: string) => req<Project>(`/projects/${id}`),
+  createProject: (
+    csrf: string,
+    body: { name: string; description?: string | null; template_id?: string | null },
+  ) =>
+    req<Project>(
+      "/projects",
+      jsonInit("POST", csrf, {
+        name: body.name,
+        description: body.description ?? null,
+        template_id: body.template_id ?? null,
+      }),
+    ),
+  importProjectArchive: (csrf: string, name: string, file: File) => {
+    const form = new FormData();
+    form.append("kind", "archive");
+    form.append("name", name);
+    form.append("file", file);
+    return req<Project>("/projects/imports", {
+      method: "POST",
+      headers: { "X-CSRF-Token": csrf },
+      body: form,
+    });
+  },
+  projectTree: (id: string, path?: string) => {
+    const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
+    return req<ProjectTree>(`/projects/${id}/tree${suffix}`);
+  },
+  projectSnapshots: (id: string) =>
+    req<ProjectSnapshot[]>(`/projects/${id}/snapshots`),
+  projectTemplates: () => req<ProjectTemplate[]>("/projects/templates"),
+  openProjectChat: (csrf: string, id: string, title?: string | null) =>
+    req<SessionSummary>(
+      `/projects/${id}/chats`,
+      jsonInit("POST", csrf, { title: title ?? null }),
+    ),
+  projectContext: (sid: string) =>
+    req<ProjectContext>(`/sessions/${sid}/project-context`),
+  // W2b — GitHub one-time import (ADR-038). Credentials stay server-side; these
+  // never receive or send a token except the one-time POST /connections/github.
+  getGithubConnection: () =>
+    req<GithubConnectionStatus>("/connections/github"),
+  connectGithub: (csrf: string, token: string) =>
+    req<GithubConnectionStatus>(
+      "/connections/github",
+      jsonInit("POST", csrf, { auth_kind: "pat", token }),
+    ),
+  disconnectGithub: (csrf: string) =>
+    req<void>("/connections/github", jsonInit("DELETE", csrf)),
+  githubRepos: (query?: string, cursor?: string) => {
+    const qs = new URLSearchParams();
+    if (query) qs.set("query", query);
+    if (cursor) qs.set("cursor", cursor);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return req<GithubRepoPage>(`/projects/github/repos${suffix}`);
+  },
+  githubRefs: (repoExternalId: string, kind?: string, query?: string) => {
+    const qs = new URLSearchParams();
+    qs.set("repo_external_id", repoExternalId);
+    if (kind) qs.set("kind", kind);
+    if (query) qs.set("query", query);
+    return req<GithubRef[]>(`/projects/github/refs?${qs.toString()}`);
+  },
+  importProjectGithub: (
+    csrf: string,
+    name: string,
+    spec: {
+      repo_external_id: string;
+      owner: string;
+      repo: string;
+      ref_type: "branch" | "tag" | "commit";
+      ref: string;
+    },
+  ) =>
+    req<Project>(
+      "/projects/imports",
+      jsonInit("POST", csrf, { kind: "github", name, github: spec }),
+    ),
+  retryProjectImport: (csrf: string, id: string) =>
+    req<Project>(`/projects/${id}/imports/retry`, jsonInit("POST", csrf)),
   channelsStatus: () => req<ChannelsStatus>("/channels"),
   simulateQQ: (csrf: string, text: string, fromId?: string) =>
     req<SimulateResult>(

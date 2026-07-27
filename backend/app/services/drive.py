@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.files import build_object_store
-from app.models import DriveNode, DriveVersion, StorageAccount, StorageBlob
+from app.models import DriveNode, DriveVersion, ProjectSnapshotEntry, StorageAccount, StorageBlob
 from app.services.context import CallerContext
 from app.services.errors import (
     Conflict,
@@ -141,7 +141,18 @@ async def _recompute_blob(
             DriveVersion.content_hash == content_hash,
         )
     )
-    total = int(node_refs or 0) + int(version_refs or 0)
+    # Projects share the same immutable, deduped, ref-counted storage_blobs (ADR-037):
+    # a blob referenced only by a project snapshot must NOT be GC'd or drop out of usage.
+    project_refs = await db.scalar(
+        select(func.count())
+        .select_from(ProjectSnapshotEntry)
+        .where(
+            ProjectSnapshotEntry.tenant_id == ctx.tenant_id,
+            ProjectSnapshotEntry.user_id == uid,
+            ProjectSnapshotEntry.content_hash == content_hash,
+        )
+    )
+    total = int(node_refs or 0) + int(version_refs or 0) + int(project_refs or 0)
     blob.ref_count = total
     if total == 0 and blob.unreferenced_at is None:
         blob.unreferenced_at = _now()
@@ -397,6 +408,36 @@ async def _ensure_blob(
     return content_hash, is_new
 
 
+async def ensure_blob(
+    db: AsyncSession,
+    ctx: CallerContext,
+    uid: uuid.UUID,
+    *,
+    data: bytes,
+    content_type: str,
+) -> tuple[bytes, bool]:
+    """Public wrapper: content-address + persist a blob row (object written before
+    commit). Shared by Projects (ADR-037) to reuse Drive's deduped blob store."""
+    return await _ensure_blob(db, ctx, uid, data=data, content_type=content_type)
+
+
+async def recompute_blob(
+    db: AsyncSession, ctx: CallerContext, uid: uuid.UUID, content_hash: bytes
+) -> None:
+    """Public wrapper: recompute a blob's ref_count across Drive + Project references."""
+    await _recompute_blob(db, ctx, uid, content_hash)
+
+
+async def recompute_used(db: AsyncSession, ctx: CallerContext, uid: uuid.UUID) -> int:
+    """Public wrapper: recompute the shared per-user account used_bytes."""
+    return await _recompute_used(db, ctx, uid)
+
+
+async def get_account(db: AsyncSession, ctx: CallerContext, uid: uuid.UUID) -> StorageAccount:
+    """Public wrapper: get-or-create the shared per-user storage account."""
+    return await _get_account(db, ctx, uid)
+
+
 async def _upload_into(
     db: AsyncSession,
     ctx: CallerContext,
@@ -483,6 +524,10 @@ async def _upload_into(
         await db.flush()
         if prior_hash is not None and prior_hash != content_hash:
             await _recompute_blob(db, ctx, uid, prior_hash)
+            # Knowledge hook: a changed backing file marks its sources stale (ADR-036).
+            from app.services import knowledge as _knowledge
+
+            await _knowledge.mark_stale_for_file(db, ctx, file_id=existing.id)
 
     await _recompute_blob(db, ctx, uid, content_hash)
     await _recompute_used(db, ctx, uid)
@@ -701,6 +746,10 @@ async def trash(db: AsyncSession, ctx: CallerContext, node_id: uuid.UUID) -> Dri
             n.trashed_at = now
             n.purge_after = purge_after
     await db.flush()
+    # Knowledge hook: a deleted file tombstones its sources (retrieval exclusion; ADR-036).
+    from app.services import knowledge as _knowledge
+
+    await _knowledge.tombstone_sources_for_files(db, ctx, file_ids=ids)
     await db.refresh(node, ["updated_at"])
     return node
 
@@ -757,6 +806,10 @@ async def purge(db: AsyncSession, ctx: CallerContext, node_id: uuid.UUID) -> Non
         hashes.update(h for h in vers if h is not None)
         await db.delete(n)
     await db.flush()
+    # Knowledge hook: purged files tombstone their sources (ADR-036).
+    from app.services import knowledge as _knowledge
+
+    await _knowledge.tombstone_sources_for_files(db, ctx, file_ids=ids)
     for h in hashes:
         await _recompute_blob(db, ctx, uid, h)
     await _recompute_used(db, ctx, uid)
@@ -903,6 +956,10 @@ async def sweep_orphan_objects(db: AsyncSession) -> int:
     known.update((await db.execute(select(File.object_key))).scalars().all())
     removed = 0
     for key in keys:
+        # Project archive-import staging objects (ADR-037) are transient job inputs,
+        # not blob rows; the import job owns their lifecycle. Never sweep them here.
+        if key.startswith("project-import/"):
+            continue
         if key not in known:
             await store.delete(key)
             removed += 1

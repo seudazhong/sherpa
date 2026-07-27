@@ -6,9 +6,11 @@ import ApprovalsView from "./views/ApprovalsView";
 import ChatView from "./views/ChatView";
 import ConnectorsView from "./views/ConnectorsView";
 import InboxView from "./views/InboxView";
+import LibraryView from "./views/LibraryView";
 import LoginView from "./views/LoginView";
 import MemoryView from "./views/MemoryView";
 import MessagingView from "./views/MessagingView";
+import ProjectsView from "./views/ProjectsView";
 import SchedulesView from "./views/SchedulesView";
 import SessionsView from "./views/SessionsView";
 import SettingsView from "./views/SettingsView";
@@ -97,6 +99,22 @@ export default function App() {
         element={
           <Protected>
             <WorkspaceView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/work/projects"
+        element={
+          <Protected>
+            <ProjectsView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/library"
+        element={
+          <Protected>
+            <LibraryView />
           </Protected>
         }
       />

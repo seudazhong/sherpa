@@ -67,3 +67,10 @@ class TooLarge(ServiceError):
 class InsufficientStorage(ServiceError):
     code = "insufficient_storage"
     http_status = 507
+
+
+class BadGateway(ServiceError):
+    """Redacted upstream (e.g. GitHub) failure. The upstream detail is never leaked."""
+
+    code = "bad_gateway"
+    http_status = 502

@@ -17,13 +17,16 @@ from app.api.activity import router as activity_router
 from app.api.auth import router as auth_router
 from app.api.candidates import router as candidates_router
 from app.api.channels import router as channels_router
+from app.api.connections import router as connections_router
 from app.api.connectors import router as connectors_router
 from app.api.drive import router as drive_router
 from app.api.files import router as files_router
 from app.api.grants import router as grants_router
+from app.api.knowledge import router as knowledge_router
 from app.api.memory import router as memory_router
 from app.api.notifications import router as notifications_router
 from app.api.permissions import router as permissions_router
+from app.api.projects import router as projects_router
 from app.api.prompt import router as prompt_router
 from app.api.schedules import router as schedules_router
 from app.api.sessions import router as sessions_router
@@ -47,6 +50,7 @@ app = FastAPI(title="Sherpa", version=__version__, lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(connectors_router)
+app.include_router(connections_router)
 app.include_router(candidates_router)
 app.include_router(todos_router)
 app.include_router(schedules_router)
@@ -54,8 +58,10 @@ app.include_router(notifications_router)
 app.include_router(permissions_router)
 app.include_router(activity_router)
 app.include_router(memory_router)
+app.include_router(knowledge_router)
 app.include_router(files_router)
 app.include_router(drive_router)
+app.include_router(projects_router)
 app.include_router(grants_router)
 app.include_router(channels_router)
 app.include_router(sse_router)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from app.services.context import CallerContext
 from app.services.errors import (
+    BadGateway,
     Conflict,
     Forbidden,
     InsufficientStorage,
@@ -35,4 +36,5 @@ __all__ = [
     "Internal",
     "TooLarge",
     "InsufficientStorage",
+    "BadGateway",
 ]

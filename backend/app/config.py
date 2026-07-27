@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     embedding_dim: int = 1024
     embedding_api_key: str = ""  # only for the openai_compatible external override
 
+    # Knowledge base (ADR-036): source-backed document KB (reuses the EMBEDDING_*
+    # profile above). CJK lexical search resolves a stable Postgres text-search config
+    # at deploy time (zhparser, else an app-tokenized fallback).
+    knowledge_text_search_config: str = "sherpa_text"
+    knowledge_lexical_backend: str = "zhparser"  # zhparser | app_jieba
+    knowledge_max_file_bytes: int = 25 * 1024 * 1024
+    knowledge_max_pages: int = 500
+    knowledge_chunk_target_tokens: int = 450
+    knowledge_chunk_overlap_tokens: int = 64
+    knowledge_retrieval_k: int = 6
+    knowledge_retrieval_min_score: float = 0.35  # vector cosine-similarity floor (0..1)
+    knowledge_evidence_retention_days: int = 30
+
     # Object storage for personal files (ADR-012). "memory" keeps dev/tests
     # offline; "minio" targets an S3-compatible MinIO service.
     storage_kind: str = "memory"
@@ -53,6 +66,29 @@ class Settings(BaseSettings):
     drive_max_file_bytes: int = 100 * 1024 * 1024
     drive_trash_retention_days: int = 30
     drive_blob_gc_retention_hours: int = 24
+
+    # Projects — Workspace W2a (ADR-037): blank/template/archive projects. GitHub
+    # import is W2b; working-copy/sandbox is W3. These bound the archive-import +
+    # snapshot paths only. Project snapshots reuse the ADR-030 immutable, deduped,
+    # ref-counted storage_blobs + the shared per-user storage account/quota.
+    project_max_archive_bytes: int = 200 * 1024 * 1024  # compressed archive upload cap
+    project_max_expanded_bytes: int = 500 * 1024 * 1024  # expanded tree cap
+    project_max_entries: int = 20000  # file/dir count cap per snapshot
+    project_max_expansion_ratio: int = 100  # zip-bomb guard: expanded/compressed
+    project_max_path_depth: int = 40
+    project_snapshot_retention_days: int = 30  # unpinned snapshot GC window (pinned kept)
+
+    # Projects — Workspace W2b (ADR-038): GitHub ONE-TIME import (select repo + ref ->
+    # bounded archive fetch -> immutable initial snapshot -> record source repo/ref/OID).
+    # No sync/push/PR (W4), no sandbox (W3). The archive-fetch path reuses the
+    # PROJECT_MAX_* bounds above. GitHub credentials live only in the AEAD vault
+    # (github_connections) and never enter a project tree/snapshot/prompt/log/event.
+    github_api_base: str = "https://api.github.com"  # override for GitHub Enterprise
+    github_default_auth_kind: str = "pat"  # pat | app_installation (forward path)
+    github_import_ref_types: list[str] = ["branch", "tag", "commit"]
+    github_app_id: str | None = None  # GitHub App (app_installation only)
+    github_app_private_key: str | None = None  # PEM; vault/secret, never logged
+    github_archive_timeout_seconds: int = 120  # bounded archive fetch deadline
 
     # Recurring scheduled agent tasks (ADR-031). Guardrails on autonomous runs.
     scheduled_task_max_concurrency: int = 3

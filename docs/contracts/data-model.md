@@ -2523,3 +2523,673 @@ Notes:
   the journal; excerpts live in `knowledge_retrieval_evidence` (retention-scoped). History
   replay resolves a ref there + the source tombstone state; a deleted source renders as
   `[knowledge source deleted]`.
+
+### Projects — Workspace W2a (ADR-037, source-backed development state — additive, post-v1)
+
+> **✅ W2a SHIPPED (migration `0028`, `/work/projects` nav exposed).** (The banner below was
+> the design/contract-first note; W2a is now implemented — see the "Realization" note at the end
+> of this section. W2b below it stays design/contract-first.) Every table carries `tenant_id` +
+> composite tenant-scoped keys (ADR-015). W2a = **blank / template / archive** projects (no GitHub
+> — that is W2b). **Canonical** = `projects` + immutable `project_snapshots` +
+> `project_snapshot_entries` pointing at ADR-030 `storage_blobs`; **no derived/rebuildable** tables
+> in W2a. Deferred to later ADRs: `project_sources` (**W2b**, now specified below),
+> `project_working_copies` / `project_change_sets` / `project_artifacts` (W3).
+
+```sql
+-- A Project = a named, durable, user-visible development state. Its current_snapshot_id
+-- points at the immutable head snapshot. source_status stays 'unbound' in W2a (GitHub = W2b).
+CREATE TABLE projects (
+    tenant_id           uuid NOT NULL,
+    id                  uuid NOT NULL,
+    user_id             uuid NOT NULL,
+    name                text NOT NULL,
+    description         text,
+    status              text NOT NULL DEFAULT 'active',   -- active|archived|deleting
+    current_snapshot_id uuid,                             -- immutable head; NULL only mid-create/failed
+    default_branch_label text NOT NULL DEFAULT 'main',    -- label only in W2a; real branches = W2b
+    source_status       text NOT NULL DEFAULT 'unbound',  -- W2a: always 'unbound' (W2b adds the rest)
+    used_bytes          bigint NOT NULL DEFAULT 0,        -- durable rollup: distinct blobs charged once
+    last_activity_at    timestamptz,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    updated_at          timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_projects PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_projects_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_projects_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_projects_status CHECK (status IN ('active','archived','deleting')),
+    CONSTRAINT ck_projects_source_status CHECK (source_status IN ('unbound')),
+    CONSTRAINT ck_projects_name CHECK (char_length(name) BETWEEN 1 AND 200),
+    CONSTRAINT ck_projects_used CHECK (used_bytes >= 0)
+);
+-- Unique live project name per owner.
+CREATE UNIQUE INDEX uq_projects_name
+    ON projects (tenant_id, user_id, name)
+    WHERE status <> 'deleting';
+CREATE INDEX ix_projects_recent
+    ON projects (tenant_id, user_id, last_activity_at DESC);
+
+-- Immutable, parent-linked snapshots. W2a only ever creates reason='import' (the initial
+-- snapshot for a blank/template/archive project). save/checkpoint/sync are W3/W4.
+CREATE TABLE project_snapshots (
+    tenant_id      uuid NOT NULL,
+    id             uuid NOT NULL,
+    project_id     uuid NOT NULL,
+    parent_id      uuid,                       -- prior snapshot; NULL for the initial import
+    reason         text NOT NULL,              -- import|save|checkpoint|sync  (W2a: import)
+    entry_count    integer NOT NULL DEFAULT 0,
+    size_bytes     bigint NOT NULL DEFAULT 0,  -- sum of distinct entry blob sizes
+    source_oid     text,                       -- W2b GitHub commit OID; NULL in W2a
+    pinned         boolean NOT NULL DEFAULT false,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_project_snapshots PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_ps_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ps_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_ps_parent FOREIGN KEY (tenant_id, parent_id)
+        REFERENCES project_snapshots (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT ck_ps_reason CHECK (reason IN ('import','save','checkpoint','sync')),
+    CONSTRAINT ck_ps_counts CHECK (entry_count >= 0 AND size_bytes >= 0)
+);
+CREATE INDEX ix_ps_project ON project_snapshots (tenant_id, project_id, created_at DESC);
+
+-- One row per path in a snapshot's tree. File entries reference an immutable, content-
+-- addressed ADR-030 storage_blobs row (shared/deduped/ref-counted like Drive). A compact
+-- manifest/tree representation MAY replace this projection later without changing Project
+-- semantics (canonical bytes stay in storage_blobs + snapshot identity).
+CREATE TABLE project_snapshot_entries (
+    tenant_id     uuid NOT NULL,
+    id            uuid NOT NULL,
+    snapshot_id   uuid NOT NULL,
+    user_id       uuid NOT NULL,               -- charging owner for the referenced blob
+    path          text NOT NULL,               -- normalized, relative, POSIX; no '..'/NUL/abs
+    entry_kind    text NOT NULL,               -- file|dir|symlink
+    content_hash  bytea,                        -- storage_blobs ref (entry_kind='file')
+    size_bytes    bigint NOT NULL DEFAULT 0,
+    executable    boolean NOT NULL DEFAULT false,
+    symlink_target text,                        -- safe relative target (entry_kind='symlink')
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_pse PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_pse_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pse_snapshot FOREIGN KEY (tenant_id, snapshot_id)
+        REFERENCES project_snapshots (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_pse_blob FOREIGN KEY (tenant_id, user_id, content_hash)
+        REFERENCES storage_blobs (tenant_id, user_id, content_hash) ON DELETE RESTRICT,
+    CONSTRAINT ck_pse_kind CHECK (entry_kind IN ('file','dir','symlink')),
+    CONSTRAINT ck_pse_path CHECK (
+        char_length(path) BETWEEN 1 AND 1024
+        AND path NOT LIKE '/%' AND path NOT LIKE '%..%'),  -- NUL is inherently rejected by text
+    CONSTRAINT ck_pse_file_blob CHECK (entry_kind <> 'file' OR content_hash IS NOT NULL)
+);
+CREATE UNIQUE INDEX uq_pse_path ON project_snapshot_entries (tenant_id, snapshot_id, path);
+
+-- Durable archive-import job (events §2.9 realization; mirrors knowledge_ingestion_job).
+-- Recovery source of truth for the async archive import: claim (lease) → stage the
+-- isolated upload → bounded expand → build the initial immutable snapshot → atomically
+-- set projects.current_snapshot_id. Every exit carries a named termination_reason; a
+-- crash/replay never yields a half-built or duplicate project (idempotent per project).
+-- blank/template creation is a single committed transaction and needs no job row.
+CREATE TABLE project_import_jobs (
+    tenant_id          uuid NOT NULL,
+    id                 uuid NOT NULL,
+    project_id         uuid NOT NULL,
+    user_id            uuid NOT NULL,
+    create_kind        text NOT NULL,              -- W2a: 'archive'
+    stage              text NOT NULL DEFAULT 'queued',  -- queued|staged|activated|done|failed
+    idempotency_key    text NOT NULL,              -- 'import:<project_id>' (one import per project)
+    staging_object_key text,                       -- isolated archive staging object (transient)
+    archive_bytes      bigint NOT NULL DEFAULT 0,  -- compressed upload size
+    entry_count        integer,
+    size_bytes         bigint,
+    termination_reason text,                       -- done|unsafe_archive|too_large|expansion_ratio|...
+    attempt            integer NOT NULL DEFAULT 0,
+    lease_owner        text,
+    lease_expires_at   timestamptz,
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_project_import_jobs PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_pij_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pij_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_pij_stage CHECK (stage IN ('queued','staged','activated','done','failed')),
+    CONSTRAINT ck_pij_kind CHECK (create_kind IN ('archive')),
+    CONSTRAINT uq_pij_idem UNIQUE (tenant_id, idempotency_key)
+);
+CREATE INDEX ix_pij_recover ON project_import_jobs (tenant_id, stage, lease_expires_at)
+    WHERE stage NOT IN ('done','failed');
+CREATE INDEX ix_pij_project ON project_import_jobs (tenant_id, project_id);
+
+-- Project-bound Chat: immutable binding of a session to one Project. NULL = General chat.
+ALTER TABLE sessions ADD COLUMN project_id uuid;
+ALTER TABLE sessions
+    ADD CONSTRAINT fk_sessions_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE RESTRICT;
+CREATE INDEX ix_sessions_project
+    ON sessions (tenant_id, project_id)
+    WHERE project_id IS NOT NULL;
+```
+
+Notes:
+
+- **Immutable snapshots + shared blobs:** `project_snapshots`/`project_snapshot_entries` are
+  never mutated after creation; the head advances by pointing `projects.current_snapshot_id`
+  at a new snapshot (W3+). File bytes are the **same immutable, content-addressed, ref-counted
+  `storage_blobs`** as Drive (ADR-030): many snapshots referencing unchanged bytes do **not**
+  multiply quota, and dedup credit never crosses owner/tenant boundaries. `used_bytes` counts
+  each distinct referenced blob once.
+- **`sessions.project_id` immutability:** `null` = General chat; after the first admitted user
+  message the binding is **immutable** (enforced by the service/API, not a DB trigger in v1).
+  Choosing another Project **creates a new session** — the transcript/tool context is never
+  re-pointed in place. `ON DELETE RESTRICT` stops deleting a Project out from under a bound
+  chat; project deletion archives/handles bound sessions explicitly (W-later).
+- **W2a creation paths (all produce reason='import'):** *blank* = empty snapshot (0 entries);
+  *template* = copy template entries, sever any template history; *archive* = safely expand a
+  ZIP/TAR in isolated staging (bounded size/count/ratio/depth; reject abs/traversal paths,
+  devices, FIFOs, hard links, escaping symlinks) then materialize verified entries. **GitHub
+  import is W2b** and adds `project_sources` + `source_oid`.
+- **Deferred tables (NOT W2a):** `project_sources` (W2b), and
+  `project_working_copies`/`project_change_sets`/`project_artifacts` (W3) each land with their
+  own ADR + contract-first batch; do not create them in W2a.
+- **`project_import_jobs` (implementation, ADR-037 §决策5 realization):** the durable
+  archive-import job that realizes events §2.9's "durable job (outbox + lease)" — the recovery
+  source of truth for the async archive path (lease + `(project_id)` idempotency + named
+  `termination_reason`), mirroring `knowledge_ingestion_job`. It is operational infrastructure,
+  not a rebuildable projection of `projects`/`snapshots`; blank/template creation is a single
+  transaction and writes no job row. Because a project's lifecycle is **not run-scoped**, the
+  frozen run-scoped `event_journal` (run_id NOT NULL) is not used for `project.lifecycle`;
+  the job's stage/termination_reason + at-least-once enqueue + a recovery tick provide the
+  same durability guarantee (see events §2.9).
+
+### Projects — Workspace W2b GitHub one-time import (ADR-038, additive, post-v1)
+
+> **✅ W2b SHIPPED (migration `0029`; `/work/projects` GitHub path exposed).** (The banner
+> below was the design/contract-first note; W2b is now implemented — `github_connections` +
+> `project_sources` + `source_status` widen + `project_import_jobs` github columns all live
+> at migration 0029, `services/github_source.py` + the `projects_import.py` github branch,
+> REST §10.6, and the production GitHub connect/repo·ref/import UI.) **W2b = GitHub
+> *one-time* import** — select a
+> repository + ref (branch/tag/commit), bounded **archive fetch** of that ref's tree (no git
+> history), record source repo/ref/OID provenance, materialize an **immutable initial snapshot**.
+> After import the project lives independently; **the remote is not the source of truth.** No
+> background fetch/sync, working copy, git init/commit/branch, merge, push, PR, force push, or
+> sandbox (those are W3/W4). Every table carries `tenant_id` + composite tenant-scoped keys
+> (ADR-015). **Canonical** = `project_sources` (provenance) + the existing immutable
+> `project_snapshots`/`project_snapshot_entries`; the GitHub **credential** lives only in
+> `github_connections` (AEAD, ADR-019) and **never** enters a project tree/snapshot/prompt/log/
+> tool result/sandbox. Deferred to later ADRs (do **not** add in W2b): W4 sync/fetch columns on
+> `project_sources`; `project_working_copies`/`project_change_sets`/`project_artifacts` (W3).
+
+```sql
+-- GitHub credential record (one active connection per owner in v1). Reuses the connectors AEAD
+-- column shape (ADR-019); the token is decrypted ONLY by the import worker at the connector
+-- boundary and never leaves it. auth_kind is extensible: 'pat' = fine-grained PAT (contents:read,
+-- first-version, lowest setup for self-hosted single-user); 'app_installation' = GitHub App
+-- installation token (contents:read, <=8h, not user-bound) — the recommended/forward path, added
+-- later WITHOUT a schema change. v1 accepts ONLY a fine-grained PAT: the input boundary requires the
+-- 'github_pat_' token prefix and refuses classic/OAuth/App token shapes (see api.md GithubConnectionCreate).
+-- Public-repo import may use no token.
+CREATE TABLE github_connections (
+    tenant_id       uuid NOT NULL,
+    id              uuid NOT NULL,
+    user_id         uuid NOT NULL,
+    auth_kind       text NOT NULL,                 -- pat | app_installation
+    account_login   text,                          -- GitHub login/org the token acts as (display)
+    installation_id text,                          -- GitHub App installation id (app_installation only)
+    token_enc       bytea,                         -- AEAD ciphertext (never logged/exported plaintext)
+    nonce           bytea,
+    kek_id          text,
+    key_version     integer,
+    token_algorithm text,
+    aad_version     smallint,
+    scopes          text[] NOT NULL DEFAULT ARRAY[]::text[],  -- e.g. {'contents:read'}
+    status          text NOT NULL DEFAULT 'pending',  -- pending|active|revoked|error
+    last_error_redacted text,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_github_connections PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_ghc_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ghc_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_ghc_auth_kind CHECK (auth_kind IN ('pat','app_installation')),
+    CONSTRAINT ck_ghc_status CHECK (status IN ('pending','active','revoked','error')),
+    -- AEAD all-or-none, mirroring connectors (a live connection MUST carry a sealed token).
+    CONSTRAINT ck_ghc_aead_all_or_none CHECK (
+        (token_enc IS NULL AND nonce IS NULL AND kek_id IS NULL AND key_version IS NULL
+             AND token_algorithm IS NULL AND aad_version IS NULL)
+        OR (token_enc IS NOT NULL AND nonce IS NOT NULL AND kek_id IS NOT NULL
+             AND key_version IS NOT NULL AND token_algorithm IS NOT NULL AND aad_version IS NOT NULL)),
+    CONSTRAINT ck_ghc_active_has_token CHECK (status <> 'active' OR token_enc IS NOT NULL)
+);
+CREATE UNIQUE INDEX uq_ghc_owner_active
+    ON github_connections (tenant_id, user_id)
+    WHERE status <> 'revoked';
+
+-- Canonical GitHub source provenance: one row per project once a github import starts. After a
+-- successful import this is a frozen provenance record (repo id + ref + resolved OID). The remote
+-- is NOT authoritative; W2b never re-fetches. W4 EXTENDS this table with sync/fetch columns
+-- (source_base_oid, last remote OID, last_fetched_at, sync state) under its own ADR — not here.
+CREATE TABLE project_sources (
+    tenant_id        uuid NOT NULL,
+    id               uuid NOT NULL,
+    project_id       uuid NOT NULL,
+    user_id          uuid NOT NULL,
+    provider         text NOT NULL DEFAULT 'github',  -- W2b: only 'github'
+    connection_id    uuid,                            -- vault credential ref; W2b first version
+                                                      -- requires an active connection (public-repo
+                                                      -- import without a connection is a later relaxation)
+    repo_external_id text NOT NULL,                   -- stable GitHub numeric repo id (survives rename)
+    owner            text NOT NULL,                   -- display owner/org (not a source of truth key)
+    repo             text NOT NULL,                   -- display repo name
+    ref_type         text NOT NULL,                   -- branch | tag | commit
+    ref_name         text NOT NULL,                   -- the selected branch/tag name or commit sha
+    source_oid       text,                            -- resolved commit OID (NULL until resolved)
+    status           text NOT NULL DEFAULT 'importing',  -- importing | imported | import_failed
+    imported_at      timestamptz,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_project_sources PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_psrc_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_psrc_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_psrc_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_psrc_connection FOREIGN KEY (tenant_id, connection_id)
+        REFERENCES github_connections (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT ck_psrc_provider CHECK (provider IN ('github')),
+    CONSTRAINT ck_psrc_ref_type CHECK (ref_type IN ('branch','tag','commit')),
+    CONSTRAINT ck_psrc_status CHECK (status IN ('importing','imported','import_failed'))
+);
+-- One source binding per project in W2b (one-time import).
+CREATE UNIQUE INDEX uq_psrc_project ON project_sources (tenant_id, project_id);
+
+-- projects.source_status CHECK widens for W2b (W2a was 'unbound' only). Richer W4 sync states
+-- (clean/remote_ahead/local_ahead/diverged/conflicted/auth_required/remote_unavailable/sync_error)
+-- are DEFERRED to W4.
+ALTER TABLE projects DROP CONSTRAINT ck_projects_source_status;
+ALTER TABLE projects ADD CONSTRAINT ck_projects_source_status
+    CHECK (source_status IN ('unbound','importing','imported','import_failed'));
+
+-- project_import_jobs learns the github create_kind + carries the source spec/credential ref so
+-- the durable worker can resolve ref->OID and fetch the archive. (No token here — only a
+-- connection_id reference; the token stays in github_connections/vault.)
+ALTER TABLE project_import_jobs DROP CONSTRAINT ck_pij_kind;
+ALTER TABLE project_import_jobs ADD CONSTRAINT ck_pij_kind
+    CHECK (create_kind IN ('archive','github'));
+ALTER TABLE project_import_jobs ADD COLUMN connection_id   uuid;   -- github credential ref (nullable)
+ALTER TABLE project_import_jobs ADD COLUMN source_ref_type text;   -- branch|tag|commit (github)
+ALTER TABLE project_import_jobs ADD COLUMN source_ref      text;   -- selected ref name/sha (github)
+ALTER TABLE project_import_jobs ADD COLUMN resolved_oid    text;   -- filled after ref->OID resolution
+ALTER TABLE project_import_jobs
+    ADD CONSTRAINT fk_pij_connection FOREIGN KEY (tenant_id, connection_id)
+        REFERENCES github_connections (tenant_id, id) ON DELETE RESTRICT;
+```
+
+Notes:
+
+- **Credential boundary (ADR-019/038):** the GitHub token lives **only** in `github_connections`
+  (AEAD, all-or-none), is decrypted **only** by the import worker at the connector boundary, and
+  is **never** written into `project_sources`, a snapshot, an entry, the journal, logs, prompts,
+  tool results, or (W3) a sandbox. `project_sources.connection_id` is a reference, not the token.
+- **Bounded archive fetch, no git:** the import worker resolves the ref → a concrete commit OID
+  (GitHub `git/ref/...` / `commits/{sha}`), fetches the **tarball** of that OID (contents only, no
+  git history), and feeds it through the **same W2a in-memory safe expander** (`services/archive.py`
+  bounds + traversal/device/FIFO/hardlink/escaping-symlink rejection). No `git` binary, no `.git`,
+  no working copy (that is W3). Snapshot bytes are the same immutable, content-addressed,
+  ref-counted ADR-030 `storage_blobs` as Drive/archive imports.
+- **Provenance, remote non-authoritative:** `project_sources.source_oid` = the exact imported
+  commit; `project_snapshots.source_oid` records the same on the initial `reason='import'` snapshot.
+  W2b never re-fetches; branch/tag imports are pinned to the OID resolved at import time. Renamed/
+  deleted/transferred/revoked remotes do not affect the durable project.
+- **Read-only fetch ⇒ idempotent, no `effect_unknown` remote reconciliation:** the GitHub archive
+  fetch does not mutate the remote (unlike a W4 push), so a failed/partial fetch is safely
+  retryable within the durable `project_import_jobs` row (re-fetch by resolved OID → identical
+  bytes). Idempotency key stays `(project_id, import)`; a crash/replay never yields a half-built or
+  duplicate project. On any failure the project keeps `status='active'` with `import_status='failed'`
+  (derived, api §10.6) + `source_status='import_failed'` and **no** snapshot (visible + deletable) —
+  never a `projects.status='failed'` and never a snapshot over the wrong bytes.
+- **Ownership:** `project_sources` carries `user_id` (FK to `users`), matching the owning project;
+  the connection reference is user-scoped by the service (single-user v1 keeps one active connection
+  per owner via `uq_ghc_owner_active`), mirroring how `sessions.project_id` ownership is service-
+  enforced rather than trigger-enforced.
+- **Deferred (NOT W2b):** W4 sync/fetch columns on `project_sources` (base/remote OIDs, fetch time,
+  sync state) + the richer `source_status` values; `project_working_copies`/`project_change_sets`/
+  `project_artifacts` (W3). Each lands with its own ADR + contract-first batch.
+
+### Projects — Workspace W3 task working copy + scratch-copy sandbox change review (ADR-040 + ADR-039, design/contract-first — additive, post-v1)
+
+> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-040 product/data + ADR-039 isolation).** These tables are
+> **frozen here but NOT created** — no migration, no production code, no exposed W3 navigation, and
+> **no real sandbox mount** ships in this batch. Implementation starts only after owner review of
+> ADR-039 (isolation) + ADR-040 (product/data/tool/lifecycle) + the ADR-025 revision + these deltas.
+> Every table carries `tenant_id` + composite tenant-scoped keys (ADR-015).
+>
+> **Authoritative-state hierarchy (ADR-040 §durability; report §10.1).** `project_snapshots` head
+> (durable, saved, user-visible) → **task working copy** (durable pending overlay, spans chat turns)
+> → *scratch volume* (node-local cache, rebuildable) → *sandbox container* (ephemeral, optional warm
+> TTL). **Only Postgres/MinIO/journal state is authoritative.** A scratch tree, prepared image, docker
+> container id, or warm-cache lease is **operational metadata only and is never the recovery source of
+> truth** — it is rebuilt from `base snapshot + persisted overlay`.
+>
+> **Canonical / durable** = `projects.head_generation` (CAS token) + `project_working_copies` +
+> `project_working_copy_entries` (the durable overlay) + `project_change_sets` +
+> `project_change_set_entries` + `project_artifacts` + `project_sandbox_runs`. **Rebuildable cache
+> (never a table)** = the materialized scratch tree, package/dependency cache, prepared base image,
+> warm container. Project **file bytes** are the same immutable, content-addressed, ref-counted
+> ADR-030 `storage_blobs` as Drive/snapshots; **file bytes never enter the journal or a change-set
+> row** (rows carry blob refs + bounded metadata + bounded spilled diffs only). **Credentials** (model/
+> provider/storage/GitHub) **never** enter a working copy, overlay, change set, artifact, snapshot,
+> scratch tree, or sandbox.
+
+```sql
+-- Cheap, monotonic head-generation CAS token. Bumped in the SAME transaction that advances
+-- projects.current_snapshot_id (W3 Save/checkpoint; also W4 apply-remote later). A working copy
+-- records the generation it was based on; Save is a compare-and-set against BOTH
+-- (current_snapshot_id, head_generation) so a moved head deterministically blocks a stale Save
+-- (report §10.4/§10.6). Snapshots are immutable + unique so current_snapshot_id CAS alone is
+-- sound; head_generation makes the check a cheap integer compare and documents "the head moved".
+ALTER TABLE projects ADD COLUMN head_generation integer NOT NULL DEFAULT 0;
+
+-- One DURABLE pending task working copy, owned by exactly one Project-bound Chat (session) + Project.
+-- It is the authoritative pending state that spans chat turns; the scratch volume/warm container are
+-- rebuildable caches of it. Materialize = base snapshot + persisted overlay into a fresh scratch tree.
+-- Single-writer discipline: (lease_owner, lease_expires_at) gives mutual exclusion; fence_token is a
+-- monotonic per-working-copy token that the active writer stamps on every overlay/change-set publish,
+-- so a STALE sandbox (older fence) can NEVER publish a later overlay even if its lease appears live
+-- (report §10.4 "a stale sandbox fence token cannot publish an overlay").
+CREATE TABLE project_working_copies (
+    tenant_id            uuid NOT NULL,
+    id                   uuid NOT NULL,
+    project_id           uuid NOT NULL,
+    session_id           uuid NOT NULL,               -- the owning Project-bound Chat
+    user_id              uuid NOT NULL,
+    base_snapshot_id     uuid NOT NULL,               -- snapshot the overlay applies onto
+    base_head_generation integer NOT NULL,            -- projects.head_generation at working-copy open (Save CAS)
+    state                text NOT NULL DEFAULT 'open',  -- open|ready_for_review|saved|discarded|conflicted|expired
+    version              integer NOT NULL DEFAULT 0,   -- optimistic concurrency for metadata writes
+    fence_token          bigint  NOT NULL DEFAULT 0,   -- monotonic single-writer fence (bumped on lease (re)acquire)
+    lease_owner          text,                         -- worker/run identity currently holding the writer lease
+    lease_expires_at     timestamptz,                  -- lease freshness; expiry => rematerialize, next writer bumps fence
+    reserved_bytes       bigint NOT NULL DEFAULT 0,    -- quota reservation for pending NEW durable bytes (released on save/discard/expire)
+    overlay_entry_count  integer NOT NULL DEFAULT 0,   -- rollup of project_working_copy_entries
+    overlay_bytes        bigint NOT NULL DEFAULT 0,    -- rollup of distinct added/modified blob sizes
+    last_run_id          uuid,                         -- last sandbox run that advanced this working copy
+    last_boundary_at     timestamptz,                  -- last persisted execution-boundary time (recovery marker)
+    expires_at           timestamptz,                  -- idle-TTL expiry (WORKING_COPY_IDLE_TTL_SECONDS)
+    created_at           timestamptz NOT NULL DEFAULT now(),
+    updated_at           timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_pwc PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_pwc_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pwc_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_pwc_session FOREIGN KEY (tenant_id, session_id)
+        REFERENCES sessions (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_pwc_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_pwc_base FOREIGN KEY (tenant_id, base_snapshot_id)
+        REFERENCES project_snapshots (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT ck_pwc_state CHECK (state IN
+        ('open','ready_for_review','saved','discarded','conflicted','expired')),
+    CONSTRAINT ck_pwc_reserved CHECK (reserved_bytes >= 0),
+    CONSTRAINT ck_pwc_overlay CHECK (overlay_entry_count >= 0 AND overlay_bytes >= 0)
+);
+-- AT MOST ONE live (open/ready_for_review) working copy per Project-bound Chat: a session never
+-- holds two writable pending trees at once (report §6.5 "their working copies never share a writable
+-- scratch tree"). Multiple sessions on one Project get ISOLATED working copies (no shared row).
+CREATE UNIQUE INDEX uq_pwc_live_session
+    ON project_working_copies (tenant_id, session_id)
+    WHERE state IN ('open','ready_for_review');
+CREATE INDEX ix_pwc_project ON project_working_copies (tenant_id, project_id, updated_at DESC);
+CREATE INDEX ix_pwc_reap ON project_working_copies (tenant_id, expires_at)
+    WHERE state IN ('open','ready_for_review');
+
+-- The DURABLE overlay: the working copy's delta vs its base_snapshot, sufficient (with the base
+-- snapshot) to rebuild the exact scratch tree after any container/node loss. Persisted after each
+-- bounded tool batch, before waiting for user input, and before teardown (report §10.2 step 5).
+-- File bytes are immutable ADR-030 storage_blobs; a 'deleted' entry is a whiteout over a base path.
+CREATE TABLE project_working_copy_entries (
+    tenant_id       uuid NOT NULL,
+    id              uuid NOT NULL,
+    working_copy_id uuid NOT NULL,
+    user_id         uuid NOT NULL,                    -- charging owner for the referenced blob
+    path            text NOT NULL,                    -- normalized, relative, POSIX; no '..'/NUL/abs
+    change_kind     text NOT NULL,                    -- added | modified | deleted
+    entry_kind      text NOT NULL DEFAULT 'file',     -- file | dir | symlink (deleted => prior kind irrelevant)
+    content_hash    bytea,                            -- storage_blobs ref (added/modified file); NULL for deleted/dir
+    size_bytes      bigint NOT NULL DEFAULT 0,
+    executable      boolean NOT NULL DEFAULT false,
+    symlink_target  text,                             -- safe relative target (entry_kind='symlink')
+    fence_token     bigint NOT NULL,                  -- fence that wrote this overlay entry
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_pwce PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_pwce_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pwce_wc FOREIGN KEY (tenant_id, working_copy_id)
+        REFERENCES project_working_copies (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_pwce_blob FOREIGN KEY (tenant_id, user_id, content_hash)
+        REFERENCES storage_blobs (tenant_id, user_id, content_hash) ON DELETE RESTRICT,
+    CONSTRAINT ck_pwce_change CHECK (change_kind IN ('added','modified','deleted')),
+    CONSTRAINT ck_pwce_kind CHECK (entry_kind IN ('file','dir','symlink')),
+    CONSTRAINT ck_pwce_path CHECK (
+        char_length(path) BETWEEN 1 AND 1024
+        AND path NOT LIKE '/%' AND path NOT LIKE '%..%'),
+    -- added/modified file MUST carry a blob; deleted/dir MUST NOT.
+    CONSTRAINT ck_pwce_blob_presence CHECK (
+        (change_kind IN ('added','modified') AND entry_kind = 'file') = (content_hash IS NOT NULL))
+);
+CREATE UNIQUE INDEX uq_pwce_path ON project_working_copy_entries (tenant_id, working_copy_id, path);
+
+-- A bounded, REVIEWABLE change set produced at an execution boundary: overlay-vs-base compared,
+-- bounds enforced, ready for the human Change Review UI. It is a durable projection derivable from
+-- (base snapshot + overlay) but persisted so review/apply/discard are stable across reloads.
+CREATE TABLE project_change_sets (
+    tenant_id        uuid NOT NULL,
+    id               uuid NOT NULL,
+    project_id       uuid NOT NULL,
+    working_copy_id  uuid NOT NULL,
+    session_id       uuid NOT NULL,
+    run_id           uuid,                            -- the durable run that produced it (link, not truth)
+    base_snapshot_id uuid NOT NULL,                   -- base the diff is relative to
+    fence_token      bigint NOT NULL,                 -- fence that produced this change set
+    state            text NOT NULL DEFAULT 'open',    -- open|applied|discarded|superseded|conflicted
+    added_count      integer NOT NULL DEFAULT 0,
+    modified_count   integer NOT NULL DEFAULT 0,
+    deleted_count    integer NOT NULL DEFAULT 0,
+    artifact_count   integer NOT NULL DEFAULT 0,
+    changed_bytes    bigint NOT NULL DEFAULT 0,       -- sum of new/added blob sizes proposed
+    diff_bytes       bigint NOT NULL DEFAULT 0,       -- total spilled textual-diff bytes (bounded)
+    truncated        boolean NOT NULL DEFAULT false,  -- bounds hit => review shows a partial, explicit diff
+    created_snapshot_id uuid,                         -- set on apply => the new head snapshot
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_pcs PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_pcs_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pcs_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_pcs_wc FOREIGN KEY (tenant_id, working_copy_id)
+        REFERENCES project_working_copies (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_pcs_base FOREIGN KEY (tenant_id, base_snapshot_id)
+        REFERENCES project_snapshots (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT ck_pcs_state CHECK (state IN ('open','applied','discarded','superseded','conflicted')),
+    CONSTRAINT ck_pcs_counts CHECK (
+        added_count >= 0 AND modified_count >= 0 AND deleted_count >= 0
+        AND artifact_count >= 0 AND changed_bytes >= 0 AND diff_bytes >= 0)
+);
+CREATE INDEX ix_pcs_wc ON project_change_sets (tenant_id, working_copy_id, created_at DESC);
+CREATE INDEX ix_pcs_project ON project_change_sets (tenant_id, project_id, created_at DESC);
+
+-- One row per reviewable file change in a change set. Save-selected applies a SUBSET of these
+-- (selected=true) — the rest stay in the working copy for later. A bounded textual diff MAY be
+-- spilled to MinIO (diff_object_key); large/binary diffs are summarized, never inlined into the row.
+CREATE TABLE project_change_set_entries (
+    tenant_id        uuid NOT NULL,
+    id               uuid NOT NULL,
+    change_set_id    uuid NOT NULL,
+    path             text NOT NULL,
+    change_kind      text NOT NULL,                   -- added | modified | deleted
+    old_content_hash bytea,                           -- base blob (modified/deleted)
+    new_content_hash bytea,                           -- proposed blob (added/modified)
+    size_bytes       bigint NOT NULL DEFAULT 0,
+    executable       boolean NOT NULL DEFAULT false,
+    is_binary        boolean NOT NULL DEFAULT false,
+    diff_object_key  text,                            -- spilled bounded unified diff (text changes only)
+    diff_truncated   boolean NOT NULL DEFAULT false,  -- per-file diff exceeded the cap
+    selected         boolean NOT NULL DEFAULT true,   -- default-selected for Save; user may deselect
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_pcse PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_pcse_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pcse_cs FOREIGN KEY (tenant_id, change_set_id)
+        REFERENCES project_change_sets (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_pcse_change CHECK (change_kind IN ('added','modified','deleted')),
+    CONSTRAINT ck_pcse_path CHECK (
+        char_length(path) BETWEEN 1 AND 1024
+        AND path NOT LIKE '/%' AND path NOT LIKE '%..%')
+);
+CREATE UNIQUE INDEX uq_pcse_path ON project_change_set_entries (tenant_id, change_set_id, path);
+
+-- Run OUTPUTS that are not project files (test/build logs, generated reports, produced files a user
+-- may Keep/Export). Ephemeral by default: they charge quota ONLY after explicit Keep/Export
+-- (report §10.6 "Artifact retention consumes quota only after explicit Keep/Export"). Retained
+-- artifact bytes are the same content-addressed storage_blobs; Export copies into Drive.
+CREATE TABLE project_artifacts (
+    tenant_id       uuid NOT NULL,
+    id              uuid NOT NULL,
+    project_id      uuid NOT NULL,
+    working_copy_id uuid,                             -- producing working copy (NULL after copy-out)
+    run_id          uuid,                             -- producing run (link, not truth)
+    user_id         uuid NOT NULL,
+    name            text NOT NULL,                    -- display name (sanitized)
+    kind            text NOT NULL DEFAULT 'file',     -- file | log | report
+    content_hash    bytea,                            -- storage_blobs ref (present once staged)
+    size_bytes      bigint NOT NULL DEFAULT 0,
+    mime            text,
+    retention       text NOT NULL DEFAULT 'ephemeral',  -- ephemeral | retained (charges quota) | expired
+    retained_at     timestamptz,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_part PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_part_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_part_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_part_wc FOREIGN KEY (tenant_id, working_copy_id)
+        REFERENCES project_working_copies (tenant_id, id) ON DELETE SET NULL,
+    CONSTRAINT fk_part_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_part_blob FOREIGN KEY (tenant_id, user_id, content_hash)
+        REFERENCES storage_blobs (tenant_id, user_id, content_hash) ON DELETE RESTRICT,
+    CONSTRAINT ck_part_kind CHECK (kind IN ('file','log','report')),
+    CONSTRAINT ck_part_retention CHECK (retention IN ('ephemeral','retained','expired'))
+);
+CREATE INDEX ix_part_wc ON project_artifacts (tenant_id, working_copy_id);
+CREATE INDEX ix_part_project ON project_artifacts (tenant_id, project_id, created_at DESC);
+
+-- A sandbox execution. It REUSES the existing durable runs/event journal for the model loop; this row
+-- links a run to a working copy and records BOUNDED, NON-AUTHORITATIVE operational metadata plus the
+-- durable execution-boundary outcome. scratch_ref/container_ref are node-local caches — NEVER recovery
+-- truth. A missing env dependency yields termination_reason='environment_missing_dependencies'
+-- (report §10.7): the offline sandbox never silently enables network to fetch packages.
+CREATE TABLE project_sandbox_runs (
+    tenant_id        uuid NOT NULL,
+    id               uuid NOT NULL,
+    project_id       uuid NOT NULL,
+    working_copy_id  uuid NOT NULL,
+    session_id       uuid NOT NULL,
+    run_id           uuid NOT NULL,                   -- the durable model-loop run (event journal)
+    user_id          uuid NOT NULL,
+    base_snapshot_id uuid NOT NULL,                   -- snapshot materialized for this run
+    fence_token      bigint NOT NULL,                 -- working-copy fence held during this run
+    state            text NOT NULL DEFAULT 'materializing',  -- materializing|running|persisted|failed|timed_out
+    scratch_ref      text,                            -- node-local scratch volume/dir id (operational only)
+    container_ref    text,                            -- docker container id (operational only)
+    warm_until       timestamptz,                     -- optional warm-container idle TTL (cache only)
+    exit_code        integer,
+    timed_out        boolean NOT NULL DEFAULT false,
+    termination_reason text,                          -- done|environment_missing_dependencies|wall_timeout|
+                                                      -- mem_limit|pids_limit|output_limit|changeset_bounds|
+                                                      -- path_escape|fence_lost|sandbox_unavailable|error:...
+    persisted_boundary_at timestamptz,                -- overlay/change-set persisted => run is durably complete
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_psr PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_psr_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_psr_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_psr_wc FOREIGN KEY (tenant_id, working_copy_id)
+        REFERENCES project_working_copies (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_psr_session FOREIGN KEY (tenant_id, session_id)
+        REFERENCES sessions (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_psr_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_psr_state CHECK (state IN ('materializing','running','persisted','failed','timed_out'))
+);
+CREATE INDEX ix_psr_wc ON project_sandbox_runs (tenant_id, working_copy_id, created_at DESC);
+CREATE INDEX ix_psr_run ON project_sandbox_runs (tenant_id, run_id);
+```
+
+Notes:
+
+- **Authoritative state hierarchy + rebuildable caches (ADR-040; report §10.1/§10.3).** The system
+  maintains the **task working copy**, not a particular container. A running container improves
+  latency; it is **never required for correctness or recovery**. Durable authority = base snapshot +
+  `project_working_copy_entries` overlay + change-set/artifact rows + run events (enough to rebuild).
+  Rebuildable cache = the materialized scratch tree, package cache, prepared image, warm container —
+  bounded, evictable, **never the only copy**, so they are **not** DB tables. Never-persisted =
+  PIDs, RAM, sockets, shells, temporary rootfs, and **all credentials** (report §10.3).
+- **Single-writer lease + fence (report §10.4).** One working copy has one active writer lease
+  (`lease_owner`,`lease_expires_at`) for mutual exclusion; `fence_token` (monotonic, bumped whenever
+  the lease is (re)acquired) is stamped on every overlay/change-set/sandbox-run publish. A **stale
+  sandbox** whose fence is behind the working copy's current `fence_token` **cannot** persist an
+  overlay or publish a change set, even if a redelivered job makes its lease look live. Lease expiry,
+  crash, worker restart, or host loss simply triggers **rematerialization** from `base snapshot +
+  persisted overlay` at the last `last_boundary_at`; unpersisted scratch writes are **never** shown as
+  completed work.
+- **Head-generation CAS (report §10.4/§10.6).** `projects.head_generation` bumps in the same
+  transaction that advances `current_snapshot_id`. **Save** is a compare-and-set requiring both
+  `projects.current_snapshot_id == working_copy.base_snapshot_id` **and**
+  `projects.head_generation == working_copy.base_head_generation`. If the head moved (another chat
+  Saved, or W4 apply-remote), Save **fails with a conflict** (`state='conflicted'`) and must produce a
+  **newly reviewed rebase** change set — it **never applies against the wrong base**. Discard leaves
+  the head byte-identical to the base snapshot.
+- **Save / Save-selected / checkpoint / Discard (report §10.6).** *Save selected* applies the subset
+  of `project_change_set_entries.selected=true` — building a new immutable `project_snapshots`
+  (`reason='save'`), atomically pointing `current_snapshot_id` at it and bumping `head_generation`;
+  unselected changes remain in the working copy for later. *Save and checkpoint* saves, then pins the
+  new snapshot (`reason='checkpoint'`, `pinned=true`) with a name/note; the chat may open a fresh
+  working copy from the new head. *Discard* deletes the overlay/staged bytes, releases
+  `reserved_bytes`, and leaves the head unchanged (`state='discarded'`). Idle-expiry release
+  (`state='expired'`) and reservation release are **one atomic transition** — an open working copy
+  cannot keep bytes after its reservation is independently swept.
+- **Bounded, reviewable change set (report §10.5).** After each execution boundary the service compares
+  scratch vs persisted overlay vs saved base; rejects path escape / unsafe symlinks / devices / sockets
+  / `.git` credential or config leakage; **bounds** changed-file count, changed bytes, total artifact
+  bytes, and diff/output size (`WORKING_COPY_MAX_*`, config §1.7). Over-bound ⇒ `truncated=true`, and
+  the Change Review shows an **explicit partial** — never a silent full-looking diff. Textual diffs are
+  spilled to MinIO (`diff_object_key`, bounded); binary/oversize diffs are summarized, never inlined.
+- **Quota (reuse ADR-030).** Proposed new durable bytes are **reserved** in the working copy
+  (`reserved_bytes`) before write; `507` when a reservation would exceed quota. Distinct blobs are
+  charged once; Save/Discard/expire release the reservation. Artifacts charge quota **only** after
+  Keep/Export (`retention='retained'`); ephemeral artifacts do not count. `projects.used_bytes` counts
+  each distinct referenced blob once after Save.
+- **Sandbox runs reuse the durable run/journal.** `project_sandbox_runs` links a run to a working copy
+  and records operational metadata + the durable boundary outcome; the model loop still writes the
+  frozen run/event-journal records (ADR-016). `scratch_ref`/`container_ref`/`warm_until` are
+  node-local cache identifiers, **never** recovery truth. A run is **not** reported successfully
+  durable until `persisted_boundary_at` is set (overlay + change set committed).
+- **Isolation & credentials (ADR-039; report §10.7/§11).** The sandbox mounts **only** the disposable
+  scratch tree read-write — **never** the Project snapshot, `storage_blobs`/MinIO, another Project,
+  Drive, the tool-output spill path, or any credential. It stays **network-disabled** and receives no
+  model/provider/storage/GitHub token. A command needing an unavailable dependency returns
+  `environment_missing_dependencies` and **never** silently enables network to install packages. See
+  events §2.11 for effect/idempotency/crash-recovery and config §1.7 for the mount/lifecycle/resource/
+  network/credential boundary + `SANDBOX_*`/`WORKING_COPY_*` settings.
+- **Deferred (NOT W3):** dependency installation/package managers; embedded coding-agent executors
+  (`delegate_coding_agent`); `git init/commit/branch`, merge, push, PR (W4); long-running dev servers /
+  hosted previews / process resurrection; network-enabled environments. Each is a later ADR.

@@ -192,6 +192,16 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 会话内容搜索(P1) | ✅ search | GET /sessions?query= ✅ | ❌ 不给 agent | Sessions 搜索框 ✅ | read_only | allow |
 | 个人网盘:列/建夹/上传/下载/改名·移动/版本·恢复版本/回收站·恢复(P2) | ✅ drive | /drive/* ✅ | `drive_list`/`search`/`make_folder`/`write`/`read`/`move`/`trash`/`restore` ✅ | Drive(/workspace)✅ | idempotent_write | allow |
 | 个人网盘:永久删除(purge) | ✅ drive | DELETE /drive/nodes/{id} ✅ | ❌ **不给 agent**(人工/审批专属) | Drive(Delete forever + 确认)✅ | non_idempotent_write | user-only |
+| 项目:列/新建(空·模板)(ADR-037, W2a) | ✅ services/projects.py | GET·POST /projects | `project_list`/`project_create` | ✅ /work/projects(列表 + 新建空/模板) | idempotent_write | allow |
+| 项目:归档导入(ZIP/TAR)(ADR-037, W2a) | ✅ services/projects_import.py(durable job) | POST /projects/imports(github→501) | ❌ 不给 agent(人工上传) | ✅ 新建项目·上传归档(安全解压 + 失败态) | idempotent_write(durable job) | allow |
+| 项目:详情·文件树·快照(ADR-037, W2a) | ✅ services/projects.py | GET /projects/{id}·/tree·/snapshots | `project_tree`/`project_read` | ✅ 项目详情(只读树 + 快照 + 活动) | read_only | allow |
+| 项目:Open in Chat(project 绑定会话)(ADR-037, W2a) | ✅ services/projects.py | POST /projects/{id}/chats·GET /sessions/{id}/project-context | ❌ 不给 agent(会话创建) | ✅ project 绑定 Chat(首消息后不可变) | idempotent_write | user-only |
+| 项目:GitHub 连接(凭据)(ADR-038, W2b) | ✅ services/github_source.py(AEAD vault·连接边界·软撤销) | GET·POST·DELETE /connections/github | ❌ 不给 agent(凭据边界) | ✅ /work/projects(GitHub 连接面板·PAT·永不回显 token) | idempotent_write | user-only |
+| 项目:GitHub 一次性导入(选 repo/ref → 有界归档获取 → 不可变初始快照 + source OID)(ADR-038, W2b) | ✅ services/projects_import.py(github 分支·durable job·resolve→OID→tarball→安全解压→快照) | POST /projects/imports kind=github(**202**)·POST /projects/{id}/imports/retry·GET /projects/github/repos·/refs | ❌ 不给 agent(人工·跨凭据+不可信外部内容) | ✅ /work/projects(repo/ref 选择·导入进度·成功来源元数据·失败/重试·390px) | idempotent_write(durable job) | user-only |
+| 项目:任务工作副本（W3，跨 turn 持久 working copy + overlay + lease/fence + head_generation CAS）(ADR-040/ADR-039) | ❌ **W3**（后续 ADR；契约先行已冻结 data-model/api §10.7/events §2.11/config §1.7；仅挂一次性 scratch 副本、绝不挂真相源；ADR-025 已正式修订 + docker.sock/多用户隔离 = ADR-039 前置） | GET /sessions/{id}/working-copy · GET/POST …/working-copies·sandbox-runs（W3） | `project_run`（W3，allow） | ⬜ **W3**（静态稿 `design-workspace/w3-change-review.html`） | idempotent_write | allow |
+| 项目:变更评审（W3，added/modified/deleted + artifacts + 有界 diff/truncated）(ADR-040) | ❌ **W3**（后续 ADR） | GET …/change-sets/{cs}·/entries/{e}/diff · GET …/artifacts（W3） | `project_review_changes`（W3，read_only·allow） | ⬜ **W3** | read_only | allow |
+| 项目:Save selected / Save+checkpoint / Discard / Keep·Export artifact（W3，人工评审闸；head 移动→CAS 拒绝）(ADR-040) | ❌ **W3**（后续 ADR） | POST …/change-sets/{cs}/apply（409 SaveConflict）·/discard · …/artifacts/{a}/keep·export（W3） | ❌ **不给 agent**（推进 head=人工评审决定） | ⬜ **W3** | idempotent_write（apply=CAS） | user-only |
+| 项目:GitHub 同步 / push / PR(对外写) | ❌ **W4**(后续 ADR;走 ADR-020 审批) | POST /projects/{id}/push 等(W4) | `project_push`(W4,ask) | ⬜ **W4** | non_idempotent_write | **ask** |
 | 发邮件(外部) | — | ❌(仅 Tool) | `send_email` ✅ | ⬜ 审批渲染器(v1 收尾) | non_idempotent_write | **ask** |
 | 连接 Gmail(OAuth) | — | connect/callback ✅ | ❌ | ⬜(需真实 Google 凭据) | — | — |
 | 列/解决审批 | — | GET /permissions·/resolve ✅ | ❌ **不给 agent**(不自批) | Approvals(/approvals，可解析后台/定时审批)✅ | — | user-only |
@@ -199,13 +209,13 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 导出/删除导入数据 | ✅ | ✅ | ❌(破坏性,不给 agent) | Activity(Export/Delete)✅ | non_idempotent_write | ask/human |
 | QQ/IM 入站对话 + IM 审批(post-v1 里程碑4) | channels ✅ | POST /channels/qq/webhook · GET /channels · /simulate · /threads ✅ | 复用有界循环(非独立 tool);审批复用 v1 基座 | Messaging(/messaging)✅ | idempotent_write | HMAC+owner allowlist |
 | agentic email 入站 + 邮件审批 + 统一发信(post-v1 里程碑5) | notifications(build_email_sender)✅ · channels ✅ | POST /channels/email/webhook · /simulate · GET /channels/threads ✅ | `send_email`(走统一发信接缝,真实 AgentMail)✅;入站复用有界循环;审批复用基座 | Messaging(email 段)✅ | non_idempotent_write | Svix+owner allowlist · **ask** |
-| 知识库:检索(带引用)(ADR-036, KB0 设计中) | ⬜ knowledge | POST /knowledge/search ⬜ | `search_knowledge` ⬜ | Knowledge(/library)检索测试 · 静态稿✅/页面⬜ | read_only | allow |
-| 知识库:列来源(ADR-036) | ⬜ knowledge | GET /knowledge/sources ⬜ | `list_knowledge_sources` ⬜ | Knowledge 主页 · 静态稿✅/页面⬜ | read_only | allow |
-| 知识库:加来源(从 Drive 文件)(ADR-036) | ⬜ knowledge | POST /knowledge/sources ⬜ | `add_knowledge_source`(需显式 file_id) ⬜ | Knowledge「从 Drive 添加」· 静态稿✅/页面⬜ | idempotent_write | allow |
-| 知识库:重建来源(ADR-036) | ⬜ knowledge | POST /knowledge/sources/{id}/reindex ⬜ | `reindex_knowledge_source` ⬜ | 来源详情「重建」· 静态稿✅/页面⬜ | idempotent_write | allow |
-| 知识库:删除来源(ADR-036) | ⬜ knowledge | DELETE /knowledge/sources/{id} ⬜ | `remove_knowledge_source`(破坏性) ⬜ | 来源详情「移除」+ 确认 · 静态稿✅/页面⬜ | non_idempotent_write | **ask** |
+| 知识库:检索(带引用)(ADR-036, KB3/KB4/KB5) | ✅ knowledge_search | POST /knowledge/search ✅ | `search_knowledge` ✅ | Knowledge(/library)检索测试 ✅ + Chat 引用 chips/无依据态 ✅ | read_only | allow |
+| 知识库:列来源(ADR-036, KB4/KB5) | ✅ knowledge | GET /knowledge/sources ✅ | `list_knowledge_sources` ✅ | Knowledge 主页(/library)✅ | read_only | allow |
+| 知识库:加来源(从 Drive 文件)(ADR-036, KB1/KB4/KB5) | ✅ knowledge | POST /knowledge/sources ✅ | `add_knowledge_source`(按 path 解析) ✅ | Knowledge「从 Drive 添加」拾取器 ✅ | idempotent_write | allow |
+| 知识库:重建来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | POST /knowledge/sources/{id}/reindex ✅ | `reindex_knowledge_source` ✅ | 来源详情「重建」+ 全部重建 ✅ | idempotent_write | allow |
+| 知识库:删除来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | DELETE /knowledge/sources/{id} ✅ | `remove_knowledge_source`(破坏性→审批) ✅ | 来源详情/列表「移除」+ 确认 ✅ | non_idempotent_write | **ask** |
 
-**剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)· **Knowledge(/library)页(ADR-036 KB0：静态稿已交付，后端+页面 KB1–KB5 落地)**。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
+**剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)。~~Knowledge(/library)页~~ **✅ KB5 已交付**(主页/来源详情/检索测试 + Chat 引用 chips + 无依据态;Sidebar/路由/API/Vite proxy 就位)。**Projects(/work/projects)= ADR-037 W2a 已实现并两栈验证**:上面 4 行的 service/REST/Tool/UI 单元格全部 ✅(空/模板/归档导入 + 详情只读树/快照/活动 + Open in Chat 不可变绑定 + `list/create/tree/read` agent 工具);生产导航已暴露(Sidebar「Projects」)。GitHub 导入 = **ADR-038 W2b 已实现并两栈验证**(migration `0029`):契约把 `POST /projects/imports kind=github` 从 501 升为 202、新增 repo/ref 选择端点 + GitHub connection 端点 + `project_sources`/`github_connections` 数据模型 + events `create_kind=github`;生产实现落地 `services/github_source.py`(连接生命周期 + 只读 REST 代理 + resolve→OID/有界 tarball 获取)、`services/projects_import.py` 的 github 分支(durable job·复用 W2a 内存安全解压器·剥离顶层目录·source OID·幂等重试·无 effect_unknown)、`api/connections.py` + `api/projects.py`(kind=github 202·retry·repos/refs·source provenance)、生产 `/work/projects` UI(GitHub 连接面板/repo·ref 选择/导入进度/成功来源元数据/失败·重试/390px);**service/REST/UI 单元格全部 ✅**,GitHub 导入不给 agent(人工·跨凭据边界),凭据只在 AEAD vault/连接边界、绝不进树/快照/prompt/日志/事件/工具结果。W3(sandbox)/W4(对外写)仍为后续 ADR。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
 
 ---
 

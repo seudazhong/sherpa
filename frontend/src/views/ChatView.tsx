@@ -14,6 +14,7 @@ import {
   eventsUrl,
   type AppMeta,
   type PendingApproval,
+  type ProjectContext,
   type SessionSummary,
 } from "../api";
 import { useAuth } from "../auth";
@@ -23,6 +24,16 @@ interface Bubble {
   key: string;
   role: "user" | "assistant";
   text: string;
+  noEvidence?: boolean;
+}
+
+interface Citation {
+  ref: string;
+  num: number;
+  title: string;
+  page: number | null;
+  heading: string | null;
+  excerpt: string;
 }
 
 interface Activity {
@@ -58,10 +69,219 @@ function stripMarkdown(text: string): string {
     .trim();
 }
 
+// A search_knowledge citation reference is emitted by the tool as [K:<tool_call_id>:<n>].
+// Real models often reformat it in their answer (truncate the uuid, drop the :n, and
+// append a human description), so we match any [K:...] token and resolve it best-effort
+// against the evidence parsed from the search_knowledge tool output (R1: no backend change).
+const CITE_TOKEN = /\[(K:[^\]]+?)\]/g;
+const NO_EVIDENCE = "No relevant knowledge found";
+
+function hasCitations(text: string): boolean {
+  return /\[K:[^\]]+?\]/.test(text);
+}
+
+function parseKnowledgeCitations(output: string): Citation[] {
+  const headerRe = /^\[(K:[^\]]+?:(\d+))\]\s*(.*)$/;
+  const cites: Citation[] = [];
+  let current: Citation | null = null;
+  for (const line of output.split(/\r?\n/)) {
+    const m = line.match(headerRe);
+    if (m) {
+      if (current) cites.push(current);
+      let rest = m[3] ?? "";
+      let heading: string | null = null;
+      let page: number | null = null;
+      const hMatch = rest.match(/§(.+)$/);
+      if (hMatch) {
+        heading = hMatch[1].trim();
+        rest = rest.slice(0, hMatch.index).trim();
+      }
+      const pMatch = rest.match(/p\.(\d+)\s*$/);
+      if (pMatch) {
+        page = Number(pMatch[1]);
+        rest = rest.slice(0, pMatch.index).trim();
+      }
+      current = {
+        ref: m[1],
+        num: Number(m[2]),
+        title: rest.trim(),
+        page,
+        heading,
+        excerpt: "",
+      };
+    } else if (current) {
+      current.excerpt += (current.excerpt ? "\n" : "") + line;
+    }
+  }
+  if (current) cites.push(current);
+  return cites.map((c) => ({ ...c, excerpt: c.excerpt.trim() }));
+}
+
+function citeLocator(c: Citation): string {
+  const parts: string[] = [];
+  if (c.page) parts.push(`p.${c.page}`);
+  if (c.heading) parts.push(`§${c.heading}`);
+  return parts.join(" ");
+}
+
+interface ResolvedCite {
+  key: string; // dedupe key
+  label: string; // human label for the chip / sources line
+  excerpt: string; // tooltip evidence
+}
+
+// Resolve one [K:...] token to a citation. Handles the exact tool ref as well as
+// the model's reformatted variants by prefix-matching the tool_call_id and, when a
+// description is appended, matching it against the evidence's heading/title.
+function resolveCite(
+  inner: string,
+  cites: Record<string, Citation>,
+): ResolvedCite {
+  const trimmed = inner.trim();
+  const exact = cites[trimmed];
+  if (exact) {
+    const loc = citeLocator(exact);
+    return {
+      key: exact.ref,
+      label: `${exact.title}${loc ? " · " + loc : ""}`,
+      excerpt: exact.excerpt,
+    };
+  }
+  const idMatch = trimmed.match(/^K:([0-9a-fA-F][0-9a-fA-F-]*)/);
+  const id = idMatch ? idMatch[1] : "";
+  const candidates = Object.values(cites).filter((c) =>
+    c.ref.startsWith(`K:${id}`),
+  );
+  const afterId = trimmed.slice(2 + id.length);
+  const nMatch = afterId.match(/^:(\d+)/);
+  let chosen: Citation | undefined;
+  if (nMatch) chosen = cites[`K:${id}:${nMatch[1]}`];
+  let desc = afterId.replace(/^[\s:—–-]+/, "").trim();
+  if (/^\d+$/.test(desc)) desc = "";
+  if (!chosen && desc && candidates.length) {
+    chosen =
+      candidates.find((c) => c.heading && desc.includes(c.heading)) ??
+      candidates.find(
+        (c) => c.heading && desc.includes((c.heading.split("/").pop() ?? "").trim()),
+      ) ??
+      candidates.find((c) => c.title && desc.includes(c.title));
+  }
+  if (!chosen && candidates.length) chosen = candidates[0];
+  if (chosen) {
+    const loc = citeLocator(chosen);
+    return {
+      key: chosen.ref,
+      label: desc || `${chosen.title}${loc ? " · " + loc : ""}`,
+      excerpt: chosen.excerpt,
+    };
+  }
+  return {
+    key: `K:${id}:${desc}`,
+    label: desc || (id ? id.slice(0, 8) : trimmed),
+    excerpt: "",
+  };
+}
+
+function citeUrlTransform(url: string): string {
+  if (url.startsWith("kbcite:")) return url;
+  if (/^(https?:|mailto:|\/|#|\.)/i.test(url)) return url;
+  return "";
+}
+
 function sessionLabel(s: SessionSummary): string {
   const clean =
     stripMarkdown(s.title || s.last_message_preview || "") || "New chat";
   return clean.length > 40 ? clean.slice(0, 40) + "…" : clean;
+}
+
+interface NumberedCite {
+  num: number;
+  label: string;
+  excerpt: string;
+}
+
+function AgentMessage({
+  text,
+  noEvidence,
+  cites,
+}: {
+  text: string;
+  noEvidence?: boolean;
+  cites: Record<string, Citation>;
+}) {
+  // Build a deduped, numbered list of the citations this answer references.
+  const byKey = new Map<string, NumberedCite>();
+  const order: NumberedCite[] = [];
+  for (const m of text.matchAll(CITE_TOKEN)) {
+    const r = resolveCite(m[1], cites);
+    if (!byKey.has(r.key)) {
+      const entry: NumberedCite = {
+        num: byKey.size + 1,
+        label: r.label,
+        excerpt: r.excerpt,
+      };
+      byKey.set(r.key, entry);
+      order.push(entry);
+    }
+  }
+  const byNum = new Map(order.map((e) => [String(e.num), e]));
+  const linkified = text.replace(CITE_TOKEN, (whole, inner) => {
+    const entry = byKey.get(resolveCite(inner, cites).key);
+    return entry ? `[${entry.num}](kbcite:${entry.num})` : whole;
+  });
+
+  return (
+    <div className="bubble-agent markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={citeUrlTransform}
+        components={{
+          a({ href, children }) {
+            if (href && href.startsWith("kbcite:")) {
+              const entry = byNum.get(href.slice("kbcite:".length));
+              if (entry) {
+                return (
+                  <sup
+                    className="kb-chip"
+                    title={entry.excerpt || entry.label}
+                  >
+                    {entry.num}
+                  </sup>
+                );
+              }
+              return <>{children}</>;
+            }
+            return (
+              <a href={href} target="_blank" rel="noreferrer">
+                {children}
+              </a>
+            );
+          },
+        }}
+      >
+        {linkified}
+      </ReactMarkdown>
+
+      {noEvidence && (
+        <div className="kb-noevidence">
+          ⚠️ Sherpa found no sufficient evidence in your Knowledge base for this,
+          so it won’t guess. Add a relevant document, or ask it to use another
+          source.
+        </div>
+      )}
+
+      {order.length > 0 && (
+        <div className="kb-sources-line">
+          <span>Sources:</span>
+          {order.map((e) => (
+            <span className="kb-chip static" key={e.num} title={e.excerpt}>
+              <sup>{e.num}</sup> {e.label}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function ChatView() {
@@ -73,12 +293,30 @@ export default function ChatView() {
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [draft, setDraft] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [projectCtx, setProjectCtx] = useState<ProjectContext | null>(null);
   const [running, setRunning] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [meta, setMeta] = useState<AppMeta | null>(null);
+  const [cites, setCites] = useState<Record<string, Citation>>({});
+  const insufficientRef = useRef(false);
   const esRef = useRef<EventSource | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+
+  const ingestCitations = useCallback((output: string) => {
+    if (output.startsWith(NO_EVIDENCE)) {
+      insufficientRef.current = true;
+      return;
+    }
+    const parsed = parseKnowledgeCitations(output);
+    if (parsed.length === 0) return;
+    insufficientRef.current = false;
+    setCites((prev) => {
+      const next = { ...prev };
+      for (const c of parsed) next[c.ref] = c;
+      return next;
+    });
+  }, []);
 
   const openStream = useCallback((sid: string, cursor: string) => {
     const es = new EventSource(eventsUrl(sid, cursor));
@@ -88,15 +326,21 @@ export default function ChatView() {
 
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
-    es.addEventListener("run.started", () => setRunning(true));
+    es.addEventListener("run.started", () => {
+      insufficientRef.current = false;
+      setRunning(true);
+    });
     es.addEventListener("text-delta", (e) => {
       const env = parse(e);
+      const text = String(env.payload.text ?? "");
+      const noEvidence = insufficientRef.current && !hasCitations(text);
       setBubbles((b) => [
         ...b,
         {
           key: env.event_id,
           role: "assistant",
-          text: String(env.payload.text ?? ""),
+          text,
+          noEvidence,
         },
       ]);
     });
@@ -113,13 +357,17 @@ export default function ChatView() {
     });
     es.addEventListener("tool-result", (e) => {
       const env = parse(e);
+      const output = String(env.payload.output ?? "");
+      if (String(env.payload.name ?? "") === "search_knowledge") {
+        ingestCitations(output);
+      }
       setActivities((a) => [
         ...a,
         {
           key: env.event_id,
           label: `Tool result · ${String(env.payload.name ?? "")}`,
           state: "success",
-          detail: String(env.payload.output ?? ""),
+          detail: output,
         },
       ]);
     });
@@ -167,7 +415,78 @@ export default function ChatView() {
         },
       ]);
     });
-  }, []);
+  }, [ingestCitations]);
+
+  // R1: rebuild the citation map for an already-persisted transcript by replaying
+  // the journal backlog (from cursor 0) and parsing prior search_knowledge tool
+  // outputs. Reads only until the first keep-alive (backlog exhausted), then aborts;
+  // it never touches bubbles, so there is no duplication with the live tail stream.
+  const backfillCitations = useCallback(
+    async (sid: string) => {
+      try {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 8000);
+        const res = await fetch(eventsUrl(sid, 0), {
+          credentials: "include",
+          headers: { Accept: "text/event-stream" },
+          signal: ac.signal,
+        });
+        if (!res.body) {
+          clearTimeout(timer);
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let done = false;
+        while (!done) {
+          const { value, done: readerDone } = await reader.read();
+          if (readerDone) break;
+          buf += decoder.decode(value, { stream: true });
+          const frames = buf.split("\n\n");
+          buf = frames.pop() ?? "";
+          for (const frame of frames) {
+            if (frame.startsWith(":")) {
+              // keep-alive comment => journal backlog is drained.
+              done = true;
+              break;
+            }
+            let evType = "";
+            let data = "";
+            for (const line of frame.split("\n")) {
+              if (line.startsWith("event:")) evType = line.slice(6).trim();
+              else if (line.startsWith("data:")) data += line.slice(5).trim();
+            }
+            if (evType !== "tool-result" && evType !== "tool-error") continue;
+            try {
+              const env = JSON.parse(data) as Envelope;
+              if (String(env.payload.name ?? "") === "search_knowledge") {
+                const output = String(env.payload.output ?? "");
+                if (!output.startsWith(NO_EVIDENCE)) {
+                  const parsed = parseKnowledgeCitations(output);
+                  if (parsed.length > 0) {
+                    setCites((prev) => {
+                      const next = { ...prev };
+                      for (const c of parsed) next[c.ref] = c;
+                      return next;
+                    });
+                  }
+                }
+              }
+            } catch {
+              /* skip unparseable frame */
+            }
+          }
+        }
+        clearTimeout(timer);
+        await reader.cancel().catch(() => {});
+        ac.abort();
+      } catch {
+        /* backfill is best-effort; live citations still work */
+      }
+    },
+    [],
+  );
 
   const loadSession = useCallback(
     async (sid: string) => {
@@ -177,6 +496,9 @@ export default function ChatView() {
       setBubbles([]);
       setActivities([]);
       setApprovals([]);
+      setCites({});
+      setProjectCtx(null);
+      insufficientRef.current = false;
       setRunning(false);
       const mp = await api.listMessages(sid);
       setBubbles(
@@ -187,8 +509,13 @@ export default function ChatView() {
         })),
       );
       openStream(sid, mp.event_cursor);
+      void backfillCitations(sid);
+      void api
+        .projectContext(sid)
+        .then((pc) => setProjectCtx(pc.project_id ? pc : null))
+        .catch(() => setProjectCtx(null));
     },
-    [openStream],
+    [openStream, backfillCitations],
   );
 
   useEffect(() => {
@@ -346,6 +673,14 @@ export default function ChatView() {
                   : "Mock model"
                 : "Loading model…"}
             </span>
+            {projectCtx?.project_id && (
+              <span className="chip project-chip" title="This chat is bound to a project (read/discuss only in W2a)">
+                ▦ {projectCtx.project_name ?? "Project"}
+                <span className="project-chip-note">
+                  {projectCtx.bound ? "bound · read-only" : "read-only"}
+                </span>
+              </span>
+            )}
           </div>
 
           {running && (
@@ -400,11 +735,11 @@ export default function ChatView() {
                 <div className="who" aria-hidden="true">
                   S
                 </div>
-                <div className="bubble-agent markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {m.text}
-                  </ReactMarkdown>
-                </div>
+                <AgentMessage
+                  text={m.text}
+                  noEvidence={m.noEvidence}
+                  cites={cites}
+                />
               </article>
             ),
           )}

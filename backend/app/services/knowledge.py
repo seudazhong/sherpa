@@ -11,9 +11,11 @@ Retrieval (KB3) and REST/Tool adapters (KB4) build on top; nothing here needs zh
 
 from __future__ import annotations
 
+import datetime
 import uuid
+from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -21,6 +23,7 @@ from app.models import (
     DriveNode,
     EmbeddingProfile,
     KnowledgeIngestionJob,
+    KnowledgeRetrievalEvidence,
     KnowledgeSource,
     KnowledgeSourceVersion,
 )
@@ -29,6 +32,10 @@ from app.services.errors import Invalid, NotFound
 
 PARSER_VERSION = "v1"
 PIPELINE_VERSION = "v1"
+
+
+def _now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
 
 
 def _require_user(ctx: CallerContext) -> uuid.UUID:
@@ -217,9 +224,9 @@ async def remove_source(db: AsyncSession, ctx: CallerContext, *, source_id: uuid
 
 
 async def mark_stale_for_file(db: AsyncSession, ctx: CallerContext, *, file_id: uuid.UUID) -> int:
-    """Mark ready sources of a changed file `stale` and bump their desired_generation
-    (called on a Drive overwrite). The old active version stays searchable until a
-    reindex activates a replacement. Returns the number of sources affected."""
+    """Mark ready sources of a changed file `stale`, bump their desired_generation, and
+    auto-enqueue a reindex to the new generation (called on a Drive overwrite). The old
+    active version stays searchable until the new one activates. Returns sources affected."""
     uid = _require_user(ctx)
     rows = (
         (
@@ -235,10 +242,91 @@ async def mark_stale_for_file(db: AsyncSession, ctx: CallerContext, *, file_id: 
         .scalars()
         .all()
     )
-    n = 0
+    if not rows:
+        return 0
+    node = await _require_owned_file(db, ctx, file_id)
+    profile = await ensure_embedding_profile(db, ctx)
     for source in rows:
         source.status = "stale"
         source.desired_generation += 1
-        n += 1
+        await db.flush()
+        await _enqueue_version(db, source, node, profile)
+    return len(rows)
+
+
+async def tombstone_sources_for_files(
+    db: AsyncSession, ctx: CallerContext, *, file_ids: Sequence[uuid.UUID]
+) -> int:
+    """Tombstone live sources of the given (deleted) Drive files — immediate retrieval
+    exclusion. A maintenance sweep later hard-deletes the rows + snapshot objects.
+    Returns the number of sources tombstoned."""
+    if not file_ids:
+        return 0
+    uid = _require_user(ctx)
+    rows = (
+        (
+            await db.execute(
+                select(KnowledgeSource).where(
+                    KnowledgeSource.tenant_id == ctx.tenant_id,
+                    KnowledgeSource.user_id == uid,
+                    KnowledgeSource.file_id.in_(list(file_ids)),
+                    KnowledgeSource.tombstoned_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for source in rows:
+        source.tombstoned_at = _now()
+        source.status = "deleting"
     await db.flush()
-    return n
+    return len(rows)
+
+
+# --- maintenance / GC (system, no user context) -----------------------------
+
+
+async def purge_expired_evidence(db: AsyncSession) -> int:
+    """Delete retrieval-evidence rows past their retention TTL (ADR-036)."""
+    result = await db.execute(
+        delete(KnowledgeRetrievalEvidence).where(KnowledgeRetrievalEvidence.purge_after < _now())
+    )
+    return result.rowcount or 0  # type: ignore[attr-defined]
+
+
+async def gc_tombstoned_sources(db: AsyncSession) -> int:
+    """Hard-delete tombstoned sources (cascades versions/chunks/jobs). Their now-orphan
+    snapshot objects are removed by `sweep_orphan_snapshots`."""
+    rows = (
+        (
+            await db.execute(
+                select(KnowledgeSource).where(KnowledgeSource.tombstoned_at.is_not(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for source in rows:
+        await db.delete(source)
+    await db.flush()
+    return len(rows)
+
+
+async def sweep_orphan_snapshots(db: AsyncSession) -> int:
+    """Delete immutable snapshot objects with no owning version row (removed/superseded
+    sources). Content-addressed keys live under the `knowledge/` prefix; deletion is
+    never inline (mirrors the Drive blob GC, ADR-030)."""
+    from app.files import build_object_store
+
+    live = set(
+        (await db.execute(select(KnowledgeSourceVersion.snapshot_object_key))).scalars().all()
+    )
+    store = build_object_store()
+    keys = await store.list_keys("knowledge/")
+    deleted = 0
+    for key in keys:
+        if key not in live:
+            await store.delete(key)
+            deleted += 1
+    return deleted

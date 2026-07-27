@@ -20,6 +20,7 @@ from app.models.drive import DriveNode, DriveVersion, StorageAccount, StorageBlo
 from app.models.effects import ApprovalEnvelope, EffectInvocation
 from app.models.events import EventJournal, Outbox
 from app.models.files import File
+from app.models.github import GithubConnection
 from app.models.grants import PermissionGrant
 from app.models.knowledge import (
     EmbeddingProfile,
@@ -31,6 +32,13 @@ from app.models.knowledge import (
 )
 from app.models.memory import MemoryPassage, UserMemory
 from app.models.observability import Trace
+from app.models.projects import (
+    Project,
+    ProjectImportJob,
+    ProjectSnapshot,
+    ProjectSnapshotEntry,
+    ProjectSource,
+)
 from app.models.schedules import Schedule, ScheduleFiring
 from app.models.search import SessionSearchEntry
 from app.models.settings import UserSettings
@@ -76,4 +84,10 @@ __all__ = [
     "KnowledgeChunk",
     "KnowledgeIngestionJob",
     "KnowledgeRetrievalEvidence",
+    "Project",
+    "ProjectSnapshot",
+    "ProjectSnapshotEntry",
+    "ProjectImportJob",
+    "ProjectSource",
+    "GithubConnection",
 ]

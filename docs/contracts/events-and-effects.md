@@ -667,6 +667,168 @@ The provider-visible excerpts for these refs are persisted to
 replay resolves each ref through that store and the source tombstone state; a deleted
 source renders as `[knowledge source deleted]`, never a replayed excerpt.
 
+### 2.9 Project lifecycle — Workspace W2a (ADR-037, post-v1 — additive)
+
+> **Design/contract-first only (ADR-037).** Frozen shape for the W2a Projects slice
+> (blank/template/archive; **no GitHub** — that is W2b). Project **file bytes never enter
+> the append-only journal** — bytes live in immutable ADR-030 `storage_blobs`; the journal
+> carries only ids + bounded metadata + a named termination reason (ADR-016/021).
+
+#### `project.lifecycle`
+
+One event per project creation/import stage transition (observability + recovery).
+
+```text
+{
+  project_id: uuid,
+  snapshot_id: uuid | null,
+  create_kind: string,           // blank | template | archive   (github = W2b)
+  stage: string,                 // created | import_staged | snapshot_activated | failed
+  entry_count: integer | null,
+  size_bytes: integer | null,
+  termination_reason: string | null  // done | unsafe_archive | too_large | expansion_ratio | error:...
+}
+```
+
+An **archive** import is a durable job (outbox + lease, §4): claim → expand in isolated
+staging (verify bounds/safety) → build the initial immutable snapshot → **atomically set
+`projects.current_snapshot_id`**. The activate is idempotent on the import idempotency key
+`(project_id, import_idempotency_key)`; a crash/replay never produces a half-built or
+duplicate project. On any failure the project stays `failed` with **no** snapshot (visible +
+deletable), never a snapshot over the wrong bytes. **blank**/**template** creation is a single
+committed transaction (no staging) that emits `created` + `snapshot_activated`.
+
+`project.lifecycle` event catalog stays the canonical observability shape above.
+
+**Realization (implementation, ADR-037).** A project's lifecycle is **not run-scoped**, so the
+frozen run-scoped `event_journal` (run_id NOT NULL) is not used for `project.lifecycle`.
+The durable job is the `project_import_jobs` table (data-model §Projects): its `stage`
+(`queued|staged|activated|done|failed`) + named `termination_reason` capture the lifecycle
+stages; at-least-once dispatch is the explicit worker enqueue backed by a recovery tick
+(mirroring `knowledge_ingestion_job`); structured logs carry ids + bounded metadata. Project
+file bytes never enter any journal.
+
+Project-bound Chat (`sessions.project_id`, api §10.5) creates no new event type: the binding
+is set at session creation and is immutable after the first admitted user message; the existing
+run/message events carry `session_id` as usual.
+
+### 2.10 Project lifecycle — Workspace W2b GitHub one-time import (ADR-038, additive)
+
+> **✅ W2b SHIPPED (migration `0029`).** Extends §2.9 for the W2b GitHub one-time import.
+> No new event **type** — the `project.lifecycle` shape is reused with `create_kind='github'`.
+> Project **file bytes and GitHub credentials never appear anywhere in the durable record**
+> (bytes → immutable ADR-030 `storage_blobs`; token → the AEAD vault only). As in §2.9 the
+> project lifecycle is **not** written to the run-scoped `event_journal`; the durable record is
+> the `project_import_jobs` row + structured logs, carrying ids + bounded metadata + the resolved
+> source OID + a named termination reason (ADR-016/019/021).
+
+`project.lifecycle` gains a `github` create_kind and a `source` sub-object:
+
+```text
+{
+  project_id: uuid,
+  snapshot_id: uuid | null,
+  create_kind: string,           // blank | template | archive | github   (W2b adds 'github')
+  stage: string,                 // created | import_staged | snapshot_activated | failed
+  entry_count: integer | null,
+  size_bytes: integer | null,
+  source: {                      // present only when create_kind='github'
+    provider: "github",
+    repo_external_id: string,    // stable numeric repo id (survives rename)
+    owner: string, repo: string, // display only
+    ref_type: string,            // branch | tag | commit
+    ref_name: string,
+    source_oid: string | null    // resolved commit OID (null until source-resolve stage)
+    // NOTE: never a token/credential — provenance only.
+  },
+  termination_reason: string | null
+    // done | source_resolve_failed | auth_required | repo_unavailable
+    // | unsafe_archive | too_large | expansion_ratio | error:...
+}
+```
+
+A **GitHub import** is a durable job reusing the W2a `project_import_jobs` realization
+(`create_kind='github'`): claim → **resolve ref → commit OID** (GitHub `git/ref/...` /
+`commits/{sha}`) → **bounded archive (tarball) fetch** of that OID into isolated staging → expand
+through the same W2a in-memory safe expander (verify bounds/safety) → build the initial immutable
+`reason='import'` snapshot (`source_oid` set) → **atomically set `projects.current_snapshot_id`** +
+`source_status='imported'`. The activate is idempotent on `(project_id, import_idempotency_key)`; a
+crash/replay never produces a half-built or duplicate project. On any failure the project keeps
+`projects.status='active'` with `import_status='failed'` (derived, api §10.6) +
+`source_status='import_failed'` and **no** snapshot (visible + deletable), never a snapshot over the
+wrong bytes.
+
+**Realization (same as §2.9).** A project's lifecycle is **not run-scoped**, so the frozen
+run-scoped `event_journal` (run_id NOT NULL) is **not** used for `project.lifecycle`; the durable
+job is the `project_import_jobs` table (data-model §Projects), whose `stage` +
+named `termination_reason` capture the lifecycle stages, with at-least-once dispatch = the explicit
+worker enqueue backed by a recovery tick (mirroring `knowledge_ingestion_job`) and structured logs
+carrying ids + bounded metadata + the resolved `source_oid`. **Read-only fetch ⇒ no `effect_unknown`
+remote reconciliation.** The GitHub archive fetch does **not** mutate the remote (unlike a W4 push),
+so there is no external effect to reconcile: a failed/partial fetch is safely retryable within the
+durable job (re-fetch by the resolved OID → identical bytes). `effect_unknown`/expected-remote-OID
+reconciliation semantics belong to **W4** (push/PR), not W2b. GitHub source **credentials** are
+decrypted only by the import worker at the connector boundary and never enter any journal, log,
+prompt, tool result, snapshot, or (W3) sandbox (ADR-019). Establishing/removing a GitHub connection
+is an owner user-level operation and emits no `project.lifecycle` event (it touches no project).
+
+### 2.11 Project sandbox run + working-copy save — Workspace W3 (ADR-040 + ADR-039, design/contract-first — additive)
+
+> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-040 product/data + ADR-039 isolation).** Frozen shape for the
+> W3 slice (task working copy + one-time scratch-copy sandbox + change review). **Not implemented** in
+> this batch. Project **file bytes and all credentials never enter the append-only journal** — bytes
+> live in immutable ADR-030 `storage_blobs`; the journal/log carries only ids + bounded metadata +
+> named termination reasons (ADR-016/019/021).
+
+W3 execution runs **inside** a Project-bound chat's durable **model-loop run** (the frozen `run`/
+`event_journal` machinery, ADR-016). It reuses the run lifecycle (`run.started`/`run.settled`),
+streaming, and tool events (§2.1/§2.2); a `project_run` tool call is an ordinary `tool-call`/
+`tool-result` on that run. W3 adds **no new run event type** — the durable project-side record is the
+W3 tables (data-model §Projects W3) + structured logs. The **new effect discipline** is:
+
+**① Sandbox execution has no external side effect ⇒ no `effect_unknown` for the run.** The sandbox is
+**network-disabled** and mounts **only** a disposable node-local scratch copy (ADR-039); it mutates no
+external system, no remote, no source of truth. Killing the container, losing the node, or a redelivered
+job therefore never produces an `effect_unknown` external outcome — the run simply **rematerializes**
+`base snapshot + persisted overlay` into a fresh scratch tree and continues from the last persisted
+boundary (report §10.4). `effect_unknown`/remote reconciliation belongs to **W4** push, not W3.
+
+**② The only durable effect is the fence-guarded overlay/change-set persist (idempotent).** After each
+**bounded tool batch, before waiting for the user, and before teardown**, the worker persists the
+scratch delta into `project_working_copy_entries` + a `project_change_sets` projection, stamped with the
+working copy's `fence_token`. This write is **idempotent**: a replay with the same fence + boundary
+re-produces the same overlay (content-addressed blobs dedupe); a **stale** sandbox whose fence is behind
+the working copy's current `fence_token` is **rejected** and cannot publish (data-model §Projects W3,
+"single-writer lease + fence"). A run is **not** reported successfully durable until this boundary
+commits (`project_sandbox_runs.persisted_boundary_at` set). Unpersisted scratch writes are never shown
+as completed work.
+
+**③ Save is a compare-and-set head advance (idempotent per change set).** *Save selected* / *Save +
+checkpoint* build a new immutable snapshot and advance `projects.current_snapshot_id` **and**
+`head_generation` in one transaction, **gated by a CAS** on `(current_snapshot_id == base_snapshot_id
+AND head_generation == base_head_generation)`. If the head moved (another chat Saved, W4 apply-remote),
+the CAS fails ⇒ the change set goes `conflicted` and **nothing is applied** (api §10.7 `409
+head_moved`); the user must review a rebased change set. Re-applying an already-applied change set is a
+no-op (its `state='applied'` + `created_snapshot_id` are terminal). *Discard* releases the reservation
+and leaves the head byte-identical to the base. Idle-expiry release and reservation release are **one
+atomic transition** (an open working copy cannot keep reserved bytes after an independent sweep).
+
+**④ Named termination reasons (every exit).** A `project_sandbox_runs.termination_reason` is one of:
+`done | environment_missing_dependencies | wall_timeout | mem_limit | pids_limit | output_limit |
+changeset_bounds | path_escape | fence_lost | sandbox_unavailable | error:...`. A missing dependency is
+an **explicit** `environment_missing_dependencies` result — the offline sandbox **never** silently
+enables network to fetch packages (report §10.7). Change-set bounds (`WORKING_COPY_MAX_*`, config §1.7)
+overflow ⇒ `changeset_bounds` + a `truncated` change set (explicit partial), never a silent full diff.
+
+**⑤ Crash recovery (reuse §5 turn-granular replay).** Recovery rebuilds the working copy from durable
+state at the last committed boundary and rematerializes an equivalent scratch tree; `project_run` tool
+replays are safe because the persist is fence-guarded + idempotent and the sandbox has no external
+effect. Container/node loss cannot lose the last persisted boundary; two chats on one Project cannot
+observe or mutate each other's pending working copies (isolated rows, per-session live-uniqueness).
+**Credentials never enter** the scratch tree, overlay, change set, artifact, snapshot, journal, or log
+(ADR-019/039); the scratch tree, warm container, and prepared image are rebuildable caches, never the
+recovery source of truth.
+
 ## 3. Delivery and SSE
 
 ### 3.1 Required path

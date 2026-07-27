@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sherpa · Project Chat 工作副本 + 变更评审 — Workspace W3 (静态 UI 稿)</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --canvas: #f7f7f5;
+        --canvas-strong: #efefed;
+        --sidebar: #fbfbfa;
+        --surface: #ffffff;
+        --surface-subtle: #f8f8f7;
+        --surface-hover: #f1f1ef;
+        --ink: #242523;
+        --ink-soft: #454642;
+        --muted: #72716d;
+        --faint: #9b9a97;
+        --border: rgba(55, 53, 47, 0.12);
+        --border-strong: rgba(55, 53, 47, 0.2);
+        --brand: #47705b;
+        --brand-strong: #355443;
+        --brand-soft: #e8f0eb;
+        --blue: #2383e2;
+        --blue-soft: #e7f3ff;
+        --success: #2f7d4d;
+        --success-soft: #e5f3e9;
+        --warning: #9a6700;
+        --warning-soft: #fbf0d5;
+        --danger: #b4233a;
+        --danger-soft: #fbe9ec;
+        --add: #1f7a3d;
+        --add-soft: #e5f5ea;
+        --del: #b4233a;
+        --del-soft: #fbe9ec;
+        --mod: #9a6700;
+        --mod-soft: #fbf0d5;
+        --radius-sm: 8px;
+        --radius: 12px;
+        --radius-lg: 18px;
+        --shadow-sm: 0 1px 2px rgba(15, 15, 15, 0.04);
+        --shadow: 0 10px 28px rgba(15, 15, 15, 0.08), 0 2px 6px rgba(15, 15, 15, 0.04);
+        --font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        color: var(--ink);
+        background: var(--canvas);
+        font-family: var(--font);
+        font-size: 14px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        display: grid;
+        grid-template-columns: 264px 1fr;
+        min-height: 100%;
+      }
+
+      /* ---------- Sidebar ---------- */
+      .sidebar {
+        background: var(--sidebar);
+        border-right: 1px solid var(--border);
+        padding: 18px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+      }
+      .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); }
+      .logo {
+        width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+        background: var(--brand); color: #fff; font-weight: 700;
+      }
+      .brand strong { display: block; font-size: 15px; }
+      .brand small { color: var(--muted); font-size: 12px; }
+      .workspace-card {
+        display: flex; align-items: center; gap: 10px;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 10px 12px;
+      }
+      .workspace-card i { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+      .workspace-card strong { display: block; font-size: 13px; }
+      .workspace-card small { color: var(--muted); font-size: 12px; }
+      nav { display: flex; flex-direction: column; gap: 2px; }
+      nav .group { margin-top: 8px; color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 6px 10px 2px; }
+      nav a {
+        display: flex; align-items: center; gap: 10px; text-decoration: none;
+        color: var(--ink-soft); padding: 7px 10px; border-radius: var(--radius-sm); font-size: 13.5px;
+      }
+      nav a .ic { width: 16px; text-align: center; color: var(--faint); }
+      nav a:hover { background: var(--surface-hover); }
+      nav a.active { background: var(--brand-soft); color: var(--brand-strong); font-weight: 600; }
+      nav a.active .ic { color: var(--brand); }
+      nav a .tag { margin-left: auto; font-size: 10px; font-weight: 600; color: var(--faint); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; }
+      .spacer { flex: 1; }
+      .user-card { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; }
+      .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--canvas-strong); display: grid; place-items: center; font-weight: 600; font-size: 12px; }
+      .user-card strong { display: block; font-size: 12.5px; }
+      .user-card small { color: var(--muted); font-size: 11.5px; }
+
+      /* ---------- Main ---------- */
+      main { padding: 26px 30px 60px; max-width: 1080px; }
+      .eyebrow { color: var(--brand); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+      h1 { font-size: 24px; margin: 4px 0 4px; }
+      .lede { color: var(--muted); margin: 0 0 18px; max-width: 64ch; }
+      .mono { font-family: var(--mono); }
+
+      .draftbar {
+        display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
+        background: var(--warning-soft); border: 1px solid rgba(154,103,0,.3);
+        color: var(--warning); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 16px; font-size: 12.5px; line-height: 1.6;
+      }
+      .draftbar b { color: #7a5200; }
+      .k { font-family: var(--mono); font-size: 12px; background: rgba(255,255,255,.6); border: 1px solid rgba(154,103,0,.3); border-radius: 6px; padding: 1px 6px; overflow-wrap: anywhere; }
+
+      /* Tabs */
+      .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 0 0 20px; flex-wrap: wrap; }
+      .tabs label {
+        padding: 9px 14px; font-size: 13.5px; color: var(--muted); cursor: pointer;
+        border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: 8px 8px 0 0;
+      }
+      .tabs label:hover { color: var(--ink); background: var(--surface-hover); }
+      .view { display: none; }
+      #t-chat:checked ~ .tabs label[for="t-chat"],
+      #t-review:checked ~ .tabs label[for="t-review"],
+      #t-conflict:checked ~ .tabs label[for="t-conflict"],
+      #t-arch:checked ~ .tabs label[for="t-arch"] { color: var(--brand-strong); border-bottom-color: var(--brand); font-weight: 600; }
+      #t-chat:checked ~ #v-chat,
+      #t-review:checked ~ #v-review,
+      #t-conflict:checked ~ #v-conflict,
+      #t-arch:checked ~ #v-arch { display: block; }
+
+      /* Buttons */
+      .btn { border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); border-radius: var(--radius-sm); padding: 7px 13px; font-size: 13px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+      .btn:hover { background: var(--surface-hover); }
+      .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+      .btn.primary:hover { background: var(--brand-strong); }
+      .btn.sm { padding: 4px 9px; font-size: 12px; }
+      .btn.danger { color: var(--danger); border-color: rgba(180,35,58,.4); }
+      .btn.danger:hover { background: var(--danger-soft); }
+      .btn.disabled { color: var(--faint); border-style: dashed; cursor: not-allowed; background: var(--surface-subtle); }
+
+      .head-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+      .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+      .panel { padding: 16px 18px; }
+      .panel h3 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); }
+
+      .pill { font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+      .pill i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+      .pill.ok { color: var(--success); background: var(--success-soft); }
+      .pill.neutral { color: var(--muted); background: var(--canvas-strong); }
+      .pill.progress { color: var(--blue); background: var(--blue-soft); }
+      .pill.progress i { animation: pulse 1.1s infinite; }
+      .pill.warn { color: var(--warning); background: var(--warning-soft); }
+      .pill.danger { color: var(--danger); background: var(--danger-soft); }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+      /* Binding + chat */
+      .binding {
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+        background: var(--brand-soft); border: 1px solid rgba(71,112,91,.22);
+        border-radius: var(--radius); padding: 11px 14px; margin-bottom: 16px;
+      }
+      .binding .bi { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; color: #fff; background: var(--brand); }
+      .binding strong { display: block; font-size: 13.5px; color: var(--brand-strong); }
+      .binding small { color: var(--ink-soft); font-size: 12px; overflow-wrap: anywhere; }
+
+      .chat-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+      .chat-grid > *, .review-grid > *, .cmp > * { min-width: 0; }
+      .bubble { border-radius: var(--radius); padding: 12px 16px; margin-bottom: 14px; font-size: 14px; }
+      .bubble.user { background: var(--brand-soft); border: 1px solid rgba(71,112,91,.2); margin-left: auto; max-width: 82%; }
+      .bubble.bot { background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
+      .bubble.bot code, .inl { font-family: var(--mono); font-size: 12.5px; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; overflow-wrap: anywhere; }
+
+      .toolcall { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); margin: 10px 0; overflow: hidden; }
+      .toolcall .th { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12.5px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+      .toolcall .th .nm { font-family: var(--mono); font-weight: 600; color: var(--brand-strong); }
+      .toolcall .tb { padding: 8px 12px; font-family: var(--mono); font-size: 12px; color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+      .toolcall.err .th { background: var(--danger-soft); }
+      .toolcall.err .th .nm { color: var(--danger); }
+
+      /* Sandbox run status */
+      .runsteps { list-style: none; margin: 0; padding: 0; }
+      .runsteps li { position: relative; padding: 0 0 12px 24px; font-size: 12.5px; }
+      .runsteps li::before { content: ""; position: absolute; left: 4px; top: 3px; width: 10px; height: 10px; border-radius: 50%; background: var(--success); }
+      .runsteps li.doing::before { background: var(--blue); animation: pulse 1.1s infinite; }
+      .runsteps li.wait::before { background: var(--faint); }
+      .runsteps li:not(:last-child)::after { content: ""; position: absolute; left: 8px; top: 14px; bottom: 0; width: 1px; background: var(--border); }
+      .runsteps .tt { font-weight: 600; }
+      .runsteps .ss { color: var(--muted); }
+
+      .kv { display: grid; grid-template-columns: 118px 1fr; gap: 6px 12px; font-size: 12.5px; margin: 0; }
+      .kv dt { color: var(--muted); }
+      .kv dd { margin: 0; overflow-wrap: anywhere; }
+      .side-note { border: 1px dashed var(--border-strong); background: var(--surface-subtle); border-radius: var(--radius-sm); padding: 11px 13px; font-size: 12px; color: var(--ink-soft); margin-top: 14px; line-height: 1.6; }
+      .side-note b { color: var(--ink); }
+
+      /* Change review */
+      .cs-metrics { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+      .csm { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; background: var(--surface); font-size: 12.5px; }
+      .csm strong { display: block; font-size: 17px; }
+      .csm.add strong { color: var(--add); }
+      .csm.mod strong { color: var(--mod); }
+      .csm.del strong { color: var(--del); }
+      .csm span { color: var(--muted); font-size: 11.5px; }
+
+      .trunc-banner { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; background: var(--warning-soft); border: 1px solid rgba(154,103,0,.3); color: var(--warning); border-radius: var(--radius-sm); padding: 9px 13px; font-size: 12.5px; margin-bottom: 14px; }
+
+      .review-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+      .filelist { padding: 6px; }
+      .flrow { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 7px; cursor: pointer; }
+      .flrow:hover { background: var(--surface-subtle); }
+      .flrow.sel { background: var(--brand-soft); }
+      .flrow input { accent-color: var(--brand); width: 15px; height: 15px; }
+      .flrow .badge { font-size: 10px; font-weight: 700; width: 18px; text-align: center; border-radius: 4px; padding: 1px 0; color: #fff; }
+      .badge.a { background: var(--add); }
+      .badge.m { background: var(--mod); }
+      .badge.d { background: var(--del); }
+      .flrow .fp { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; flex: 1; }
+      .flrow .sz { color: var(--faint); font-size: 11px; }
+      .fl-group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); font-weight: 600; padding: 8px 8px 3px; }
+
+      .diffwrap { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+      .diffhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-subtle); font-family: var(--mono); font-size: 12px; flex-wrap: wrap; overflow-wrap: anywhere; }
+      .diff { margin: 0; font-family: var(--mono); font-size: 12px; overflow-x: auto; }
+      .diff .ln { display: block; padding: 1px 12px; white-space: pre; }
+      .diff .ln.add { background: var(--add-soft); color: #14532d; }
+      .diff .ln.del { background: var(--del-soft); color: #7f1d1d; }
+      .diff .ln.hunk { color: var(--muted); background: var(--surface-subtle); }
+      .binnote { padding: 14px 12px; font-size: 12.5px; color: var(--muted); font-style: italic; }
+
+      /* Artifacts */
+      .art { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+      .art:last-child { border-bottom: none; }
+      .art .aic { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 700; background: var(--muted); }
+      .art .an { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+      .art .am { color: var(--muted); font-size: 11.5px; }
+      .art .aa { margin-left: auto; display: flex; gap: 6px; }
+
+      /* Action bar */
+      .actionbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
+      .actionbar .sel-note { color: var(--muted); font-size: 12.5px; }
+      .actionbar .grow { flex: 1; }
+
+      /* Conflict */
+      .conflict-banner { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; background: var(--danger-soft); border: 1px solid rgba(180,35,58,.3); color: var(--danger); border-radius: var(--radius); padding: 12px 15px; margin-bottom: 16px; }
+      .conflict-banner .ci { font-size: 18px; }
+      .cmp { display: grid; grid-template-columns: 1fr; gap: 12px; }
+      .cmp .box { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; }
+      .cmp .box.base { border-color: rgba(71,112,91,.35); }
+      .cmp .box.now { border-color: rgba(35,131,226,.35); }
+      .cmp .box h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); }
+      .oid { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+
+      /* Arch / durability */
+      .hier { list-style: none; margin: 0 0 14px; padding: 0; }
+      .hier li { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; background: var(--surface); }
+      .hier .tier { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 12px; flex-shrink: 0; }
+      .hier .t0 { background: var(--brand); }
+      .hier .t1 { background: #2b6cb0; }
+      .hier .t2 { background: var(--faint); }
+      .hier .t3 { background: var(--warning); }
+      .hier .lbl { font-weight: 600; font-size: 13px; }
+      .hier .desc { color: var(--muted); font-size: 12.5px; }
+      .hier .auth { margin-left: auto; }
+      .mount-list { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--ink-soft); line-height: 1.7; }
+      .mount-list .no { color: var(--danger); font-weight: 600; }
+      .mount-list .yes { color: var(--success); font-weight: 600; }
+      .callout { border: 1px solid rgba(180,35,58,.28); background: var(--danger-soft); border-radius: var(--radius-sm); padding: 12px 14px; font-size: 12.5px; color: #7f1d1d; margin-top: 14px; line-height: 1.65; }
+      .callout b { color: var(--del); }
+
+      .foot-note { color: var(--faint); font-size: 12px; margin-top: 26px; border-top: 1px solid var(--border); padding-top: 14px; line-height: 1.7; }
+
+      /* ---------- Responsive ---------- */
+      @media (min-width: 901px) {
+        .chat-grid { grid-template-columns: 1fr 280px; }
+        .review-grid { grid-template-columns: 320px 1fr; }
+        .review-grid.even { grid-template-columns: 1fr 1fr; }
+        .cmp { grid-template-columns: 1fr 1fr; }
+      }
+      @media (max-width: 900px) {
+        body { grid-template-columns: 1fr; }
+        .sidebar { display: none; }
+        main { padding: 20px 16px 48px; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ============ SIDEBAR ============ -->
+    <aside class="sidebar">
+      <a class="brand" href="#">
+        <span class="logo">S</span>
+        <span><strong>Sherpa</strong><small>Personal agent</small></span>
+      </a>
+      <div class="workspace-card">
+        <i></i>
+        <span><strong>Personal workspace</strong><small>Private · self-hosted</small></span>
+      </div>
+      <nav>
+        <div class="group">Agent</div>
+        <a href="#"><span class="ic">◌</span> Chat</a>
+        <a href="#"><span class="ic">✉</span> Inbox</a>
+        <a href="#"><span class="ic">▤</span> Activity</a>
+        <div class="group">Workspace</div>
+        <a class="active" href="#"><span class="ic">▧</span> Projects <span class="tag">/work/projects</span></a>
+        <a href="#"><span class="ic">▦</span> Drive <span class="tag">/work/drive</span></a>
+        <div class="group">Organize</div>
+        <a href="#"><span class="ic">◷</span> Schedules</a>
+        <a href="#"><span class="ic">◈</span> Memory</a>
+        <a href="#"><span class="ic">▧</span> Knowledge</a>
+        <div class="group">Channels</div>
+        <a href="#"><span class="ic">◎</span> Messaging</a>
+        <a href="#"><span class="ic">⌁</span> Connectors</a>
+      </nav>
+      <div class="spacer"></div>
+      <a href="#" style="color:var(--ink-soft);text-decoration:none;padding:7px 10px;font-size:13.5px;">⚙ Settings</a>
+      <div class="user-card">
+        <span class="avatar">O</span>
+        <span><strong>owner@localhost</strong><small>Workspace owner</small></span>
+      </div>
+    </aside>
+
+    <!-- ============ MAIN ============ -->
+    <main>
+      <span class="eyebrow">Workspace · Projects · route <span class="mono">/work/projects</span> → Project Chat</span>
+      <h1>任务工作副本 + 变更评审 <span style="font-size:13px;font-weight:600;color:var(--muted);">Workspace W3</span></h1>
+      <p class="lede">Project 绑定 Chat 的首个变更动作创建一份<b>跨 turn 的持久任务工作副本</b>；每次执行只把它物化成一份<b>一次性 scratch 拷贝</b>喂给硬化断网沙箱，有界批次后持久化 overlay；你在 Change Review 里查看 added / modified / deleted 与 artifacts，然后 Save selected、Save + checkpoint 或 Discard。</p>
+
+      <div class="draftbar">
+        <span>⚠️ <b>设计与契约先行稿（ADR-040 · ADR-039 · W3）</b></span>
+        <span>此为静态设计稿，<b>功能尚未实现、生产 W3 导航未暴露、无真实沙箱挂载</b>。真相源 = Sherpa 快照 head；工作副本 overlay = 持久任务态；scratch 卷 / 热容器 = 可丢缓存。沙箱<b>只挂一次性 scratch 副本、绝不挂项目真相源 / blob store / 凭据</b>。缺依赖 → 显式 <span class="k">environment_missing_dependencies</span>，绝不联网装包。不做包安装、不嵌 coding agent、不做 <span class="k">git init/commit/branch</span>；GitHub sync / push / PR = <b>W4</b>。</span>
+      </div>
+
+      <input type="radio" name="t" id="t-chat" hidden checked />
+      <input type="radio" name="t" id="t-review" hidden />
+      <input type="radio" name="t" id="t-conflict" hidden />
+      <input type="radio" name="t" id="t-arch" hidden />
+
+      <div class="tabs">
+        <label for="t-chat">Project Chat（执行态）</label>
+        <label for="t-review">变更评审（Change Review）</label>
+        <label for="t-conflict">Stale / 冲突</label>
+        <label for="t-arch">隔离与真相源</label>
+      </div>
+
+      <!-- ============ VIEW 1 · CHAT / EXECUTION ============ -->
+      <section class="view" id="v-chat">
+        <div class="binding">
+          <span class="bi">A</span>
+          <span>
+            <strong>Project-bound Chat · api-service</strong>
+            <small>不可变绑定 <span class="mono">sessions.project_id = 3f2a…c91</span> · 首消息后不可再改 Project · General chat 无工作副本</small>
+          </span>
+          <span class="pill ok" style="margin-left:auto;"><i></i> working copy · open</span>
+        </div>
+
+        <div class="chat-grid">
+          <div>
+            <div class="bubble user">帮我给 <span class="inl">create_invoice</span> 加一个金额为负时的校验，并跑一下单测。</div>
+
+            <div class="bubble bot">
+              好的，我会在当前 Project 工作副本里改代码并在沙箱里跑测试。<b>沙箱断网、只挂一份一次性 scratch 拷贝</b>，不会碰你已保存的项目 head。
+              <div class="toolcall">
+                <div class="th"><span class="nm">project_run · edit</span><span class="pill neutral" style="margin-left:auto;"><i></i>allow</span></div>
+                <div class="tb">edit  src/billing/invoice.py
+  + if amount &lt; 0:
+  +     raise ValueError("amount must be non-negative")</div>
+              </div>
+              <div class="toolcall">
+                <div class="th"><span class="nm">project_run · run</span><span class="pill ok" style="margin-left:auto;"><i></i>exit 0</span></div>
+                <div class="tb">$ pytest tests/test_invoice.py -q
+..                                              [100%]
+2 passed in 0.31s</div>
+              </div>
+              两处改动已写进工作副本 overlay（已持久化边界）。你可以在 <b>变更评审</b> 里查看并选择保存。
+            </div>
+
+            <div class="bubble bot">
+              另外你让我顺带跑 <span class="inl">ruff</span> —— 但当前批准的基础镜像里没有它：
+              <div class="toolcall err">
+                <div class="th"><span class="nm">project_run · run</span><span class="pill danger" style="margin-left:auto;"><i></i>environment_missing_dependencies</span></div>
+                <div class="tb">$ ruff check .
+sandbox stopped: environment_missing_dependencies (ruff)
+沙箱断网、W3 不安装依赖 —— 请把 ruff 加进项目快照或基础镜像后重试。</div>
+              </div>
+              <a class="btn primary sm" style="margin-top:6px;" href="#" onclick="return false;">查看变更评审 →</a>
+            </div>
+          </div>
+
+          <div>
+            <div class="card panel">
+              <h3>Sandbox run</h3>
+              <ul class="runsteps">
+                <li><span class="tt">取 lease + fence</span><span class="ss"> · fence #7（single-writer）</span></li>
+                <li><span class="tt">物化一次性 scratch</span><span class="ss"> · base 快照 + 持久 overlay → 全新 scratch 树（nosuid,nodev）</span></li>
+                <li><span class="tt">硬化沙箱执行</span><span class="ss"> · 断网 · 非 root · cap_drop ALL · 只读 rootfs · 无密钥</span></li>
+                <li class="doing"><span class="tt">持久化 overlay + change set</span><span class="ss"> · 有界批次后、等用户前</span></li>
+              </ul>
+              <dl class="kv" style="margin-top:6px;">
+                <dt>state</dt><dd><span class="pill progress"><i></i>persisting</span></dd>
+                <dt>base snapshot</dt><dd class="mono">snap_9c…41</dd>
+                <dt>overlay</dt><dd>2 files · 1.2 KB</dd>
+                <dt>reserved</dt><dd>~4 KB（配额预留）</dd>
+                <dt>scratch</dt><dd class="mono">scratch/run-7a2（可丢缓存）</dd>
+                <dt>warm 容器</dt><dd>15 分钟 idle TTL · 随时可杀</dd>
+              </dl>
+              <div class="side-note">
+                <b>容器不是真相源。</b> 杀掉热容器 / 丢节点，只会从 <span class="inl">base 快照 + 持久 overlay</span> 重物化一份等价 scratch，不丢已持久化边界。未持久化的 scratch 写入<b>绝不算完成</b>。
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ VIEW 2 · CHANGE REVIEW ============ -->
+      <section class="view" id="v-review">
+        <div class="head-row">
+          <div>
+            <div class="eyebrow">Change Review · working copy → Project head</div>
+            <div style="font-size:13px;color:var(--muted);margin-top:2px;">base <span class="mono">snap_9c…41</span> · head 未移动 · 逐字节可 Discard 回到 base</div>
+          </div>
+          <span class="pill ok"><i></i>head 就绪 · 可保存</span>
+        </div>
+
+        <div class="cs-metrics">
+          <div class="csm add"><strong>1</strong><span>added</span></div>
+          <div class="csm mod"><strong>1</strong><span>modified</span></div>
+          <div class="csm del"><strong>1</strong><span>deleted</span></div>
+          <div class="csm"><strong>2</strong><span>artifacts</span></div>
+          <div class="csm"><strong>1.2 KB</strong><span>changed bytes</span></div>
+        </div>
+
+        <div class="trunc-banner">
+          <span>ℹ️</span>
+          <span>本示例在<b>界内</b>（未截断）。若改动文件数 / 字节 / diff 大小超过 <span class="k">WORKING_COPY_MAX_*</span>，评审会显式标 <b>partial（truncated）</b> —— 缺失<b>不等于</b>不存在，绝不静默给一份看似完整的 diff。</span>
+        </div>
+
+        <div class="review-grid">
+          <div class="card filelist">
+            <div class="fl-group">Added</div>
+            <label class="flrow sel"><input type="checkbox" checked /><span class="badge a">A</span><span class="fp">src/billing/validators.py</span><span class="sz">0.4 KB</span></label>
+            <div class="fl-group">Modified</div>
+            <label class="flrow sel"><input type="checkbox" checked /><span class="badge m">M</span><span class="fp">src/billing/invoice.py</span><span class="sz">0.8 KB</span></label>
+            <div class="fl-group">Deleted</div>
+            <label class="flrow"><input type="checkbox" /><span class="badge d">D</span><span class="fp">src/billing/legacy_check.py</span><span class="sz">—</span></label>
+            <div class="fl-group">二进制 / 超大</div>
+            <label class="flrow"><input type="checkbox" /><span class="badge m">M</span><span class="fp">assets/logo.png</span><span class="sz">bin</span></label>
+          </div>
+
+          <div>
+            <div class="diffwrap">
+              <div class="diffhead">
+                <span>src/billing/invoice.py</span>
+                <span class="pill mod" style="color:var(--mod);background:var(--mod-soft);">modified</span>
+              </div>
+              <pre class="diff"><span class="ln hunk">@@ -12,6 +12,9 @@ def create_invoice(amount, customer):</span><span class="ln">     inv = Invoice(customer=customer)</span><span class="ln add">+    if amount &lt; 0:</span><span class="ln add">+        raise ValueError("amount must be non-negative")</span><span class="ln add">+</span><span class="ln">     inv.amount = amount</span><span class="ln del">-    inv.checked = legacy_check(inv)</span><span class="ln add">+    inv.checked = validate_invoice(inv)</span><span class="ln">     return inv</span></pre>
+            </div>
+            <div class="diffwrap" style="margin-top:12px;">
+              <div class="diffhead">
+                <span>assets/logo.png</span>
+                <span class="pill neutral">binary</span>
+              </div>
+              <div class="binnote">二进制文件不内联 diff —— 仅显示大小变化，可下载对比。</div>
+            </div>
+
+            <div class="card" style="margin-top:14px;">
+              <div class="panel" style="padding-bottom:2px;"><h3 style="margin-bottom:4px;">Artifacts（run 产物 · 默认 ephemeral · 仅 Keep/Export 计配额）</h3></div>
+              <div class="art">
+                <span class="aic" style="background:var(--blue);">LOG</span>
+                <span><span class="an">pytest-report.txt</span><br /><span class="am">2 passed · 0.31s · 0.6 KB · ephemeral</span></span>
+                <span class="aa"><button class="btn sm" onclick="return false;">Keep</button><button class="btn sm" onclick="return false;">Export → Drive</button></span>
+              </div>
+              <div class="art">
+                <span class="aic" style="background:var(--brand);">OUT</span>
+                <span><span class="an">coverage.xml</span><br /><span class="am">生成文件 · 12 KB · ephemeral（不计配额直到 Keep）</span></span>
+                <span class="aa"><button class="btn sm" onclick="return false;">Keep</button><button class="btn sm" onclick="return false;">Export → Drive</button></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="actionbar">
+          <span class="sel-note">已选 <b>2 / 3</b> 处变更（<span class="mono">legacy_check.py</span> 未选，留在工作副本供后续 turn）</span>
+          <span class="grow"></span>
+          <button class="btn danger" onclick="return false;">Discard</button>
+          <button class="btn" onclick="return false;">Save + checkpoint…</button>
+          <button class="btn primary" onclick="return false;">Save selected</button>
+        </div>
+        <p class="side-note" style="margin-top:12px;">
+          <b>Save 是人工评审决定，不给 agent。</b> Save selected 应用被选子集 → 建<b>新不可变快照</b>（<span class="inl">reason='save'</span>）并原子推进 head + 自增 <span class="inl">head_generation</span>；Save + checkpoint 再 pin 命名快照。Discard 删 overlay/暂存字节、释放预留，head 与 base <b>逐字节相同</b>。
+        </p>
+      </section>
+
+      <!-- ============ VIEW 3 · CONFLICT ============ -->
+      <section class="view" id="v-conflict">
+        <div class="conflict-banner">
+          <span class="ci">⚠️</span>
+          <span>
+            <strong>无法保存：Project head 已移动（<span class="mono">409 head_moved</span>）。</strong><br />
+            你的工作副本基于 <span class="mono">snap_9c…41</span>，但另一个 Chat 已把 head 推进到 <span class="mono">snap_b7…08</span>。Save 是对 <span class="inl">(current_snapshot_id, head_generation)</span> 的 compare-and-set —— head 变了就<b>什么都不应用</b>，绝不对错误 base 覆盖。请重新评审一份 rebase 后的 change set。
+          </span>
+        </div>
+
+        <div class="cmp">
+          <div class="box base">
+            <h4>你的工作副本 base</h4>
+            <div class="oid">snapshot: snap_9c…41</div>
+            <div class="oid" style="color:var(--muted);margin-top:4px;">head_generation: 12</div>
+            <p style="font-size:12.5px;color:var(--muted);margin:8px 0 0;">overlay: 2 files · 1.2 KB（未丢失，安全保留）</p>
+          </div>
+          <div class="box now">
+            <h4>当前 Project head</h4>
+            <div class="oid">snapshot: snap_b7…08</div>
+            <div class="oid" style="color:var(--muted);margin-top:4px;">head_generation: 13</div>
+            <p style="font-size:12.5px;color:var(--muted);margin:8px 0 0;">由 “docs-chat” 会话于 3 分钟前 Save 推进。</p>
+          </div>
+        </div>
+
+        <div class="actionbar">
+          <span class="sel-note">你的改动<b>不会丢</b> —— 仍在工作副本 overlay 里，可在新 base 上重评审。</span>
+          <span class="grow"></span>
+          <button class="btn danger" onclick="return false;">Discard 我的改动</button>
+          <button class="btn primary" onclick="return false;">在新 head 上重评审（rebase）</button>
+        </div>
+
+        <p class="side-note" style="margin-top:14px;">
+          <b>single-writer lease + fence。</b> 一个工作副本一个活动写者租约；每个执行盖单调 <span class="inl">fence_token</span>。stale 沙箱（fence 落后）<b>绝不能发布 overlay</b>，即使重投递让其租约看似 live。同一 Project 的多个 Chat 得到<b>互相隔离</b>的工作副本，彼此看不到也改不到对方的 pending 态。
+        </p>
+      </section>
+
+      <!-- ============ VIEW 4 · ARCHITECTURE / DURABILITY ============ -->
+      <section class="view" id="v-arch">
+        <div class="head-row">
+          <div>
+            <div class="eyebrow">真相源层级 · 隔离边界</div>
+            <div style="font-size:13px;color:var(--muted);margin-top:2px;">系统维护的是<b>任务工作副本</b>，不是某个容器。</div>
+          </div>
+        </div>
+
+        <ul class="hier">
+          <li><span class="tier t0">1</span><span><span class="lbl">Project head 快照</span><br /><span class="desc">持久 · 已保存 · 用户可见的<b>真相源</b>（Postgres + 不可变去重 blob）</span></span><span class="pill ok auth"><i></i>authoritative</span></li>
+          <li><span class="tier t1">2</span><span><span class="lbl">任务工作副本 overlay</span><br /><span class="desc">durable pending 态 · <b>跨 chat turn 的持久任务态</b>（overlay 表 + blob 引用）</span></span><span class="pill ok auth"><i></i>authoritative</span></li>
+          <li><span class="tier t2">3</span><span><span class="lbl">Scratch 卷</span><br /><span class="desc">节点本地一次性拷贝 · 每次执行物化 · 随时可丢/可重建</span></span><span class="pill neutral auth"><i></i>rebuildable cache</span></li>
+          <li><span class="tier t3">4</span><span><span class="lbl">Sandbox 容器</span><br /><span class="desc">短 TTL 进程边界 · 可选热态 · 随时可杀 · 对正确性/恢复从不必需</span></span><span class="pill warn auth"><i></i>ephemeral</span></li>
+        </ul>
+
+        <div class="review-grid even">
+          <div class="card panel">
+            <h3>沙箱挂载边界（ADR-039 / 修订版 ADR-025）</h3>
+            <ul class="mount-list">
+              <li><span class="yes">仅挂</span>：一份一次性 scratch 拷贝（RW · <span class="inl">nosuid,nodev</span>）</li>
+              <li><span class="no">绝不挂</span>：Project 快照 / <span class="inl">storage_blobs</span>·MinIO</li>
+              <li><span class="no">绝不挂</span>：其它 Project / 工作副本 / Drive</li>
+              <li><span class="no">绝不挂</span>：<span class="inl">WORKSPACE_ROOT</span> / <span class="inl">TOOL_OUTPUT_ROOT</span> / 溢出路径</li>
+              <li><span class="no">绝不注入</span>：任何 model / provider / storage / GitHub / KEK 凭据</li>
+              <li><span class="no">绝不接触</span>：<span class="inl">docker.sock</span>（只在可信编排进程）</li>
+            </ul>
+            <div class="side-note"><b>保留全部 ADR-025 硬化</b>：断网 · <span class="inl">cap_drop ALL</span> · <span class="inl">no-new-privileges</span> · 非 root · 只读 rootfs + tmpfs · mem/pids/cpu/墙钟上限 · <span class="inl">--rm</span>。拷贝前剔除/断言无凭据；编排 <span class="inl">finally</span> 原子清理 + 启动扫除孤儿 scratch。</div>
+          </div>
+
+          <div class="card panel">
+            <h3>幂等 · 恢复</h3>
+            <dl class="kv">
+              <dt>沙箱执行</dt><dd>无对外副作用 → 该 run <b>无 effect_unknown</b>；丢失只触发重物化续跑</dd>
+              <dt>唯一持久副作用</dt><dd>fence 守护的 overlay/change-set 持久（内容寻址去重 → 幂等）</dd>
+              <dt>Save</dt><dd>head_generation <b>CAS</b>；head 移动即 conflict 不应用；重放已应用 = no-op</dd>
+              <dt>缺依赖</dt><dd>显式 <span class="inl">environment_missing_dependencies</span>（不联网装包）</dd>
+              <dt>凭据</dt><dd>绝不进 scratch/overlay/change-set/artifact/快照/journal/日志</dd>
+            </dl>
+            <div class="callout">
+              <b>禁止上线条件（ADR-039）</b>：本 scratch 挂载<b>仅在自托管单用户</b>可接受（推荐补 rootless Docker + patched runc）。<b>多用户 / 真不可信第三方代码前必须先做</b>：gVisor(<span class="inl">runsc</span>) 或 microVM(Kata/Firecracker) + 不共享 <span class="inl">docker.sock</span> + 每租户 scratch/出口/配额隔离 + 威胁评审。未实施的缓解<b>绝不写成已安全</b>。
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <p class="foot-note">
+        静态设计稿 · Sherpa Quiet Work 设计系统 · ADR-040（产品/数据/工具/生命周期）+ ADR-039（隔离安全架构）+ ADR-025 正式修订。
+        SPA 路由复用 <span class="mono">/work/projects</span>（W3 生产导航<b>未暴露</b>）。契约见 <span class="mono">docs/contracts/</span>（data-model §Projects W3 · api §10.7 · events §2.11 · config §1.7）。
+        桌面 1280px + 移动 390px 均无横向滚动。<b>本稿未实现</b>：working copy / sandbox / change review 生产代码待负责人审核后开始。
+      </p>
+    </main>
+  </body>
+</html>

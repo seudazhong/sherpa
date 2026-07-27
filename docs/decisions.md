@@ -21,6 +21,10 @@
 | 2026-07-22 | QQ 用官方平台还是 OneBot | ✅ **改用腾讯官方 api-v2（qq-botpy / WebSocket），弃用 OneBot**（自建 bridge + 非官方登录，封号/合规风险）；复用现有入站管线+审批基座；配置进复活的 Connectors 页 | 新增 ADR-028（**部分取代 ADR-026**）|
 | 2026-07-23 | 记忆机制重构 + embedding 用自带 ollama | ✅ **分层记忆**（核心 blocks + 自动形成语义层 + 会话搜索情景层）+ **确定性 ADD/UPDATE/INVALIDATE/NOOP 写合并** + **双时态软失效** + **缓存稳定注入**；embedding 走**自带 ollama**(bge-m3 1024d)，与聊天 provider 解耦 | 新增 ADR-032（扩展 ADR-004、修订 ADR-012；源自 R-MEMORY）|
 | 2026-07-23 | Agent 可观测性 + 是否用 OpenTelemetry | ✅ 用 **OTel `gen_ai` span** 作 ADR-016 日志之上的**薄诊断层**（日志仍真相源；内容默认不采集；`InMemorySpanExporter` 确定性测试）；后端首选自托管 **Phoenix**（复用现有 Postgres），**修订 docs/07 的 Langfuse 默认**；补上 STATUS item0 的 LLM 调用级观测 | 新增 ADR-033（源自 R-OBSERVABILITY）|
+| 2026-07-27 | Workspace 产品模型 + Projects 上线顺序 | ✅ **Workspace 为总入口**，Projects 与 Drive 并列；实现顺序 **W2a→W2b→W3→W4**；**W2a=空/模板/归档导入（不含 GitHub）**，GitHub 一次性导入放 W2b；W3 沙箱**仅挂一次性 scratch 副本**、绝不挂项目真相源，且 ADR-025 正式修订在 W3 开始前经隔离评审后进行；W3 前先加固 docker.sock/多用户隔离。本批次**只做契约与设计先行**（不写生产代码/迁移/不暴露 Projects 导航） | 新增 ADR-037（延伸 ADR-030；源自 R-WORKSPACE-PRODUCT）|
+| 2026-07-27 | Projects W2b = GitHub 一次性导入的契约与设计先行 | ✅ **一次性导入**（选 repo + ref：**branch/tag/commit 三者皆首版**，先 ref→OID 解析并**钉住 OID**）→ **有界归档获取**（GitHub `tarball/{ref}` 只含内容、无 git 历史，复用 W2a 内存安全解压器，**不用 git clone/不落 .git**）→ 记录 source repo/ref/OID provenance → 物化为不可变初始快照；**导入后项目独立存活、远端非权威源**。凭据 = **AEAD vault 内的 GitHub connection**（首版 fine-grained PAT `contents:read`，`auth_kind` 可扩展到 GitHub App 安装令牌），**绝不进树/快照/prompt/日志/工具结果/沙箱**。只读拉取**幂等**、无 `effect_unknown` 远端对账（那是 W4 push）。GitHub 导入**不给 agent**（人工，跨凭据+不可信外部内容边界）。**本批次只做契约与设计先行**（无生产代码/迁移/不暴露 W2b 导航） | 新增 ADR-038（延伸 ADR-037；复用 ADR-019/030；源自 R-WORKSPACE-PRODUCT §9）|
+| 2026-07-27 | W3 前置：沙箱隔离安全评审（docker.sock/多用户威胁模型 + 隔离方案选型） | ✅ **独立安全评审结论**：worker 挂 `docker.sock` ≈ 宿主 root（OWASP Rule#1；只读挂载无用）；当前「socket 只给可信编排进程、不可信代码只在派生容器、容器绝不碰 socket」的**专用 sandbox 编排**模式正确、须保持。W3 首版**仅**给沙箱加**一个一次性 scratch 只读拷贝的 RW 挂载**（`nosuid,nodev` + 拷贝前剔除/断言无凭据 + 路径校验 + 编排方原子清理 + 孤儿扫除），保留全部 ADR-025 硬化，且**只在自托管单用户**可接受（推荐补 rootless Docker + patched runc）。**明确禁止上线条件（多用户/真不可信第三方代码前必须先做）**：gVisor(`runsc`) 或 microVM(Kata/Firecracker) 运行时 + 不共享 docker.sock/每租户 scratch 隔离 + 租户级出口策略 + 聚合配额 + 威胁评审——未实施的缓解**绝不写成已安全**。socket-proxy 对本编排角色是**假安全**（需放行 create/exec 即等于放行逃逸），不采用 | 新增 ADR-039（落地 ADR-037 §决策4 前置硬门；证据见 R-WORKSPACE-PRODUCT + 独立评审）|
+| 2026-07-27 | W3 = Project Chat 任务工作副本 + 一次性 scratch 沙箱 + 变更评审的契约与设计先行 | ✅ 首条变更动作**惰性开**跨 turn **持久任务工作副本**（base=当前 head 快照）；**真相源 = Sherpa 快照 head**，工作副本 overlay 是**持久任务态**，scratch 卷/热容器是**可丢缓存**；每次执行**物化一次性 scratch 拷贝**、有界批次后**持久化 overlay**；**Change Review** 展示 added/modified/deleted + artifacts；用户 **Save selected / Save+checkpoint / Discard**（**Save 不给 agent**，人工评审闸）；head 移动 → **stale Save 用 head_generation CAS 拒绝**（`conflicted`，须重评审 rebase）；**single-writer lease + fence**（stale fence 不能发布 overlay）；缺依赖 → 显式 `environment_missing_dependencies`（绝不联网装包）；内置 file/edit/run/test 工具在 scratch 上工作，**不嵌 coding agent**；**不做 git init/history/commit/branch、不做 GitHub sync/push/PR（W4）**。**ADR-025 正式修订**为「仅挂一次性 scratch，永不挂真相源」（受 ADR-039 门控）。**本批次只做契约与设计先行**（无生产代码/迁移/无真实挂载/不暴露 W3 导航） | 新增 ADR-040（延伸 ADR-037/ADR-030；复用 ADR-016/017/023/015/009/019；**正式修订 ADR-025**；受 ADR-039 门控；源自 R-WORKSPACE-PRODUCT §10）|
 
 ---
 
@@ -185,6 +189,12 @@
   - **已记录的信任让步**：worker 挂载 `docker.sock` ≈ 对宿主的 root 等价访问。仅在**自托管、单用户** v1 可接受；**生产/多用户前**须换 gVisor/Firecracker、rootless Docker 或 socket-proxy（后续里程碑）。
 - **排除（后置）**：workspace 文件挂载进沙箱、gVisor/Firecracker、跨-run 聚合配额（当前每 run 上限）、多语言（v1 仅 Python）。
 - **来源**：ADR-007；roadmap 里程碑3 前置（中立执行契约 + 隔离 + 出口策略 + 聚合配额 + 威胁评审）。
+
+> **正式修订（2026-07-27，W3 前置，经 ADR-039 隔离评审后进行；落实 ADR-037 §决策3）**：把上文「**数据外泄 → 不挂 workspace/MinIO 文件（纯计算）**」与「**排除：workspace 文件挂载进沙箱**」两条**收窄修订为**——
+> - **允许且仅允许挂载一次性 scratch 副本，永不挂载真相源。** W3 起沙箱可 RW 挂载**一份一次性、节点本地、可丢弃的 scratch 拷贝**（`project` 工作副本物化出来的），**绝不**挂载 Sherpa 快照 / `storage_blobs`/MinIO 对象存储 / 其它 project 或工作副本 / Drive / `WORKSPACE_ROOT` / `TOOL_OUTPUT_ROOT` / 任何凭据。真相源（`project_snapshots` head + 工作副本 overlay）**永不被 RW 挂载**（OpenHands「任何 RW 挂载都可被 agent 修改」→ 只挂可丢副本）。
+> - **保留全部既有硬化不变**：`network_disabled`、`cap_drop=ALL`、`no-new-privileges`、非 root、只读 rootfs + tmpfs、mem/pids/cpu/墙钟上限、`--rm`、**无任何密钥注入**。scratch 挂载额外加 `nosuid,nodev`；编排方在**拷贝前剔除/断言无凭据**、校验 scratch 源路径、`finally` 原子清理 + 启动扫除孤儿 scratch。
+> - **信任让步与门控不变**：worker 挂 `docker.sock` ≈ 宿主 root（OWASP Docker Cheat Sheet Rule#1；**只读挂 socket 无用**）——引入「用项目字节喂容器」后风险上升，故该修订**仅在自托管、单用户**下生效（推荐补 **rootless Docker** + **patched runc ≥1.1.12**，CVE-2024-21626）。**多用户 / 真不可信第三方代码的禁止上线条件见 [ADR-039](#adr-039)**（须 gVisor/`runsc` 或 microVM + 不共享 socket + 每租户 scratch/出口/配额隔离 + 威胁评审）。**socket-proxy 对本编排角色是假安全**（需放行 `containers/create`/`exec` 即等于放行逃逸），不采用。
+> - 本条修订的完整威胁模型、方案比较与禁止上线条件在 [ADR-039](#adr-039)；W3 产品/数据/生命周期在 [ADR-040](#adr-040)。**本批次只修订本 ADR 正文的挂载口径 + 新增 ADR-039/040 + 契约增量，不落地任何生产代码/迁移/真实挂载。**
 
 ### ADR-026 · QQ / IM 入站通道 + IM 审批渲染器（落地 roadmap 里程碑4）
 - **决策（2026-07-22）**：以**通道适配器**形态接入 IM，首个后端为自托管的 **OneBot v11 / aiocqhttp** HTTP API（go-cqhttp / Lagrange / AstrBot）。入站与 Web 提示**同源**：`POST /channels/qq/webhook` 收事件 → **复用 `admit_prompt`** 持久化后再调模型 → worker 跑同一有界循环 → 出站 `send_private_msg` 回推最终 assistant 文本。IM 线程**直接映射到既有 `sessions`**（`channel='qq'` + `external_scope_id=<qq user id>`，`umo_key=qq:<inst>:<uid>`）——**不新增表、不改冻结契约**；`run_kind` 仍用 `web_chat`（`runs` CHECK 不动，session.channel 才是判别键）。
@@ -441,3 +451,182 @@
 - **验收关键**：加一个 Drive 文件为来源→看到诚实的索引阶段与有界失败原因→检索看到带 源/页/标题 的摘录→chat 里 `search_knowledge` 作答并给**可点回原文精确位置**的引用；覆盖文件→源转 `stale` 可重建到新版本而不暴露半成品索引；删来源→即时消失且派生行持久清除；中文精确词命中**词法分支**；无依据**显式**说明；每表带 `tenant_id` + 复合键。契约**先于代码**（本 ADR 同批）。
 
 - **来源**：R-KNOWLEDGE-BASE 调研 [`research/knowledge-base.md`](research/knowledge-base.md)（OpenAI file search · Anthropic Contextual Retrieval · Open WebUI · Dify · pgvector/PostgreSQL）；用户输入「用zhparser吧，其他4个问题按你的建议来。开始起草，然后我想先看看静态UI什么样」「ok，我对UI也没太大问题」。
+
+### ADR-037 · Workspace 产品模型 + Projects 上线顺序（W2a→W2b→W3→W4）——落地 W2a「空/模板/归档项目」的契约与设计先行（延伸 ADR-030；源自 R-WORKSPACE-PRODUCT）
+
+> **状态：方向已由负责人拍板（2026-07-27）；本批次先契约后代码——只写 ADR + 冻结契约增量（data-model/api/events/config）+ 能力矩阵行 + W2a 静态 UI 稿，不写业务代码、不做迁移、不暴露生产 Projects 导航（AGENTS.md §1/§2）。** 完整调研见 [`research/workspace-product-report.md`](research/workspace-product-report.md)；研究态未来全景静态稿见 [`research/workspace-product-prototype/index.html`](research/workspace-product-prototype/index.html)；本批 W2a 生产设计系统静态稿见 [`design-workspace/index.html`](design-workspace/index.html)。
+
+- **背景（为何要、承接谁）**：ADR-030（Personal Drive / W1）已把扁平 Files 升级为 Drive，并**有意不暴露 Projects 导航、不把 Drive 挂进 sandbox、不做 GitHub 同步**（那些是 W2/W3/W4）。R-WORKSPACE-PRODUCT 调研确立了完整词汇与信息架构（Workspace 为所有权/配额umbrella；Drive=通用私有文件；Project=可开发的持久状态，带文件树/快照/活动/可选源绑定/沙箱动作；Sandbox=一次性执行层；Project Chat=不可变绑定一个 Project 的会话）。负责人现批准**分四步落地 Projects**，并要求**先做契约与设计先行**，W2a 的实现待本批评审通过后再开始。
+
+- **决策（负责人拍板 2026-07-27，5 条）**：
+  1. **Workspace 是总入口**；其下 **Projects 与 Drive 并列**为两个不同的产品名词（Drive 面向文件管理；Projects 增加源/快照/活动/执行语义）。SPA 未来路由 `/work`、`/work/projects`、`/work/drive`（避开 REST 前缀 `/projects`、`/drive`、`/storage`）。**W2a 阶段生产导航仍不暴露 Projects 项**——只落契约 + 静态稿。
+  2. **实现顺序固定为 W2a → W2b → W3 → W4**，逐步交付、每步独立评审：
+     - **W2a**（本 ADR 契约化）= **空项目 / 模板 / 归档导入**三条创建路径 + Projects 库 + Project 详情（文件树/活动/存储/快照）+ **Open in Chat**（创建一个**不可变绑定**该 Project 的会话，`sessions.project_id`）。**W2a 明确不含 GitHub**。
+     - **W2b** = **GitHub 一次性分支导入**（浅拉取分支头 → 初始快照 + 记录稳定 repo id/branch/source OID；不保留全量远程历史、不后台合并/推送）。**GitHub 一次性导入放 W2b**。需**后续 ADR**（`project_sources` 契约 + GitHub App 凭据边界）。
+     - **W3** = **Project Chat 任务工作副本 + sandbox 变更评审**。**W3 允许且仅允许 Sandbox 挂载一次性 scratch 副本，绝不挂载项目真相源**；持久权威=`project head snapshot` + 任务工作副本 overlay，scratch 卷/热容器都是可重建缓存。需**后续 ADR**（`project_working_copies`/`project_change_sets`/`project_artifacts` 契约）。
+     - **W4** = **GitHub 同步 + 对外写**（后台 fetch 只更新状态；apply/merge 显式；push/建远程分支/建 PR 走 ADR-020 审批信封、带期望远程 OID、首版不 force push）。需**后续 ADR**。
+  3. **W3 的 ADR-025 修订受隔离评审门控**：W3 会**有意 supersede ADR-025 现在的「不挂 workspace 卷」排除项**——但**仅**放开「挂一次性 scratch 副本」这一点，同时保留 ADR-025 的断网/掉权/非 root/只读 rootfs/资源+时间上限。**ADR-025 的正式修订必须在 W3 开始前、经一次隔离的安全评审后进行**，不在本批次内改 ADR-025 正文。
+  4. **W3 前置硬门**：在 W3 动工前，**必须先评审并加固 `docker.sock` 挂载 + 多用户隔离边界**。当前单用户自托管下 worker 挂 `docker.sock`（ADR-025 记录的信任让步）在引入「用项目字节喂容器」后风险上升（容器逃逸=宿主 root、跨会话/跨用户 scratch 串扰）。这是 W3 的进入条件，不是 W3 内的一个任务。
+  5. **本批次=契约与设计先行**：**只**写 ADR-037 + 冻结契约增量（data-model/api/events/config）+ 能力矩阵行（Projects UI 仍 ⬜）+ W2a 生产设计系统静态稿。**不**写生产后端/前端代码、**不**做迁移、**不**暴露生产 Projects 导航。研究建议不得写成已实现能力。
+
+- **数据模型（W2a；canonical 与派生分离；名义命名，见 data-model 契约）**：
+  - `projects`（用户可见的持久开发状态：name/description/owner/status、`current_snapshot_id`、`default_branch_label`、`source_status`（W2a 恒 `unbound`）、存储 rollup、`last_activity_at`）。
+  - `project_snapshots`（**不可变**、父链接的快照，`reason ∈ import|save|checkpoint|sync`；W2a 只产生 `import`（blank/template/archive 的初始快照）；带 manifest/tree 引用、size rollup、pinned 状态；源 OID 留给 W2b）。
+  - `project_snapshot_entries`（快照内条目：归一化 path、entry kind、**blob 引用**（复用 ADR-030 `storage_blobs` 不可变去重字节）、可执行位、受限安全相对 symlink；后续可用紧凑 manifest/tree 表示替换该投影而不改 Project 语义）。
+  - `sessions.project_id`（**契约扩展**）：可空，`null`=General chat；**首条已 admit 的用户消息后不可变**；建会话时与每次 Project 操作都校验 Project 归属；换 Project = **新建会话**，绝不原地改 transcript/工具上下文。
+  - **W2a 明确不建的表**（留后续 ADR）：`project_sources`（W2b）、`project_working_copies`/`project_change_sets`/`project_artifacts`（W3）。均带 `tenant_id`+复合键（ADR-015 前向兼容）。
+
+- **存储真相源（复用 ADR-030/ADR-012）**：Postgres 存 project 元数据/快照/条目/存储 rollup；快照条目指向 **ADR-030 的不可变、内容寻址、引用计数 `storage_blobs`**（同一未变字节多快照共享、不翻倍计费；配额记账复用 Drive 的「每 owner 每不同 durable blob 计一次」规则）；MinIO 存字节；**不引入独立 Git 存储**（被否的 Option 2）。归档导入在**隔离 staging**中安全解压（有界大小/文件数/膨胀比/嵌套深度/时限；拒绝绝对/穿越路径、设备、FIFO、硬链接、逃逸 symlink），验证后才进初始快照。
+
+- **能力面（ADR-023 单能力层 + 薄 REST/Tool 双适配）**：service `services/projects.py`（`list/create/get/tree/open_in_chat`；W2a 只读+自有幂等写）。**REST**（见 api §10.5）：`GET/POST /projects`、`POST /projects/imports`（模板/归档；GitHub 留 W2b 返回 `not_implemented`）、`GET /projects/{id}`、`GET /projects/{id}/tree`、`POST /projects/{id}/chats`（建 Project 绑定会话）、`GET /sessions/{id}/project-context`。**Tool（W2a）**：`project_list`/`project_create`/`project_tree`/`project_read`（只读或自有幂等写→allow）。**W2a 不给 agent** 的工具：无破坏性 purge、无 `project_run`（W3）、无 `project_push`（W4）。**UI**：SPA 路由 `/work/projects`——**W2a 只交付静态稿，生产导航不暴露、能力矩阵 UI 列保持 ⬜**。
+
+- **事件/幂等/outbox（复用 ADR-016/017）**：项目创建/导入/快照发一条 `project.lifecycle` 事件（stage：`created|import_staged|snapshot_activated|failed`，带 `project_id`/`snapshot_id`/具名 `termination_reason`）；归档导入是**durable job**（认领→隔离 staging 解压校验→建初始不可变快照→原子激活 `current_snapshot_id`）——同事务写 outbox/恢复记录，至少一次、幂等键=`(project_id, import_idempotency_key)`，worker 崩溃/重放不产生半成品或重复项目。失败保留无快照的 `failed` project（可见、可删），绝不激活错误字节。文档正文/文件字节**不进** append-only journal（journal 只存引用+有界元数据）。
+
+- **安全边界（守 ADR-009/019/021）**：路径/名字归一化 + 拒绝绝对/`..`/NUL/设备/保留名 + 深度/长度/兄弟数上限；上传/归档不信任扩展名或 client Content-Type、服务端生成对象键、隔离 staging 解压、有界解压、扫描接口 `pending|clean|rejected|unavailable`；**Project 源凭据（W2b+）永远留在 vault/connector 边界，绝不进 Project 树/快照/sandbox/prompt/日志/工具结果**；**W2a 不涉及沙箱**（Open in Chat 只读/讨论 Project，不建工作副本、不挂 sandbox——那是 W3）。
+
+- **W2b/W3/W4 非目标与后续 ADR 边界（明确不做）**：
+  - **W2a 不做**：GitHub 导入/源绑定（W2b）；任务工作副本/sandbox 变更评审/`project_run`（W3）；GitHub 同步/push/PR/对外写（W4）；生产 Projects 导航暴露；后台合并、force push、submodule、Git LFS、多 remote、全历史镜像、网络化开发环境、依赖安装策略、prebuild、live preview、团队/共享 Drive、内嵌 coding-agent 执行器（均 later）。
+  - **后续每步各带自己的 ADR + 契约先行**：W2b（`project_sources` + GitHub App 凭据边界）、W3（`project_working_copies`/`project_change_sets`/`project_artifacts` + **ADR-025 修订** + docker.sock/多用户隔离加固评审）、W4（对外 Git 写 + ADR-020 审批集成）。
+
+- **取代/延伸关系**：**延伸 ADR-030**（Workspace 从「只有 Drive」扩为「Projects + Drive 并列」，Projects 快照复用 ADR-030 的不可变去重 blob 与配额记账）；**复用** ADR-012 存储选型（不引独立 Git/向量库）、ADR-023 能力层双适配、ADR-016/017 journal+outbox 真相源与 effect 语义、ADR-015 租户键、ADR-009/019/021 不可信内容/密钥/审计边界。**预告将修订 ADR-025**（W3 放开「一次性 scratch 副本」挂载，但正式修订在 W3 开始前经隔离评审）。**不改**任何既有 ADR 正文（本批只新增 ADR-037 + 契约增量）。
+
+- **实现说明（W2a 落地，2026-07-27，本 ADR 的实现修订）**：迁移 `0028` 建 `projects`/`project_snapshots`/`project_snapshot_entries` + `sessions.project_id`，并新增**运维基础设施表 `project_import_jobs`**——这是 events §2.9「durable job（outbox + lease）」在实现层的落地：项目生命周期**非 run 作用域**，冻结的 `event_journal`（run_id NOT NULL）不适用，故用该 job 的 `stage`/`termination_reason` + 显式 enqueue + 恢复 tick（对齐 `knowledge_ingestion_job`）给出同等持久保证；文件字节只进 ADR-030 `storage_blobs`（与 Drive 共享去重/引用计数/配额，Drive 的 blob 引用计数与孤儿清扫已扩展为兼顾项目引用与 `project-import/` staging 前缀）。归档在**有界内存**中解压（不落盘，杜绝路径/symlink 攻击），拒绝绝对/穿越/设备/FIFO/硬链接/逃逸 symlink 并强制 `PROJECT_MAX_*`。`ProjectSummary` 增补派生 `import_status`/`import_failure_reason`（`status` 仍恒 active/archived/deleting），另加只读 `GET /projects/templates`、`GET /projects/{id}/snapshots` 支撑 UI。`project_snapshot_entries` 的 NUL CHECK 移除（Postgres text 本就禁止 NUL）。生产 Projects 导航与 `/work/projects` 页面本阶段**已交付**，能力矩阵 UI 列转 ✅。
+
+- **验收关键（本契约先行批次）**：ADR-037 被接受；data-model 有 `projects`/`project_snapshots`/`project_snapshot_entries` + `sessions.project_id` 不可变绑定（canonical vs 派生清晰、快照不可变、每表 `tenant_id`+复合键）；api 有 §10.5 Projects REST + schema；events 有项目生命周期事件 + 幂等/outbox；config 有 `PROJECT_*` + 安全边界；能力矩阵有 Projects 行且 **UI 列 ⬜**；W2a 静态稿（Projects 列表/新建/详情/Open in Chat）落在生产 Quiet Work 设计系统、桌面与 390px 均合理；**无生产代码/迁移/导航暴露**；W2b/W3/W4 非目标与后续 ADR 边界写清。契约**先于代码**（本 ADR 同批）。
+
+- **来源**：R-WORKSPACE-PRODUCT 调研 [`research/workspace-product-report.md`](research/workspace-product-report.md)（Google Drive · Dropbox · OneDrive · Notion · GitHub Codespaces · Replit · Gitpod/Ona · Devin · OpenAI Codex · Firebase Studio）；负责人输入「批准 Workspace 建议，执行第一阶段：顺序 W2a→W2b→W3→W4；Workspace 总入口、Projects 与 Drive 并列；W2a 仅空/模板/归档导入不含 GitHub，GitHub 一次性导入放 W2b；W3 仅挂一次性 scratch 副本、绝不挂真相源、ADR-025 修订在 W3 前经隔离评审；W3 前先加固 docker.sock/多用户隔离；本阶段只做契约与设计先行」。
+
+---
+
+### ADR-038 · Projects W2b = GitHub 一次性导入（选 repo/ref + 有界归档获取 + 记录 source OID + 物化不可变初始快照）——契约与设计先行（延伸 ADR-037；复用 ADR-019/030；源自 R-WORKSPACE-PRODUCT §9）
+
+> **状态：方向由负责人拍板（2026-07-27）；契约先行批次已完成，随后负责人批准 W2b **生产实现**（2026-07-27）——本 ADR 的契约增量（data-model/api §10.6/events §2.10/config §1.6）已落地为代码：migration `0029`（`github_connections`/`project_sources`/`source_status` 扩展/`project_import_jobs` github 列）+ `security/github_token.py`（AEAD）+ `services/github_source.py` + `services/projects_import.py` github 分支 + `api/connections.py` + `api/projects.py` §10.6 + 生产 `/work/projects` GitHub UI，两栈验证通过。** 完整调研见 [`research/workspace-product-report.md`](research/workspace-product-report.md) §9（Project 与 Git 语义）；W2b 生产设计系统静态稿见 [`design-workspace/github-import.html`](design-workspace/github-import.html)。
+
+- **背景（承接谁、为何要）**：ADR-037 把 Projects 分四步落地并在 §决策2 明确「**W2b = GitHub 一次性分支导入**（浅拉取分支头 → 初始快照 + 记录稳定 repo id/branch/source OID；不保留全量远程历史、不后台合并/推送），需**后续 ADR**（`project_sources` 契约 + GitHub App 凭据边界）」。W2a（空/模板/归档）已上线（migration `0028`、`/work/projects`）。本 ADR 就是 ADR-037 预告的那个「后续 ADR」，把 GitHub 一次性导入的**契约与设计**冻结下来，实现待本批评审通过再开始。
+
+- **决策（负责人方向 + 仓库研究证据收敛，2026-07-27）**：
+
+  1. **W2b 严格限定为「GitHub 一次性导入」**：选择 repository + ref → 有界获取该 ref 的**内容树**（无 git 历史）→ 记录 source repo/ref/OID provenance 元数据 → 物化为 Sherpa **不可变初始快照**（`project_snapshots.reason='import'`，`source_oid=<resolved commit OID>`）。**导入后项目独立存活**：远端**不是**权威源，Sherpa 快照才是；即便远端被改名/删除/转移/掉权，项目仍可用。
+
+  2. **首版 ref 范围 = branch + tag + commit SHA（三者皆首版）**——由仓库研究证据收敛：
+     - GitHub REST 归档端点 `GET /repos/{owner}/{repo}/tarball/{ref}`（及 `zipball`）对 **branch / tag / commit SHA** 三种 ref **统一**接受，返回该 ref 处**只含文件内容、不含 git 历史**的 gzip tar，归档根目录名 `repo-<SHA>/` 已带解析出的 commit OID（[Downloading source code archives](https://docs.github.com/en/repositories/working-with-files/using-files/downloading-source-code-archives)）。
+     - ref→OID 解析统一：`GET /repos/{owner}/{repo}/git/ref/heads/{branch}`、`.../git/ref/tags/{tag}`（[REST · Git refs](https://docs.github.com/en/rest/git/refs)）、commit SHA 用 `GET /repos/{owner}/{repo}/commits/{sha}` 校验。
+     - 因此三种 ref 的边际成本近乎为零，且都能**先解析成具体 OID 再获取并钉住**——branch/tag 导入等于钉在导入当刻的那个 commit，天然满足「远端非权威」。→ 首版即支持三者，`ref_type ∈ (branch, tag, commit)`，默认 branch（默认分支）。
+
+  3. **获取机制 = 有界归档获取（tarball），不是 `git clone`**——由证据收敛：
+     - 归档端点天然满足 ADR-037「不保留全量远程历史」，产物是一个 **tar（gzip）**——恰好可**复用 W2a 的内存内有界安全解压器**（`services/archive.py`：拒绝绝对/穿越/NUL/设备/FIFO/硬链接/逃逸 symlink，强制 `PROJECT_MAX_*` 大小/条目/膨胀比/深度）。**不引入 git 二进制/子进程、不落 `.git`、不建工作副本**（工作副本是 W3）。
+     - 相较 `git clone --depth 1`：归档路径无需在 worker 内跑 git、无需处理 packfile/`allowAnySHA1InWant`、无网络化开发环境，攻击面与运维面都更小；代价是拿不到 git 对象（submodule/LFS/历史）——这些本就都是 later（W4+）非目标。私有仓需带凭据；归档重定向 URL 短时（约 5 分钟）失效，worker 端即时跟随。
+     - 若未来需要 submodule/LFS/增量 fetch，再在 W4 引入受控 git 传输（各带 ADR），不影响本 provenance 与快照语义。
+
+  4. **凭据 = AEAD vault 内的「GitHub connection」，复用 connector/credential/approval 架构**——由证据收敛：
+     - 首版凭据 = **fine-grained PAT（`contents:read`）**：自托管单用户最低门槛（无需注册/托管 GitHub App），足以只读克隆/归档私有仓；`auth_kind` 设计为可扩展，**GitHub App 安装令牌（`contents:read`，≤8h 短时、非用户绑定）**为推荐/前向路径，加它**不需要改表**。公共仓导入可不带凭据。
+     - **凭据边界（守 ADR-019/037 §安全边界）**：GitHub token **只**存在 AEAD vault（复用 `connectors` 的 `token_enc/nonce/kek_id/key_version/token_algorithm/aad_version` 加密列形态），**只**由导入 worker 在 connector 边界内解密使用，**绝不**进入项目文件树 / 快照 / prompt / 日志 / 工具结果 / （W3）沙箱。凭据也不进 append-only journal。
+     - 复用 approval 架构：**W2b 无对外写**（无 push/PR），故导入本身不需要 ADR-020 审批信封（那是 W4）；但建立/删除 GitHub connection、以及导入一个私有仓的动作是 owner 用户级操作（Session + CSRF），不给 agent（见决策6）。
+
+  5. **持久化 / 幂等 / effect 语义（复用 ADR-016/017、承接 W2a 的 durable job）**：
+     - GitHub 导入是 **durable job**（复用 `project_import_jobs`，`create_kind='github'`）：认领（lease）→ ref→OID 解析 → 有界归档获取到隔离 staging → 安全解压校验 → 建初始不可变快照 → 原子置 `projects.current_snapshot_id` 并置 `source_status='imported'`。幂等键 `(project_id, import)`（一项目一次导入），crash/replay 不产生半成品或重复项目。失败保留无快照的 `failed`/`import_failed` 项目（可见、可删），绝不激活错误字节。
+     - **只读拉取 ⇒ 幂等，无 `effect_unknown` 远端对账**：GitHub 归档获取**不改远端**，与 W4 push 的对外写不同——失败/部分获取可安全重试（按解析出的 OID 重取 → 同一字节）。`effect_unknown`/远端 ref 对账语义属于 **W4**（push/PR），本 ADR 不引入。
+     - 事件：复用 events §2.10（延伸 §2.9 形状）`project.lifecycle`，`create_kind` 增 `github`，stage 复用 `created|import_staged|snapshot_activated|failed` + 具名 `termination_reason`（`done|source_resolve_failed|auth_required|repo_unavailable|unsafe_archive|too_large|expansion_ratio|error:...`）。文档/文件字节**不进** journal（只存引用 + 有界元数据）。
+
+  6. **能力面（ADR-023 单能力层 + 薄 REST/Tool 双适配）**：
+     - service `services/projects.py` + `services/github_source.py`（ref→OID 解析、归档获取、connection 凭据取用）。**REST**（见 api §10.6 增量）：`POST /projects/imports` 的 `kind='github'` 由 **501 改为 202**（body 带 `GithubImportSpec`：repo + ref_type + ref + 可空 connection 引用，默认取 owner 的 active connection）；失败态经 `import_status='failed'` + `source_status='import_failed'`（`projects.status` 仍恒 active）暴露，`POST /projects/{id}/imports/retry` 重跑幂等 durable job；新增只读选择端点 `GET /projects/github/repos?query=`（列出该 connection 可见仓库）与 `GET /projects/github/refs?repo_external_id=`（列出分支/标签），二者**服务端**经 connection 凭据代理 GitHub（`502` 透传上游、`409` 无 active connection），**凭据不下发前端**；GitHub connection 管理端点 `GET/POST/DELETE /connections/github`（状态含连接 id、授权、断开）。W2b 首版**要求 active connection**（无连接的公共仓直连为后续放宽）。
+     - **Tool（W2b）= 不新增 agent 写工具**：GitHub 导入**不给 agent**（人工触发，理由：跨凭据边界 + 拉取不可信外部内容；与 W2a「归档上传不给 agent」一致，也避免 agent 枚举用户私有仓的隐私面）。导入完成后 agent 用**既有** W2a 只读工具（`project_tree`/`project_read`）读取项目内容（项目文件仍是**不可信内容**，ADR-009）。**不给** agent：`project_push`（W4）、任何破坏性 purge、`project_run`（W3）。
+     - **UI**：SPA 路由复用 `/work/projects`——**W2b 只交付静态稿**，能力矩阵 UI 列保持 ⬜，**本阶段不暴露 W2b 生产入口/导航**。
+
+- **数据模型（W2b；canonical 与派生分离；名义命名，见 data-model 契约增量）**：
+  - **新增 `project_sources`（canonical，一项目一行、导入后即 provenance）**：`provider='github'`、稳定 `repo_external_id`（GitHub 数字 repo id）、`owner`/`repo` 显示名、`ref_type ∈ (branch,tag,commit)`、`ref_name`、解析出的 `source_oid`、`connection_id`（→ vault 凭据引用，**不存 token 本体**）、`imported_at`、`status`。W4 再在此表**扩展** fetch/sync 字段（`source_base_oid`/最近 remote OID/`last_fetched_at`/sync 态）——本 ADR 不建那些列。带 `tenant_id`+复合键（ADR-015）。
+  - **新增 `github_connections`（凭据记录，复用 AEAD 列形态）**：`auth_kind ∈ (pat,app_installation)`、`account_login`、可空 `installation_id`、AEAD 加密列（`token_enc/nonce/kek_id/key_version/token_algorithm/aad_version`）、`scopes`、`status`、时间戳。带 `tenant_id`+复合键。
+  - **`projects.source_status` CHECK 扩展**：W2a 恒 `unbound` → W2b 增 `importing`、`imported`、`import_failed`；更丰富的同步态（`clean/remote_ahead/local_ahead/diverged/conflicted/auth_required/remote_unavailable/sync_error`）**留 W4**。
+  - **`project_import_jobs` 扩展**：`create_kind` CHECK 增 `github`；增可空 github 列（`connection_id`、`source_ref_type`、`source_ref`、`resolved_oid`）；`termination_reason` 词表增 github 具名原因。
+  - **`project_snapshots.source_oid`**：W2a 已预留（W2b GitHub commit OID）——本 ADR 起 github 导入填该列。
+  - **W2b 明确不建的表**（留后续 ADR）：`project_working_copies`/`project_change_sets`/`project_artifacts`（W3）；W4 的对外写/同步字段。
+
+- **安全边界（守 ADR-009/019/021/037 §1.5）**：归档是**不可信输入**——隔离 staging + 有界内存解压 + 拒绝绝对/`..`/NUL/设备/FIFO/硬链接/逃逸 symlink + 强制 `PROJECT_MAX_*`（tar gzip 同样受 zip-bomb 膨胀比守卫）；服务端生成对象键，不信任 client `Content-Type`/文件名。**GitHub 凭据永远留 vault/connector 边界**，绝不进树/快照/prompt/日志/工具结果/沙箱。**W2b 不涉及沙箱**（Open in Chat 只读/讨论，工作副本+沙箱是 W3）。`source_oid` 是 provenance；远端非权威，导入后不追远端。
+
+- **W3/W4 非目标与后续 ADR 边界（W2b 明确不做）**：后台 fetch/sync、working copy、`git init/commit/branch`、merge、push、建远程分支、PR、force push、submodule、Git LFS、多 remote、全历史镜像、网络化开发环境、依赖安装、sandbox、把凭据喂进项目内容——**全部 later**。W3（工作副本 + 一次性 scratch 沙箱 + 变更评审 + **ADR-025 修订** + docker.sock/多用户隔离加固）与 W4（GitHub 同步/push/PR，走 ADR-020，带期望远程 OID、首版不 force push）各自**再带自己的 ADR + 契约先行**。
+
+- **取代/延伸关系**：**延伸 ADR-037**（把 §决策2 的 W2b 从预告落成契约）；ADR-037 §决策2 把 W2b 粗描为「浅拉取分支头」——**本 ADR 收敛并取代该处的 ref/机制细节**：首版 ref = branch **+ tag + commit**（三者），机制 = 有界**归档（tarball）获取**而非 `git clone`（先解析 OID 再钉住）。**复用** ADR-019 密钥 AEAD/KEK 边界、ADR-030 不可变去重 blob + 配额记账（GitHub 归档字节走同一 `storage_blobs`）、ADR-023 能力层双适配、ADR-016/017 journal+outbox 真相源与 durable job、ADR-015 租户键、ADR-009 不可信内容。**不改**任何既有 ADR 正文（本批只新增 ADR-038 + 契约增量）；不动 ADR-025（W3 的事）。
+
+- **验收关键（本契约先行批次）**：ADR-038 被接受；data-model 有 `project_sources` + `github_connections` + `projects.source_status` 扩展 + `project_import_jobs` github 扩展（canonical vs 派生清晰、凭据不入表本体、每表 `tenant_id`+复合键）；api §10.6 有 github 导入 202 + repo/ref 选择端点 + connection 端点 + schema；events §2.10 有 `create_kind=github` + durable job/幂等/恢复 tick + 「只读拉取无 effect_unknown」说明；config 有 `GITHUB_*` + 安全边界增补；能力矩阵有 GitHub 导入 + connection 行且 **UI 列 ⬜**；W2b 静态稿（连接状态/repo·ref 选择/导入进度/成功来源元数据/失败·重试）落在生产 Quiet Work 设计系统、桌面与 390px 均合理，且**明标设计稿、不冒充已实现**；**无生产代码/迁移/新入口暴露**；W3/W4 非目标与后续 ADR 边界写清。契约**先于代码**（本 ADR 同批）。
+
+- **来源**：R-WORKSPACE-PRODUCT 调研 [`research/workspace-product-report.md`](research/workspace-product-report.md) §9（Project 与 Git 语义：一次性导入、shallow-by-default、稳定 repo id + 期望 OID、凭据留 connector/vault 边界）；GitHub 官方文档 [Downloading source code archives](https://docs.github.com/en/repositories/working-with-files/using-files/downloading-source-code-archives)、[REST · Git refs](https://docs.github.com/en/rest/git/refs)、[Permissions required for GitHub Apps](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps)、[Fine-grained PAT 介绍](https://github.blog/security/application-security/introducing-fine-grained-personal-access-tokens-for-github/)；负责人输入「按 W2a→W2b→W3→W4 正常顺序继续，W2b 严格限定 GitHub 一次性导入，复用现有 connector/credential/approval，凭据不进 sandbox/prompt/tree/snapshot/日志，本阶段只做契约与设计先行，不写生产代码/迁移/不暴露导航」。
+
+---
+
+### ADR-039 · W3 沙箱隔离安全架构 = 一次性 scratch RW 挂载 + 保留全部硬化 + docker.sock/多用户威胁模型与禁止上线条件（W3 前置硬门；落地 ADR-037 §决策4；此门控 ADR-025 修订与 ADR-040）
+
+> **状态：负责人批准按正常顺序进入 W3 并先执行「安全评审 + ADR/契约/设计先行」（2026-07-27）。本 ADR 是 ADR-037 §决策4 预告的 W3 前置硬门——一次独立的沙箱隔离安全评审，先于任何 W3 生产实现。本批次不写生产代码/迁移/不做真实挂载/不暴露 W3 导航。** 完整证据见 [独立安全评审](#adr-039)（下述引用为一手来源）与 [`research/workspace-product-report.md`](research/workspace-product-report.md) §10–§11；产品/数据/生命周期见 [ADR-040](#adr-040)；本 ADR 门控的 ADR-025 挂载口径修订见 [ADR-025 正式修订（2026-07-27）](#adr-025)。
+
+- **背景（承接谁、为何是硬门）**：ADR-037 §决策4 规定「**W3 动工前必须先评审并加固 `docker.sock` 挂载 + 多用户隔离边界**」，§决策3 规定「**ADR-025 的正式修订必须在 W3 开始前、经一次隔离的安全评审后进行**」。W3 会让沙箱**首次挂载项目字节**（一次性 scratch 拷贝），风险相对 ADR-025 的纯计算沙箱上升。本 ADR 就是那次隔离评审：给出威胁模型、隔离方案比较、W3 首版可实施的**最小安全架构**，以及**明确的禁止上线条件**；并**不把未实施的缓解写成已安全**。
+
+- **独立安全评审结论（一手证据）**：
+  1. **`docker.sock` ≈ 宿主 root（不可回避）**：挂载 Docker socket 进容器 = 对宿主的**无限制 root**（OWASP Docker Security Cheat Sheet Rule#1）；**只读挂 socket 也无用**（同源）。逃逸只需一步：`docker run -v /:/host --privileged … chroot /host`。**当前 worker 挂 `docker.sock` 就是这个信任让步**（ADR-025 已记录）。shared-kernel runc 的内核攻击面**不可用 per-container flag 关闭**：CVE-2024-21626（"Leaky Vessels"，CVSS 8.6，2024-01）即便非 root + 掉全 caps + seccomp 仍可逃逸（缓解=runc≥1.1.12）。
+  2. **专用 sandbox 编排模式是对的、须保持**：Sherpa 已正确实现「**socket 只给可信编排进程（只跑我方代码），不可信代码只在其派生的隔离容器里、绝不接触 socket**」（`sandbox-runner`/docs 05 §sandbox socket 安全）——这与 E2B/Daytona/Judge0/OpenHands 的「orchestrator-spawns-container」一致。**关键不变量**：socket 持有进程是 TCB，任何让 agent/项目内容影响 `docker run` 参数（镜像名/卷路径/env/scratch 源路径构造）的路径都是 critical——**须把所有 container-create 参数当不可信输入校验**。
+  3. **socket-proxy 对本编排角色是假安全**：Tecnativa `docker-socket-proxy` 只按 URL 前缀过滤、不看请求体；编排必须放行 `POST /containers/create`（还常需 `exec`），而 `create` 一旦放行即可传 `{"HostConfig":{"Binds":["/:/host"],"Privileged":true}}` 完成逃逸。→ **不采用**（对只读监控消费者才有意义）。
+  4. **rootless Docker = 单用户推荐加固**：守护/编排/容器全跑进用户命名空间，容器 root 映射为非特权宿主 UID；socket 被盗/容器逃逸只得非特权用户权限（OWASP Rule#11）。**`--network none` + 资源上限在 rootless 下可用**（需 cgroup v2 + 内核≥5.11 + systemd≥244）；限制：不能加载自定义 AppArmor、无 `--network host`。它**降低 blast radius 但不消除内核攻击面**。
+  5. **gVisor（`runsc`）= 多用户实用最低标准**：用户态应用内核（Sentry）拦截**全部**应用 syscall，宿主内核只被 Sentry 以极小集合触达 → 关闭 CVE-2024-21626 一类内核逃逸；**无已知宿主逃逸 CVE**（历史仅 DoS/内部提权）；`--runtime=runsc` 逐容器 opt-in、与 `--network none` + Python/Node 兼容；代价：syscall 密集型 1.5–3× + ~200–500ms 冷启动 + 少量兼容性缺口。
+  6. **Kata/Firecracker microVM = 真不可信第三方代码必需**：硬件 VM 边界，每负载独立内核 → 跨租户内核逃逸结构性不可能；Firecracker ~125ms 启动、~5MB 开销，AWS Lambda 多租户量产参照，E2B 开源参照；代价：需 KVM/containerd、运维复杂、部分云主机嵌套虚拟化受限。
+  7. **Sysbox**：用户命名空间 + 虚拟化 `/proc`·`/sys` + 免 privileged 的 DinD——适合半可信 CI/DinD，**仍共享宿主内核**（无 VM 边界），且 Docker 收购后**非官方支持**——**不作为不可信代码的隔离层**。
+  8. **RW 挂载 = 双向通道，只挂可丢副本**：任何 RW bind mount 都可被 agent 读写/外泄（OpenHands 明确「挂进 `/workspace` 的 RW 内容都可被 agent 改」；其 `~/.ssh` 默认挂载曾致私钥暴露）。故**永不挂真相源**，只挂**一次性拷贝**；**拷贝前剔除/断言无凭据**（`.env`/`*.pem`/`*.key`/`.git/config` 凭据/SSH key），挂载加 `nosuid,nodev`，副本随容器销毁、不归档不快照。Portainer bind-mount 限制绕过（GHSA-7fw3-x4r2-g7wc，2024）证明「声明式别挂敏感路径」不足以替代**结构性隔离**。
+
+- **威胁模型**：
+  - **单用户现状（v1 自托管）**：威胁主体 = 被提示注入/被恶意项目内容驱动的 agent，或项目里的恶意代码。既有硬化把「容器内任意代码」的逃逸面压到很小（断网、非 root、掉全 caps、只读 rootfs、资源+时限、`--rm`、socket 不进容器）。W3 新增面 = **scratch 副本读到意外凭据 / 用 scratch 内 suid 提权 / scratch 残留跨 run 泄漏**——均可用「拷贝前剔除凭据 + `nosuid,nodev` + 编排原子清理」缓解。**残余风险** = CVE-2024-21626 一类 runc 内核逃逸（缓解=patched runc + 可选 rootless）；单用户下宿主即用户自己的机器，风险自担、可接受。
+  - **未来多用户 / 真不可信第三方代码**：威胁主体 = 会**主动尝试逃逸**的其它租户。shared-`docker.sock`/shared-kernel runc **结构性不安全**（一个租户的内核 0-day 危及全宿主与所有租户）——**per-container flag 不能缓解**。这是**禁止上线条件**的根据。
+
+- **隔离方案比较（威胁 / 残余风险 / 单用户运维成本 / 多用户适用性）**：
+
+  | 方案 | 缓解的威胁 | 残余风险 | 单用户运维成本 | 多用户适用性 |
+  |---|---|---|---|---|
+  | 现有基线（runc + 全硬化 flags） | 常规容器逃逸/网络/资源耗尽 | 内核逃逸（CVE-2024-21626 类）；shared-kernel | 零（已部署） | ❌ 不适用 |
+  | **W3 scratch 加固**（`nosuid,nodev` + 拷贝前剔除凭据 + 源路径校验 + 原子清理/孤儿扫除） | scratch 凭据捕获 / suid 提权 / scratch 残留 | 同上，内核面不变 | 极低（仅编排代码） | ❌ 仍不适用（未换运行时） |
+  | rootless Docker | 守护/编排/socket 被盗 → 宿主 root | 内核逃逸仍达宿主（但仅非特权 UID）；无 AppArmor | 低（一次性，内核≥5.11） | ⚠️ 更好但对抗性多租户不足 |
+  | docker-socket-proxy | 只读消费者的 API 面 | 需放行 create/exec 即无意义 | 低 | ❌ 对编排角色不适用（假安全） |
+  | **gVisor（`runsc`）** | 内核攻击面（Sentry 拦截全 syscall）；CVE-2024-21626 类 | 侧信道；syscall 密集慢；少量兼容缺口；自身 CVE 仅 DoS | 中（装 runsc + daemon.json） | ✅ 多用户+可信镜像最低标准 |
+  | **Kata + Firecracker** | 硬件 VM 隔离；跨租户内核逃逸 | 侧信道（共享硬件）；运维复杂 | 高（KVM/containerd） | ✅✅ 对抗性第三方代码必需 |
+  | Sysbox | 用户命名空间 + proc/sys 虚拟化；免特权 DinD | 仍共享宿主内核；非官方支持 | 中 | ⚠️ CI/DinD 可，不适对抗性 |
+
+- **决策**：
+  1. **W3 首版最小安全架构（自托管单用户，可实施）**：在保留 [ADR-025] 全部硬化（断网 / `cap_drop=ALL` / `no-new-privileges` / 非 root / 只读 rootfs+tmpfs / mem·pids·cpu·墙钟上限 / `--rm` / **无密钥注入**）的前提下，**只**新增「**一份一次性 scratch 只读拷贝的 RW 挂载**」，并附六条编排级控制：① 挂载 `nosuid,nodev`；② 物化 scratch **前剔除/断言无凭据**（项目字节 only，绝不写入任何 token）；③ 编排方**校验 scratch 源路径**在 `SANDBOX_SCRATCH_ROOT` 内、无穿越（把构造参数当不可信输入）；④ 沙箱**只**挂该一次性 scratch，**绝不**挂 Sherpa 快照 / `storage_blobs`/MinIO / 其它 project/工作副本 / Drive / `WORKSPACE_ROOT` / `TOOL_OUTPUT_ROOT` / socket / 凭据；⑤ 编排 `finally` 原子清理 + 启动扫除孤儿 scratch；⑥ **保持沙箱绝不接触 `docker.sock`**（TCB 只在编排进程）。**强烈推荐**同时上 **rootless Docker** + **patched runc ≥1.1.12**。
+  2. **明确禁止上线条件（多用户 / 真不可信第三方代码之前，必须先做，缺一不可上线）**：① **不共享 `docker.sock`**、跨租户不共享守护；② 不可信容器改用 **gVisor（`runsc`）或 microVM（Kata/Firecracker）** 运行时（对抗性第三方代码必须 microVM）；③ **每租户 scratch 物理隔离**（不同租户 scratch 互不可达）；④ **租户级出口策略 + SSRF 代理**（现单用户 SSRF 代理须变租户感知 + 域名白名单 + 限速）；⑤ **每租户聚合资源配额**（cgroup v2 per-tenant slice，防 DoS）；⑥ 权限引擎 `deny>ask>allow` **无跨租户策略泄漏**；⑦ **多用户 ADR 前完成威胁评审**（威胁主体 / 隔离保证 / 残余风险 / 事件响应）。
+  3. **不把未实施缓解写成已安全**：本 ADR 与所有 W3 文档**只**声称「单用户自托管下、加上上述编排控制、可接受地挂一次性 scratch」；**不**声称多用户安全、**不**声称已具备 gVisor/microVM 隔离（均为**尚未实施**的禁止上线前提）。就绪状态须在 readiness/docs 中如实报告，**绝不过度声称**。
+  4. **socket-proxy 不采用**（对本编排角色是假安全）。
+
+- **取代/延伸关系**：**门控并触发 [ADR-025] 的正式修订**（把「不挂 workspace」收窄为「仅挂一次性 scratch，永不挂真相源」，见 ADR-025 正文的 2026-07-27 修订）；**门控 [ADR-040]**（W3 产品/数据/生命周期只能在本 ADR 的隔离前提下实现）；落地 [ADR-037] §决策3/4 的两道前置；复用 [ADR-019] 密钥边界、[ADR-009] 不可信内容边界、[ADR-015] 租户键（多用户隔离的前向依据）。**不改** ADR-007/016/017/020/023 正文。
+
+- **验收关键（本评审批次）**：ADR-039 被接受；docker.sock≈宿主 root 与 shared-kernel 内核面用一手来源确证；socket-proxy/rootless/gVisor/Firecracker/Kata/Sysbox/专用 sandbox 编排逐一给出「缓解/残余/成本/多用户适用性」；给出 W3 首版最小安全架构（保留全硬化 + 只挂一次性 scratch + 六条编排控制）与**明确禁止上线条件**；未实施缓解不写成已安全；config §1.7 与 ADR-025 修订与本 ADR 一致；**无生产代码/迁移/真实挂载/导航暴露**。
+
+- **来源（一手证据）**：OWASP Docker Security Cheat Sheet（Rule#1 socket=宿主 root、只读挂无用；Rule#11 rootless）<https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html>；CVE-2024-21626 "Leaky Vessels" <https://nvd.nist.gov/vuln/detail/CVE-2024-21626> · <https://github.com/advisories/GHSA-xr7r-f8xq-vfvv>；Tecnativa docker-socket-proxy <https://github.com/Tecnativa/docker-socket-proxy>；Rootless Docker（官方 + Known Limitations）<https://docs.docker.com/engine/security/rootless/>；gVisor 安全架构 <https://gvisor.dev/docs/architecture_guide/security/> + Docker 快速上手 <https://gvisor.dev/docs/user_guide/quick_start/docker/> + CVE 列表 <https://app.opencve.io/cve/?product=gvisor&vendor=google>；Firecracker 设计/威胁模型 <https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md>；Kata 架构 <https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/README.md>；Sysbox <https://github.com/nestybox/sysbox>；OpenHands 沙箱 RW 挂载告警 <https://docs.openhands.dev/openhands/usage/sandboxes/docker>；Portainer bind-mount 绕过 <https://github.com/advisories/GHSA-7fw3-x4r2-g7wc>；E2B Firecracker 编排 <https://deepwiki.com/e2b-dev/infra>；R-WORKSPACE-PRODUCT §10–§11；Sherpa 现状（`infra/docker-compose.yml` worker 挂 `docker.sock`、`backend/app/sandbox/runner.py` 硬化容器、`docs/05` §sandbox socket 安全）；负责人输入「第一优先完成独立安全评审……给出 W3 首版可实施的最小安全架构与明确禁止上线条件；不得把未实施缓解写成已安全」。
+
+---
+
+### ADR-040 · Projects W3 = Project Chat 任务工作副本 + 一次性 scratch 沙箱变更评审（契约与设计先行；延伸 ADR-037；受 ADR-039 门控；正式修订 ADR-025）
+
+> **状态：方向由负责人拍板（2026-07-27）——按 W2a→W2b→W3→W4 正常顺序进入 W3，先执行「安全评审 + ADR/契约/设计先行」。本 ADR 把 W3（Project Chat 任务工作副本 + 一次性 scratch 沙箱 + 变更评审）的**产品/数据/工具/生命周期**冻结为契约，实现待本批评审通过再开始。本批次不写生产代码/迁移/不做真实沙箱挂载/不暴露 W3 导航（AGENTS.md §1/§2）。** 隔离前提见 [ADR-039](#adr-039)；ADR-025 挂载口径修订见 [ADR-025 正式修订（2026-07-27）](#adr-025)；调研见 [`research/workspace-product-report.md`](research/workspace-product-report.md) §10；W3 静态设计稿见 [`design-workspace/w3-change-review.html`](design-workspace/w3-change-review.html)。
+
+- **背景（承接谁）**：ADR-037 §决策2 把 W3 粗描为「**Project Chat 任务工作副本 + sandbox 变更评审**；**仅允许 Sandbox 挂载一次性 scratch 副本，绝不挂载项目真相源**；持久权威=`project head snapshot` + 任务工作副本 overlay，scratch 卷/热容器都是可重建缓存」，并要求 W3 前置 [ADR-039] 隔离评审 + ADR-025 修订。W2a（空/模板/归档）、W2b（GitHub 一次性导入）已上线。本 ADR 就是 ADR-037 预告的 W3「后续 ADR」。
+
+- **决策（负责人方向 + R-WORKSPACE-PRODUCT §10 收敛，2026-07-27）**：
+  1. **真相源层级（不可动摇）**：`project_snapshots` head（**持久、已保存、用户可见的真相源**）→ **任务工作副本**（durable pending overlay，**跨 chat turn 的持久任务态**）→ *scratch 卷*（节点本地缓存，可重建）→ *sandbox 容器*（短 TTL、可选热态、随时可杀）。**系统维护的是任务工作副本，不是某个容器**：热容器只降延迟，**对正确性/恢复从不必需**。只有 Postgres/MinIO/journal 态是权威；scratch 树/热容器/预备镜像是**可丢缓存，绝不是恢复真相源**（从 `base 快照 + 持久 overlay` 重建）。
+  2. **Project Chat 首次变更动作 → 惰性开持久工作副本**：Project 绑定 Chat 初始只读 head；**首个变更动作**（`project_run`/edit）**原子创建**任务工作副本（`base_snapshot_id=current_snapshot_id`，记 `base_head_generation`）。General chat 无工作副本。一个 Project 的多个 Chat 得到**互相隔离**的工作副本（绝不共享可写 scratch 树）。
+  3. **每次执行物化一次性 scratch 拷贝**：取工作副本的 single-writer lease/fence → 把 `base 快照 + 持久 overlay` 物化进**一份全新一次性 scratch 树** → 起 [ADR-039] 的**硬化断网**沙箱，**只**挂该 scratch（**绝不**挂快照/blob store/凭据/其它 project/Drive）。**有界批次后、等用户前、拆容器前**把 scratch delta **持久化进 overlay**（+ change-set 投影），并盖 fence。**未持久化的 scratch 写入绝不算完成的工作**；容器/节点丢失 → 从最后持久边界**重物化**。
+  4. **single-writer lease + fence**：一个工作副本一个活动写者租约（互斥）+ 单调 `fence_token`（每次(重)取租约自增），盖在每次 overlay/change-set/sandbox-run 发布上。**stale 沙箱（fence 落后）绝不能发布 overlay/change set**，即使重投递让其租约看似 live。
+  5. **Change Review 展示 added/modified/deleted + artifacts**：每个执行边界比对 scratch↔持久 overlay↔已保存 base，拒绝路径逃逸/不安全 symlink/设备/socket/`.git` 凭据或 config 泄漏，并**有界**（改动文件数/字节/artifact 字节/diff·输出大小，`WORKING_COPY_MAX_*`）。**超界 ⇒ 显式 truncated 局部评审，绝不静默给一份看似完整的 diff**。文本 diff 溢出到 MinIO（有界）；二进制/超大只摘要不内联。
+  6. **用户 Save selected / Save + checkpoint / Discard（Save 不给 agent）**：*Save selected* 应用被选子集 → 建**新不可变快照**（`reason='save'`）、原子推进 `current_snapshot_id` **并**自增 `head_generation`；未选留在工作副本。*Save + checkpoint* 再 pin（`reason='checkpoint'`, `pinned=true`）+ 命名/备注，chat 可从新 head 开新工作副本。*Discard* 删 overlay/暂存字节、释放配额预留，head 保持与 base **逐字节相同**。**推进 Project head 是显式人工评审决定，绝非 agent 自动应用**（agent-save 留后续 ADR + grant 门控）。
+  7. **head 移动 → stale Save 必须拒绝（head_generation CAS）**：`projects.head_generation` 在推进 `current_snapshot_id` 的**同一事务**自增。Save 是对 `(current_snapshot_id==base_snapshot_id AND head_generation==base_head_generation)` 的 **compare-and-set**：head 若移动（另一 chat Saved / W4 apply-remote）→ Save **失败为 conflict**（`409 head_moved`）、**什么都不应用**，须**重评审 rebase** change set；**绝不对错误 base 应用**。
+  8. **内置 file/edit/run/test 工具在 scratch 上工作，不嵌 coding agent**：W3 执行器 = **Sherpa 内置工具**（`project_run` 驱动 file/edit/run/test）；**不内嵌 Copilot CLI/Claude Code 等专用 coding agent**；沙箱**断网、无 model/provider 凭据**。
+  9. **缺依赖显式 `environment_missing_dependencies`；不做包安装**：命令**只**用已在批准基础镜像里的 runtime/工具 + 已在项目快照里的依赖运行；缺依赖 → 明确 `environment_missing_dependencies`，**绝不**私自联网装包/开网。
+  10. **W3 明确不做（留 W4/later）**：依赖安装/包管理器；`git init/history/commit/branch`、merge、push、建远程分支、PR、force push（**GitHub sync/push/PR 全是 W4**）；长驻 dev server/托管预览/进程复活；网络化开发环境；内嵌 coding-agent 执行器。
+
+- **数据模型（W3；canonical 与派生分离；名义命名，见 data-model §Projects W3）**：`projects.head_generation`（CAS token）；`project_working_copies`（持久 pending 态：base 快照/`base_head_generation`/state/`version`/`fence_token`/`lease_owner`/`lease_expires_at`/`reserved_bytes`/overlay rollup/`last_boundary_at`/`expires_at`）；`project_working_copy_entries`（**持久 overlay**：path/added·modified·deleted/blob 引用/fence）；`project_change_sets` + `project_change_set_entries`（有界可评审投影 + `selected`/有界 diff spill/`truncated`）；`project_artifacts`（run 产物，`retention='ephemeral'`，仅 Keep/Export 才计配额）；`project_sandbox_runs`（沙箱执行链接 run+工作副本 + **非权威**操作元数据 `scratch_ref`/`container_ref`/`warm_until` + 具名 `termination_reason` + `persisted_boundary_at`）。均带 `tenant_id`+复合键（ADR-015）；文件字节复用 [ADR-030] 不可变去重 `storage_blobs`，**绝不进 journal/change-set 行本体**。
+
+- **能力面（ADR-023 单能力层 + 薄 REST/Tool 双适配；见 api §10.7）**：service `services/projects.py` + `services/project_changes.py` + `services/sandbox`（编排 [ADR-039] 硬化容器 + 一次性 scratch）。**REST**：`GET /sessions/{id}/working-copy`、`POST /projects/{id}/sandbox-runs`、`GET …/working-copies/{wc}`、`GET …/change-sets/{cs}` + `…/entries/{e}/diff`、`POST …/change-sets/{cs}/apply`（Save selected/checkpoint，`409 SaveConflict`）、`…/discard`、`…/working-copies/{wc}/discard`、`GET …/artifacts` + `…/keep`/`…/export`。**Tool（W3）**：`project_run`（内置 file/edit/run/test on working copy → `idempotent_write`、**allow**，仅 Project 绑定 chat + 仅 ADR-039 硬化 scratch-only 挂载）、`project_review_changes`（读 change set → `read_only`、**allow**）。**不给 agent（人工评审闸）**：`project_save`/`project_checkpoint`/`project_discard`/artifact `keep`·`export`（**user-only**）、`project_push`（W4）、任何破坏性 purge、依赖安装。项目文件 + 沙箱输出仍是**不可信内容**（ADR-009）。**UI**：SPA 路由复用 `/work/projects`——**W3 只交付静态稿**，能力矩阵 UI 列保持 ⬜、**不暴露 W3 生产导航**。
+
+- **事件/幂等/crash recovery（复用 ADR-016/017；见 events §2.11）**：W3 执行跑在 Project 绑定 chat 的**持久 run**里（复用 `run`/`event_journal`，`project_run` 是普通 tool-call/result），**不新增 run 事件类型**，项目侧持久记录 = W3 表 + 结构化日志。**① 沙箱执行无对外副作用 ⇒ 该 run 无 `effect_unknown`**（断网、只挂一次性 scratch，不改任何外部系统/远端/真相源）；容器/节点/重投递丢失只触发**重物化**续跑。**② 唯一持久副作用 = fence 守护的 overlay/change-set 持久（幂等）**：同 fence+边界重放产出相同 overlay（内容寻址去重），stale fence 被拒；`persisted_boundary_at` 未置前不报「durably 完成」。**③ Save = head_generation CAS（幂等）**：head 移动即 conflict 不应用；重放已应用 change set 是 no-op。**④ 具名 termination（每个出口）**：`done|environment_missing_dependencies|wall_timeout|mem_limit|pids_limit|output_limit|changeset_bounds|path_escape|fence_lost|sandbox_unavailable|error:...`。**⑤ 凭据绝不进** scratch/overlay/change-set/artifact/快照/journal/日志（ADR-019/039）。
+
+- **安全边界**：完全遵从 [ADR-039]（硬化容器 + 仅挂一次性 scratch + 拷贝前剔除凭据 + `nosuid,nodev` + 编排原子清理/孤儿扫除 + 单用户前提 + 多用户禁止上线条件）与 [ADR-025 修订]（永不 RW 挂真相源）。config §1.7 冻结 mount/lifecycle/resource/network/credential 边界与 `SANDBOX_*`/`WORKING_COPY_*` 设置。
+
+- **取代/延伸关系**：**延伸 ADR-037**（把 §决策2 的 W3 从预告落成契约）；**受 [ADR-039] 门控**（隔离前提）；**正式修订 [ADR-025]**（挂载口径）；**复用** ADR-030 不可变去重 blob + 配额记账、ADR-016/017 journal+outbox 真相源与 durable 语义、ADR-023 能力层双适配、ADR-015 租户键、ADR-009 不可信内容、ADR-019 密钥边界；**不改** ADR-020（W4 push 才走审批信封）。**W4** = GitHub 同步/push/PR，另带自己的 ADR。
+
+- **验收关键（本契约先行批次）**：ADR-040 被接受；data-model 有 `project_working_copies`/`project_working_copy_entries`/`project_change_sets`/`project_change_set_entries`/`project_artifacts`/`project_sandbox_runs` + `projects.head_generation`（canonical vs 派生清晰、lease+fence、head-gen CAS、每表 `tenant_id`+复合键、字节不入 journal）；api §10.7 有 working-copy/sandbox-run/change-review/Save selected·checkpoint·Discard/artifacts REST + Tool schema（`project_run`/`project_review_changes` allow、Save 系列 user-only）；events §2.11 有「沙箱无 effect_unknown」+ fence 幂等持久 + head-gen CAS + crash recovery；config §1.7 有 mount/lifecycle/resource/network/credential 边界 + `SANDBOX_*`/`WORKING_COPY_*`；能力矩阵有 W3 行且 **UI 列 ⬜**；W3 静态稿（Project Chat 执行态/diff change review/artifacts/Save·checkpoint·Discard/stale·conflict/390px）落在生产 Quiet Work 设计系统、桌面与 390px 均合理，且**明标设计稿、不冒充已实现**；**无生产代码/迁移/真实挂载/W3 导航暴露**；W4 非目标写清。契约**先于代码**（本 ADR 同批）。
+
+- **来源**：R-WORKSPACE-PRODUCT 调研 [`research/workspace-product-report.md`](research/workspace-product-report.md) §10（真相源层级、Project Chat 生命周期、持久边界、并发与恢复、change set out、用户动作、初始执行器边界）；ADR-037 §决策2/3/4；[ADR-039] 隔离评审；Gitpod/Ona 工作区快照凭据边界、OpenHands「RW 挂载可被 agent 改」；负责人输入「按正常顺序进入 W3……W3 目标：Project-bound Chat 首次变更动作创建跨 turn 持久 working copy；Sherpa snapshot/head 是真相源；working copy/overlay 是持久任务态；每次执行只物化一次性 scratch 副本，sandbox 绝不挂 project snapshot/blob store/凭据；内置 file/edit/run/test 工具在 scratch 上工作；有界批次后持久化 overlay；Change Review 展示 added/modified/deleted/artifacts；用户可 Save selected、Save+checkpoint、Discard；head 移动时 stale save 必须拒绝；single-writer lease/fence；容器是短 TTL 可丢缓存；缺依赖显式 environment_missing_dependencies；不做包安装、不嵌 coding agent、不做 git init/history/commit/branch、不做 GitHub sync/push/PR（W4）」。

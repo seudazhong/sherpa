@@ -8,6 +8,14 @@ from app.security.connector_token import (
     open_connector_token,
     seal_connector_token,
 )
+from app.security.github_token import (
+    FINE_GRAINED_PAT_PREFIX,
+    GithubSeal,
+    GithubTokenIdentity,
+    classify_github_token,
+    open_github_token,
+    seal_github_token,
+)
 from app.security.keyring import KekMaterial, Keyring, KeyringError, load_keyring
 from app.security.redaction import REDACTED, SENSITIVE_KEYS, is_sensitive, redact
 from app.security.vault import (
@@ -46,4 +54,10 @@ __all__ = [
     "ConnectorTokenIdentity",
     "open_connector_token",
     "seal_connector_token",
+    "GithubSeal",
+    "GithubTokenIdentity",
+    "open_github_token",
+    "seal_github_token",
+    "classify_github_token",
+    "FINE_GRAINED_PAT_PREFIX",
 ]

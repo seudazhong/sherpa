@@ -1649,3 +1649,418 @@ class KnowledgeSearchResult(StrictModel):
   `add_knowledge_source` / `reindex_knowledge_source` are `allow`; `remove_knowledge_source`
   is **`ask`** (approval-gated). Retrieval results are **untrusted evidence** (`role=tool`),
   never instructions (ADR-009); a document cannot grant permission or change tool scope.
+
+### 10.5 Projects — Workspace W2a (ADR-037)
+
+> **✅ W2a SHIPPED (routes implemented; SPA `/work/projects` nav exposed).** (This banner was the
+> design/contract-first note; W2a is now implemented — see the "UI" bullet + realization note at the
+> end of this section. **§10.6 below (W2b GitHub import) stays design/contract-first.**) W2a covers
+> **blank / template / archive** projects + Project detail + **Open in Chat**. **GitHub import is
+> W2b (§10.6)**; working-copy/sandbox/change-review is W3; Git sync/push is W4 (each its own ADR).
+> Capability layer `services/projects.py` behind thin REST (below) + the W2a agent tools (ADR-023
+> dual adapter). All routes are `Session`-authenticated, tenant + user scoped.
+
+```python
+class ProjectSummary(StrictModel):
+    id: UUID
+    name: str
+    description: str | None
+    status: Literal["active", "archived", "deleting"]
+    source_status: Literal["unbound"]          # W2b (§10.6) adds importing/imported/import_failed; W4 adds clean/remote_ahead/diverged/...
+    current_snapshot_id: UUID | None
+    used_bytes: int
+    last_activity_at: datetime | None
+    updated_at: datetime
+    # Additive (impl, ADR-037): archive-import progress. `status` stays active/archived/deleting;
+    # this derived field conveys the async import state (a project has no snapshot while importing
+    # or after a failed import). Derived from project_import_jobs — never a second canonical state.
+    import_status: Literal["none", "importing", "ready", "failed"]
+    import_failure_reason: str | None
+
+class ProjectCreate(StrictModel):
+    # Blank or template project. Archive/GitHub go through POST /projects/imports.
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    description: str | None = None
+    template_id: str | None = None             # None => blank project
+
+class ProjectImportRequest(StrictModel):
+    kind: Literal["archive", "github"]         # 'github' returns 501 in W2a; W2b (§10.6) upgrades it to 202
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    # archive: multipart file part; github: a GithubImportSpec (repo + ref, §10.6) — validated per kind.
+
+class ProjectEntry(StrictModel):
+    path: str
+    entry_kind: Literal["file", "dir", "symlink"]
+    size_bytes: int
+    executable: bool
+
+class ProjectTree(StrictModel):
+    project_id: UUID
+    snapshot_id: UUID
+    entries: list[ProjectEntry]                # bounded page of the head snapshot
+    returned_count: int                        # == len(entries) in this page
+    truncated: bool                            # True ⇒ more entries exist beyond this page (query a narrower path)
+
+class ProjectChatCreate(StrictModel):
+    title: str | None = None
+
+class ProjectContext(StrictModel):
+    session_id: UUID
+    project_id: UUID | None                    # null => General chat
+    project_name: str | None
+    bound: bool                                # true once the binding is immutable
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /projects?query=&status=&sort=&cursor=&limit=` | none → `CursorPage[ProjectSummary]` | Session | `200`, `400`, `401`, `422` |
+| `POST /projects` | `ProjectCreate` → `ProjectSummary` | Session + CSRF | `201`, `401`, `409`, `422`, `507` |
+| `POST /projects/imports` | `ProjectImportRequest` (+ multipart for archive) → `ProjectSummary` | Session + CSRF | `202`, `401`, `409`, `413`, `422`, `501`, `507` |
+| `GET /projects/{id}` | none → `ProjectSummary` | Session | `200`, `401`, `404` |
+| `GET /projects/{id}/tree?snapshot=&path=&cursor=&limit=` | none → `ProjectTree` | Session | `200`, `401`, `404`, `422` |
+| `GET /projects/{id}/snapshots` | none → `list[ProjectSnapshot]` | Session | `200`, `401`, `404` |
+| `GET /projects/templates` | none → `list[Template]` | Session | `200`, `401` |
+| `POST /projects/{id}/chats` | `ProjectChatCreate` → `SessionSummary` | Session + CSRF | `201`, `401`, `404`, `422` |
+| `GET /sessions/{id}/project-context` | none → `ProjectContext` | Session | `200`, `401`, `404` |
+
+- `POST /projects` creates a **blank** project (empty initial `import` snapshot) or, with
+  `template_id`, a **template** project (copies template entries, severs template history). It is
+  `source_status='unbound'` in W2a.
+- `POST /projects/imports` with `kind='archive'` runs a **durable, async** import (`202`;
+  `status` starts pre-snapshot) — the archive is expanded in isolated staging (bounded
+  size/count/expansion-ratio/depth; `413` over the cap; `422` on unsafe/traversal/device
+  entries) then materialized into the initial immutable snapshot. `kind='github'` returns
+  **`501 not_implemented`** in W2a (it lands in **W2b** with `project_sources`).
+- `POST /projects/{id}/chats` creates a **new Project-bound session** (`sessions.project_id`);
+  the binding is **immutable** after the first admitted message. Switching Project is always a
+  new chat — an existing session's `project_id` is never re-pointed.
+- `GET /sessions/{id}/project-context` returns the (possibly null) binding for chat-header
+  display; `project_id=null` is General chat.
+- `GET /projects/{id}/tree` returns a **bounded page** ordered by `path` (default 200, hard cap
+  500 entries per call). `returned_count` is the number of entries in this page; `truncated=true`
+  means **more entries exist beyond this page** — the page is **not** the full tree, so absence of
+  a path from a truncated page is **not** proof it doesn't exist. Callers (and the `project_tree`
+  tool) must narrow with the `path` prefix filter (or later `cursor`) to inspect subtrees. Because
+  a `path`-filtered listing has no cheap total, the response intentionally carries **no** `total`
+  field — only `truncated` + `returned_count`.
+- Reservation/quota reuse ADR-030: a project's snapshot bytes are the same content-addressed,
+  ref-counted `storage_blobs`; `507 insufficient_storage` when a reservation would exceed quota.
+- **Tool surface (W2a, ADR-023):** `project_list` / `project_create` / `project_tree` /
+  `project_read` are `allow` (read-only or own-data idempotent write). **Not given to the agent
+  in W2a:** any destructive purge, `project_run` (W3), `project_push` (W4). Project files remain
+  **untrusted content** (ADR-009); source credentials (W2b+) never enter a project tree, prompt,
+  log, or tool result.
+- **Additive support endpoints (impl, ADR-037):** `GET /projects/templates` (blank/template
+  picker) and `GET /projects/{id}/snapshots` (detail snapshots + activity) are read-only,
+  Session-authenticated conveniences for the Projects UI; they add no new capability.
+- **UI:** SPA route `/work/projects` (avoids the REST `/projects` proxy prefix). The W2a
+  implementation ships the production Projects pages (list / new-project blank·template·archive
+  with GitHub disabled→W2b / detail read-only tree + snapshots + activity / Open in Chat) ported
+  from the [static draft](../design-workspace/index.html) onto the Quiet Work system; the
+  capability-matrix UI cells (docs/11 §9) flip to ✅. Agent tools remain the ADR-023 dual adapter.
+
+### 10.6 Projects — Workspace W2b GitHub one-time import (ADR-038)
+
+> **✅ W2b SHIPPED (routes implemented; SPA `/work/projects` GitHub path exposed).** (This
+> banner was the design/contract-first note; W2b is now implemented — see the "UI" bullet at
+> the end of this section.) W2b upgrades `POST /projects/imports kind='github'` from **`501` to a
+> durable `202`** and adds read-only **repo/ref pickers** + **GitHub connection** management. It is
+> a **one-time import** (select repo + ref → bounded archive fetch → immutable initial snapshot →
+> record source repo/ref/OID); **no sync/fetch loop, working copy, push, or PR** (those are W3/W4).
+> All routes are `Session`-authenticated, tenant + user scoped; writes require CSRF. GitHub
+> credentials stay in the vault/connector boundary (ADR-019) and never reach the client, a project
+> tree, a prompt, a log, or a tool result.
+
+```python
+class GithubConnectionStatus(StrictModel):
+    id: UUID | None                             # connection id (null when not connected); referenced by imports
+    connected: bool
+    auth_kind: Literal["pat", "app_installation"] | None
+    account_login: str | None                  # display only; never the token
+    scopes: list[str]                           # e.g. ["contents:read"]
+    status: Literal["pending", "active", "revoked", "error"] | None
+    last_error_redacted: str | None
+
+class GithubConnectionCreate(StrictModel):
+    # v1 first-version credential = a fine-grained PAT with contents:read. The token is AEAD-sealed
+    # server-side on receipt and never returned. The service rejects any token whose shape is not a
+    # fine-grained PAT (`github_pat_` prefix) BEFORE any GitHub call — classic PAT (`ghp_`), OAuth
+    # (`gho_`), and GitHub App (`ghs_`/`ghu_`) tokens are refused with a stable, non-echoing reason.
+    # app_installation (GitHub App) remains the forward path (not accepted yet).
+    auth_kind: Literal["pat"] = "pat"
+    token: Annotated[SecretStr, Field(min_length=1)]
+
+class GithubRepo(StrictModel):
+    repo_external_id: str                        # stable GitHub numeric repo id (survives rename)
+    owner: str
+    repo: str
+    private: bool
+    default_branch: str
+
+class GithubRef(StrictModel):
+    ref_type: Literal["branch", "tag"]
+    name: str
+    oid: str                                     # tip commit OID for the ref
+
+class GithubImportSpec(StrictModel):
+    # POST /projects/imports body when kind='github'. A commit ref_type accepts a full/short SHA in
+    # `ref`; branch/tag resolve to a concrete OID before fetch and are pinned to it.
+    repo_external_id: str
+    owner: str
+    repo: str
+    ref_type: Literal["branch", "tag", "commit"]
+    ref: str                                     # branch/tag name, or commit SHA
+    connection_id: UUID | None = None            # None => use the owner's active connection; W2b first
+                                                 # version requires an active connection (public-repo
+                                                 # import without a connection is a later relaxation).
+```
+
+`ProjectImportRequest` (api §10.5) is extended for W2b: when `kind='github'` the request carries a
+`github: GithubImportSpec` (instead of a multipart archive part). `ProjectSummary.source_status`
+widens to `Literal["unbound","importing","imported","import_failed"]` (W2a value stays `unbound`);
+its existing derived `import_status` (`none|importing|ready|failed`) still conveys async progress —
+a **failed import keeps `status='active'`** with `import_status='failed'` + `source_status='import_failed'`
+and **no snapshot** (never a `status='failed'`). `ProjectSummary` also gains an optional
+`source: ProjectSource | None` on `GET /projects/{id}` surfacing the provenance:
+
+```python
+class ProjectSource(StrictModel):
+    provider: Literal["github"]
+    repo_external_id: str                        # stable GitHub numeric repo id (survives rename)
+    owner: str
+    repo: str
+    ref_type: Literal["branch", "tag", "commit"]
+    ref_name: str
+    source_oid: str | None                       # resolved commit OID (null until resolved)
+    status: Literal["importing", "imported", "import_failed"]
+    imported_at: datetime | None
+    # NOTE: no credential/token field ever — provenance only.
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /connections/github` | none → `GithubConnectionStatus` | Session | `200`, `401` |
+| `POST /connections/github` | `GithubConnectionCreate` → `GithubConnectionStatus` | Session + CSRF | `201`, `401`, `422` |
+| `DELETE /connections/github` | none → `204` | Session + CSRF | `204`, `401`, `404` |
+| `GET /projects/github/repos?query=&cursor=&limit=` | none → `CursorPage[GithubRepo]` | Session | `200`, `401`, `409`, `422`, `502` |
+| `GET /projects/github/refs?repo_external_id=&kind=&query=` | none → `list[GithubRef]` | Session | `200`, `401`, `409`, `422`, `502` |
+| `POST /projects/imports` (`kind='github'`) | `ProjectImportRequest` → `ProjectSummary` | Session + CSRF | `202`, `401`, `404`, `409`, `422`, `507` |
+| `POST /projects/{id}/imports/retry` | none → `ProjectSummary` | Session + CSRF | `202`, `401`, `404`, `409` |
+
+- **`POST /projects/imports` `kind='github'`** validates the request **synchronously** (active
+  connection present → else `409`; repo/ref spec well-formed → else `422`; quota reservation fits →
+  else `507`) and returns `202` with `import_status='importing'` (no snapshot yet). The **durable,
+  async** worker then resolves the ref → a concrete commit OID, fetches the **tarball** of that OID
+  (contents only, no git history), expands it through the **same W2a isolated bounded safe expander**,
+  materializes the initial immutable `reason='import'` snapshot with `source_oid` set, and records
+  `project_sources`. **All async failures** (upstream GitHub unavailable/auth, oversize over
+  `PROJECT_MAX_*`, unsafe/traversal/device entries) surface as `import_status='failed'` +
+  `source_status='import_failed'` with a named `termination_reason` (events §2.10) — **no** snapshot,
+  the project stays `status='active'` (visible + deletable), never a snapshot over the wrong bytes.
+- **`POST /projects/{id}/imports/retry`** re-enqueues the durable import job for a `failed` project
+  (idempotent on `(project_id, import)`; read-only re-fetch by the resolved OID → identical bytes) —
+  the UI "重试导入" action. Only valid while the project has no active snapshot (`409` otherwise).
+- **`GET /projects/github/repos` / `.../refs`** are read-only pickers the server proxies **through
+  the stored connection credential** (decrypted only server-side; the token never reaches the
+  client); `409` when there is no active connection, `502` on a redacted upstream GitHub error.
+- **`GET /connections/github`** returns connection status for the UI (id + display login + scopes +
+  status) — **never** the token. `POST` seals a fine-grained PAT into the AEAD vault on receipt and
+  returns only status; it **rejects any non fine-grained-PAT token shape** (must start with
+  `github_pat_`; classic `ghp_` / OAuth `gho_` / GitHub App `ghs_`,`ghu_` are refused up front with a
+  stable, non-echoing `422`) before contacting GitHub. `DELETE` revokes + deletes the sealed token.
+- **Idempotency / effect semantics:** the GitHub fetch is **read-only** (no remote mutation), so —
+  unlike a W4 push — there is no `effect_unknown` remote reconciliation: a failed/partial fetch is
+  safely retryable (re-fetch by resolved OID → identical bytes). Idempotency key `(project_id,
+  import)` (one import per project); a crash/replay never yields a half-built or duplicate project
+  (events §2.10).
+- **Tool surface (W2b, ADR-023):** **no new agent tool.** GitHub import is **human-only** (it
+  crosses the credential boundary and pulls untrusted external content, and avoids letting the
+  agent enumerate the user's private repos) — consistent with W2a archive upload. After import the
+  agent reads the project via the existing `project_tree`/`project_read` (project files remain
+  **untrusted content**, ADR-009). **Not given to the agent:** `project_push` (W4), `project_run`
+  (W3), any destructive purge.
+- **UI:** the W2b flow (GitHub connection status / repo + ref selection / import progress / success
+  source metadata / failure + retry) is **shipped** on the production `/work/projects` page (ported
+  from the [static draft](../design-workspace/github-import.html) onto the Quiet Work system); the
+  capability-matrix UI cells (docs/11 §9) are ✅ and the W2b GitHub create path is exposed.
+
+### 10.7 Projects — Workspace W3 task working copy + scratch-copy sandbox change review (ADR-040 + ADR-039)
+
+> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-040 product/data + ADR-039 isolation).** These routes/schemas
+> are **frozen but NOT implemented** — no production code, no migration, no real sandbox mount, and **no
+> W3 navigation exposed** in this batch. W3 = a Project-bound Chat's first mutating action opens a
+> **durable task working copy** (spans turns) from the current Project head; each execution materializes
+> a **one-time disposable scratch copy** into a **hardened, network-disabled** sandbox (ADR-039) — the
+> sandbox **never** mounts the Project snapshot / blob store / credentials / another Project / Drive.
+> Built-in file/edit/run/test tools work on scratch; a bounded overlay is persisted after each batch;
+> **Change Review** shows added/modified/deleted files + artifacts; the user chooses **Save selected**,
+> **Save + checkpoint**, or **Discard**; a moved Project head **rejects** a stale Save. All routes are
+> `Session`-authenticated, tenant + user scoped; writes require CSRF. GitHub sync/push/PR is **W4**.
+
+```python
+class SandboxRunState(StrictModel):
+    run_id: UUID                                       # the durable model-loop run (event journal)
+    state: Literal["materializing", "running", "persisted", "failed", "timed_out"]
+    warm: bool                                         # a warm container is holding the scratch cache
+    exit_code: int | None
+    timed_out: bool
+    # done | environment_missing_dependencies | wall_timeout | mem_limit | pids_limit |
+    # output_limit | changeset_bounds | path_escape | fence_lost | sandbox_unavailable | error:...
+    termination_reason: str | None
+
+class WorkingCopySummary(StrictModel):
+    id: UUID
+    project_id: UUID
+    session_id: UUID
+    base_snapshot_id: UUID
+    state: Literal["open", "ready_for_review", "saved", "discarded", "conflicted", "expired"]
+    overlay_entry_count: int
+    overlay_bytes: int
+    reserved_bytes: int
+    head_moved: bool                                   # projects.head_generation != base_head_generation (Save will conflict)
+    open_change_set_id: UUID | None                    # the current reviewable change set, if any
+    sandbox: SandboxRunState | None                    # latest sandbox run for this working copy
+    last_boundary_at: datetime | None                  # last persisted execution boundary (durability marker)
+    expires_at: datetime | None                        # idle-TTL expiry
+    updated_at: datetime
+
+class SandboxRunRequest(StrictModel):
+    # The human "Run" control; the agent uses the equivalent project_run tool. The command runs ONLY
+    # with runtimes/tools already present in the approved base image + dependencies already in the
+    # Project snapshot (report §10.7). It NEVER installs packages or enables network; a missing
+    # dependency returns termination_reason='environment_missing_dependencies'.
+    command: Annotated[str, Field(min_length=1, max_length=4000)]
+
+class ChangeSetEntrySummary(StrictModel):
+    id: UUID
+    path: str
+    change_kind: Literal["added", "modified", "deleted"]
+    size_bytes: int
+    executable: bool
+    is_binary: bool
+    has_diff: bool                                      # a bounded textual diff is available
+    diff_truncated: bool                               # per-file diff exceeded the cap
+    selected: bool                                      # default-selected for Save; user may deselect
+
+class ChangeSet(StrictModel):
+    id: UUID
+    project_id: UUID
+    working_copy_id: UUID
+    base_snapshot_id: UUID
+    state: Literal["open", "applied", "discarded", "superseded", "conflicted"]
+    added_count: int
+    modified_count: int
+    deleted_count: int
+    artifact_count: int
+    changed_bytes: int
+    diff_bytes: int
+    truncated: bool                                     # bounds hit ⇒ review shows an EXPLICIT partial
+    entries: list[ChangeSetEntrySummary]               # bounded page (path-ordered)
+    returned_count: int
+    created_at: datetime
+
+class Artifact(StrictModel):
+    id: UUID
+    name: str
+    kind: Literal["file", "log", "report"]
+    size_bytes: int
+    mime: str | None
+    retention: Literal["ephemeral", "retained", "expired"]  # charges quota only when 'retained'
+    created_at: datetime
+
+class CheckpointSpec(StrictModel):
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    note: str | None = None
+
+class ChangeSetApply(StrictModel):
+    # Save selected: apply a SUBSET of the change set. None => every currently-selected entry.
+    selected_entry_ids: list[UUID] | None = None
+    checkpoint: CheckpointSpec | None = None           # present ⇒ Save + checkpoint (pin the new snapshot)
+
+class SaveConflict(StrictModel):
+    # 409 body when the Project head moved since the working copy's base (Save CAS failed).
+    error: Literal["head_moved"] = "head_moved"
+    base_snapshot_id: UUID                              # the working copy's base
+    current_snapshot_id: UUID                           # the project head now
+    message: str                                        # human-readable; must review a rebased change set
+
+class ArtifactExport(StrictModel):
+    drive_folder_id: UUID | None = None                # target Drive folder (None => Drive root)
+    name: str | None = None                            # optional rename on export
+```
+
+`ProjectContext` (api §10.5) is extended for W3 with the live working copy of a Project-bound chat:
+
+```python
+class ProjectContext(StrictModel):        # extended
+    session_id: UUID
+    project_id: UUID | None
+    project_name: str | None
+    bound: bool
+    working_copy: WorkingCopySummary | None            # null until the first mutating action opens one
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /sessions/{id}/working-copy` | none → `WorkingCopySummary \| null` | Session | `200`, `401`, `404` |
+| `POST /projects/{id}/sandbox-runs` | `SandboxRunRequest` → `SandboxRunState` | Session + CSRF | `202`, `401`, `404`, `409`, `422`, `507` |
+| `GET /projects/{id}/working-copies/{wc_id}` | none → `WorkingCopySummary` | Session | `200`, `401`, `404` |
+| `GET /projects/{id}/change-sets/{cs_id}?cursor=&limit=` | none → `ChangeSet` | Session | `200`, `401`, `404`, `422` |
+| `GET /projects/{id}/change-sets/{cs_id}/entries/{entry_id}/diff` | none → bounded unified-diff text | Session | `200`, `401`, `404`, `413` |
+| `POST /projects/{id}/change-sets/{cs_id}/apply` | `ChangeSetApply` → `ProjectSummary` | Session + CSRF | `200`, `401`, `404`, `409`, `422`, `507` |
+| `POST /projects/{id}/change-sets/{cs_id}/discard` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404` |
+| `POST /projects/{id}/working-copies/{wc_id}/discard` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404` |
+| `GET /projects/{id}/artifacts?working_copy_id=` | none → `list[Artifact]` | Session | `200`, `401`, `404` |
+| `POST /projects/{id}/artifacts/{art_id}/keep` | none → `Artifact` | Session + CSRF | `200`, `401`, `404`, `507` |
+| `POST /projects/{id}/artifacts/{art_id}/export` | `ArtifactExport` → `DriveNode` | Session + CSRF | `201`, `401`, `404`, `507` |
+
+- **Working copy is lazy + immutable-per-chat.** A Project-bound chat reads the Project head until its
+  **first mutating action** (a `project_run`/edit), which atomically opens the durable working copy at
+  `base_snapshot_id = current_snapshot_id` (and records `base_head_generation`). `GET
+  /sessions/{id}/working-copy` returns `null` before that. Multiple chats on one Project get
+  **isolated** working copies (report §10.4); a General chat (`project_id=null`) has none.
+- **`POST /projects/{id}/sandbox-runs`** acquires the working copy's single-writer lease/fence,
+  materializes `base snapshot + persisted overlay` into a **fresh disposable scratch tree**, and runs
+  the **hardened, network-disabled** sandbox (ADR-039) against **only** that scratch (never the
+  snapshot/blob store/credentials). `202` returns the run state; the durable run/event journal carries
+  progress. After the bounded batch the overlay + change set are persisted **before** the run is
+  reported durably complete. `409` if a live run already holds the lease or the working copy is
+  `conflicted`/closed; `507` if the reservation would exceed quota. A missing dependency ends the run
+  with `environment_missing_dependencies` — **never** an undeclared package install or network enable.
+- **Change Review.** `GET /projects/{id}/change-sets/{cs_id}` returns a bounded, path-ordered page of
+  added/modified/deleted entries + counts + `truncated` (bounds hit ⇒ **explicit partial**, never a
+  silent full-looking diff). Per-file bounded unified diffs come from the `.../diff` sub-route
+  (`413` if the single-file diff exceeds the cap → download/summary only). Binary files carry
+  `is_binary=true` and no inline diff.
+- **Save selected / Save + checkpoint (report §10.6).** `POST .../apply` applies the subset
+  `selected_entry_ids` (or all currently-selected), building a **new immutable snapshot**
+  (`reason='save'`), atomically advancing `current_snapshot_id` **and** bumping `head_generation`; a
+  `checkpoint` also pins it (`reason='checkpoint'`). The apply is a **compare-and-set** on
+  `(current_snapshot_id, head_generation)`: if the head moved it returns **`409` `SaveConflict`
+  (`head_moved`)** and applies nothing — the client must review a rebased change set. `507` if applying
+  new bytes would exceed quota. Unselected entries remain in the working copy for later turns.
+- **Discard.** `POST .../change-sets/{cs_id}/discard` or `.../working-copies/{wc_id}/discard` deletes
+  the overlay/staged bytes, releases the reservation, and leaves the Project head **byte-identical** to
+  the base snapshot (`state='discarded'`).
+- **Artifacts.** Run outputs are `ephemeral` and charge **no** quota until **Keep** (`.../keep` →
+  `retention='retained'`, reserves quota, `507` over quota) or **Export** (`.../export` copies into
+  Drive via the Drive service → `DriveNode`). Credentials and running processes are **absent** from
+  every artifact/snapshot (report §10.6).
+- **Tool surface (W3, ADR-023 dual adapter):**
+  - `project_run` — run built-in **file/edit/run/test** tools against the **current Project-bound
+    chat's working copy** in the hardened offline sandbox. Effect `idempotent_write` (the durable
+    overlay/change-set persist is fence-guarded + idempotent per boundary); policy **allow** (own-data,
+    sandboxed, network-off) — but **only** in a Project-bound chat, and **only** with the hardened
+    scratch-only mount from ADR-039. There is **no** `delegate_coding_agent` tool.
+  - `project_review_changes` — read the current change set (added/modified/deleted + bounded diffs).
+    Effect `read_only`; policy **allow**.
+  - **Not given to the agent (human review gate):** `project_save` / `project_checkpoint` /
+    `project_discard` / artifact `keep`/`export` are **user-only** — advancing the Project head is an
+    explicit human Change-Review decision, never an agent auto-apply (deferred: a grant-gated
+    agent-save is a later ADR). `project_push` (W4), any destructive purge, and dependency install are
+    also **not** agent tools. Project files + sandbox output remain **untrusted content** (ADR-009).
+- **UI:** the W3 flow (Project-bound Chat execution state / diff Change Review / artifacts / Save
+  selected · Save + checkpoint · Discard / stale-head + conflict) is a **design/contract-first static
+  draft only** ([`../design-workspace/w3-change-review.html`](../design-workspace/w3-change-review.html));
+  the capability-matrix UI cells (docs/11 §9) stay **⬜** and **no W3 production navigation is exposed**
+  until implementation lands after owner review.

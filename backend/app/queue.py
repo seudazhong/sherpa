@@ -44,6 +44,19 @@ async def enqueue_sync_and_analyze(connector_id: uuid.UUID) -> None:
         await pool.aclose()
 
 
+async def enqueue_knowledge_ingest(
+    tenant_id: uuid.UUID, source_id: uuid.UUID, generation: int
+) -> None:
+    """Enqueue a durable knowledge ingestion job (one source at one generation)."""
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job(
+            "knowledge_ingest_job", str(tenant_id), str(source_id), int(generation)
+        )
+    finally:
+        await pool.aclose()
+
+
 async def enqueue_approval_resume(correlation_id: uuid.UUID) -> None:
     """Enqueue the resume job for a resolved approval (api.md §6.4 wake-up).
 
@@ -68,5 +81,15 @@ async def enqueue_agent_task_dispatch() -> None:
     pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
         await pool.enqueue_job("agent_task_dispatch_job")
+    finally:
+        await pool.aclose()
+
+
+async def enqueue_project_import(tenant_id: uuid.UUID, project_id: uuid.UUID) -> None:
+    """Enqueue a durable Project archive-import job (builds one project's initial
+    immutable snapshot). At-least-once; a recovery tick re-dispatches stuck jobs."""
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job("project_import_job", str(tenant_id), str(project_id))
     finally:
         await pool.aclose()
