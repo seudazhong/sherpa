@@ -16,6 +16,7 @@ export default defineConfig({
       "/auth": target,
       "/sessions": target,
       "/connectors": target,
+      "/connections": target,
       "/candidates": target,
       "/todos": target,
       "/notifications": target,

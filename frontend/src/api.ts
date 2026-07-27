@@ -433,19 +433,66 @@ export interface KnowledgeSearchResult {
 }
 
 export type ProjectImportStatus = "none" | "importing" | "ready" | "failed";
+export type ProjectSourceStatus =
+  | "unbound"
+  | "importing"
+  | "imported"
+  | "import_failed";
+
+export interface ProjectSource {
+  provider: "github";
+  repo_external_id: string;
+  owner: string;
+  repo: string;
+  ref_type: "branch" | "tag" | "commit";
+  ref_name: string;
+  source_oid: string | null;
+  status: "importing" | "imported" | "import_failed";
+  imported_at: string | null;
+}
 
 export interface Project {
   id: string;
   name: string;
   description: string | null;
   status: "active" | "archived" | "deleting";
-  source_status: "unbound";
+  source_status: ProjectSourceStatus;
   current_snapshot_id: string | null;
   used_bytes: number;
   last_activity_at: string | null;
   updated_at: string;
   import_status: ProjectImportStatus;
   import_failure_reason: string | null;
+  source?: ProjectSource | null;
+}
+
+export interface GithubConnectionStatus {
+  id: string | null;
+  connected: boolean;
+  auth_kind: "pat" | "app_installation" | null;
+  account_login: string | null;
+  scopes: string[];
+  status: "pending" | "active" | "revoked" | "error" | null;
+  last_error_redacted: string | null;
+}
+
+export interface GithubRepo {
+  repo_external_id: string;
+  owner: string;
+  repo: string;
+  private: boolean;
+  default_branch: string;
+}
+
+export interface GithubRepoPage {
+  items: GithubRepo[];
+  next_cursor: string | null;
+}
+
+export interface GithubRef {
+  ref_type: "branch" | "tag";
+  name: string;
+  oid: string;
 }
 
 export interface ProjectPage {
@@ -999,6 +1046,48 @@ export const api = {
     ),
   projectContext: (sid: string) =>
     req<ProjectContext>(`/sessions/${sid}/project-context`),
+  // W2b — GitHub one-time import (ADR-038). Credentials stay server-side; these
+  // never receive or send a token except the one-time POST /connections/github.
+  getGithubConnection: () =>
+    req<GithubConnectionStatus>("/connections/github"),
+  connectGithub: (csrf: string, token: string) =>
+    req<GithubConnectionStatus>(
+      "/connections/github",
+      jsonInit("POST", csrf, { auth_kind: "pat", token }),
+    ),
+  disconnectGithub: (csrf: string) =>
+    req<void>("/connections/github", jsonInit("DELETE", csrf)),
+  githubRepos: (query?: string, cursor?: string) => {
+    const qs = new URLSearchParams();
+    if (query) qs.set("query", query);
+    if (cursor) qs.set("cursor", cursor);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return req<GithubRepoPage>(`/projects/github/repos${suffix}`);
+  },
+  githubRefs: (repoExternalId: string, kind?: string, query?: string) => {
+    const qs = new URLSearchParams();
+    qs.set("repo_external_id", repoExternalId);
+    if (kind) qs.set("kind", kind);
+    if (query) qs.set("query", query);
+    return req<GithubRef[]>(`/projects/github/refs?${qs.toString()}`);
+  },
+  importProjectGithub: (
+    csrf: string,
+    name: string,
+    spec: {
+      repo_external_id: string;
+      owner: string;
+      repo: string;
+      ref_type: "branch" | "tag" | "commit";
+      ref: string;
+    },
+  ) =>
+    req<Project>(
+      "/projects/imports",
+      jsonInit("POST", csrf, { kind: "github", name, github: spec }),
+    ),
+  retryProjectImport: (csrf: string, id: string) =>
+    req<Project>(`/projects/${id}/imports/retry`, jsonInit("POST", csrf)),
   channelsStatus: () => req<ChannelsStatus>("/channels"),
   simulateQQ: (csrf: string, text: string, fromId?: string) =>
     req<SimulateResult>(

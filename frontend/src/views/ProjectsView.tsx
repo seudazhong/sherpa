@@ -3,6 +3,9 @@ import { useNavigate } from "react-router-dom";
 
 import {
   api,
+  type GithubConnectionStatus,
+  type GithubRef,
+  type GithubRepo,
   type Project,
   type ProjectEntry,
   type ProjectImportStatus,
@@ -68,6 +71,27 @@ export default function ProjectsView() {
   const [entries, setEntries] = useState<ProjectEntry[]>([]);
   const [snapshots, setSnapshots] = useState<ProjectSnapshot[]>([]);
 
+  // W2b — GitHub one-time import.
+  const [ghConn, setGhConn] = useState<GithubConnectionStatus | null>(null);
+  const [ghToken, setGhToken] = useState("");
+  const [ghRepos, setGhRepos] = useState<GithubRepo[]>([]);
+  const [ghRepoQuery, setGhRepoQuery] = useState("");
+  const [ghRepo, setGhRepo] = useState<GithubRepo | null>(null);
+  const [ghRefs, setGhRefs] = useState<GithubRef[]>([]);
+  const [ghRefType, setGhRefType] = useState<"branch" | "tag" | "commit">(
+    "branch",
+  );
+  const [ghRefName, setGhRefName] = useState("");
+  const [ghCommit, setGhCommit] = useState("");
+
+  const loadGhConn = useCallback(async () => {
+    try {
+      setGhConn(await api.getGithubConnection());
+    } catch {
+      setGhConn(null);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const page = await api.listProjects();
@@ -79,11 +103,12 @@ export default function ProjectsView() {
 
   useEffect(() => {
     void load();
+    void loadGhConn();
     void api
       .projectTemplates()
       .then(setTemplates)
       .catch(() => {});
-  }, [load]);
+  }, [load, loadGhConn]);
 
   // Poll while any project is still importing.
   const importing = useMemo(
@@ -118,8 +143,90 @@ export default function ProjectsView() {
     setDescription("");
     setTemplateId("notes");
     setPath("archive");
+    setGhRepo(null);
+    setGhRefs([]);
+    setGhRefName("");
+    setGhCommit("");
+    setGhRefType("branch");
     if (fileRef.current) fileRef.current.value = "";
   };
+
+  const connectGithub = async () => {
+    if (!csrf || !ghToken.trim()) return;
+    setError(null);
+    setBusy("gh-connect");
+    try {
+      const status = await api.connectGithub(csrf, ghToken.trim());
+      setGhConn(status);
+      setGhToken("");
+    } catch (e) {
+      const s = (e as { status?: number }).status;
+      setError(
+        s === 422
+          ? "GitHub rejected that token. Use a fine-grained PAT with contents:read."
+          : "Could not save the GitHub connection.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const disconnectGithub = async () => {
+    if (!csrf) return;
+    setBusy("gh-disconnect");
+    try {
+      await api.disconnectGithub(csrf);
+      setGhRepos([]);
+      setGhRepo(null);
+      setGhRefs([]);
+      await loadGhConn();
+    } catch {
+      setError("Could not disconnect GitHub.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadGhRepos = useCallback(async (query?: string) => {
+    setError(null);
+    try {
+      const page = await api.githubRepos(query);
+      setGhRepos(page.items);
+    } catch (e) {
+      const s = (e as { status?: number }).status;
+      setError(
+        s === 409
+          ? "Connect GitHub first to list repositories."
+          : s === 502
+            ? "GitHub is unavailable right now. Try again."
+            : "Could not list repositories.",
+      );
+    }
+  }, []);
+
+  const selectRepo = async (repo: GithubRepo) => {
+    setGhRepo(repo);
+    setGhRefType("branch");
+    setGhRefName(repo.default_branch);
+    setGhCommit("");
+    try {
+      const refs = await api.githubRefs(repo.repo_external_id);
+      setGhRefs(refs);
+      const def = refs.find(
+        (r) => r.ref_type === "branch" && r.name === repo.default_branch,
+      );
+      if (def) setGhRefName(def.name);
+    } catch {
+      setGhRefs([]);
+    }
+  };
+
+  // Load repos when the user enters the GitHub path with a live connection.
+  useEffect(() => {
+    if (surface === "new" && path === "github" && ghConn?.connected) {
+      void loadGhRepos();
+    }
+  }, [surface, path, ghConn?.connected, loadGhRepos]);
 
   const submitCreate = async () => {
     if (!csrf) return;
@@ -145,6 +252,34 @@ export default function ProjectsView() {
           description: description.trim() || null,
           template_id: templateId,
         });
+      } else if (path === "github") {
+        if (!ghConn?.connected) {
+          setError("Connect GitHub first.");
+          setBusy(null);
+          return;
+        }
+        if (!ghRepo) {
+          setError("Choose a repository to import.");
+          setBusy(null);
+          return;
+        }
+        const ref = ghRefType === "commit" ? ghCommit.trim() : ghRefName.trim();
+        if (!ref) {
+          setError(
+            ghRefType === "commit"
+              ? "Enter a commit SHA to import."
+              : `Choose a ${ghRefType} to import.`,
+          );
+          setBusy(null);
+          return;
+        }
+        await api.importProjectGithub(csrf, trimmed, {
+          repo_external_id: ghRepo.repo_external_id,
+          owner: ghRepo.owner,
+          repo: ghRepo.repo,
+          ref_type: ghRefType,
+          ref,
+        });
       } else {
         await api.createProject(csrf, {
           name: trimmed,
@@ -158,8 +293,26 @@ export default function ProjectsView() {
       const status = (e as { status?: number }).status;
       if (status === 409) setError("A project with that name already exists.");
       else if (status === 413) setError("That archive is too large.");
-      else if (status === 507) setError("Not enough storage quota for this import.");
+      else if (status === 507)
+        setError("Not enough storage quota for this import.");
+      else if (status === 422)
+        setError("That import request was rejected — check the repo and ref.");
       else setError("Could not create the project.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const retryImport = async (id: string) => {
+    if (!csrf) return;
+    setBusy("retry");
+    try {
+      await api.retryProjectImport(csrf, id);
+      await load();
+      const proj = await api.getProject(id);
+      setDetail(proj);
+    } catch {
+      setError("Could not retry the import.");
     } finally {
       setBusy(null);
     }
@@ -234,8 +387,9 @@ export default function ProjectsView() {
                 <span>importing</span>
               </article>
               <span className="proj-note small muted">
-                W2a = blank / template / archive import (<b>no GitHub</b> — that
-                is W2b). All projects are <code>unbound</code> (no source).
+                Blank / template / archive, or a <b>GitHub one-time import</b>{" "}
+                (select repo + ref → immutable initial snapshot). After import
+                the project is independent — the remote is not authoritative.
               </span>
             </div>
 
@@ -279,7 +433,7 @@ export default function ProjectsView() {
                           {STATUS_LABEL[p.import_status]}
                         </span>
                         <span>{fmtSize(p.used_bytes)}</span>
-                        <span>unbound</span>
+                        <span>{p.source_status}</span>
                         <span>{fmtTime(p.last_activity_at ?? p.updated_at)}</span>
                         {p.import_status === "failed" &&
                           p.import_failure_reason && (
@@ -351,14 +505,13 @@ export default function ProjectsView() {
                 </span>
               </button>
               <button
-                className="proj-path disabled"
-                disabled
-                title="GitHub import lands in W2b"
+                className={`proj-path${path === "github" ? " active" : ""}`}
+                onClick={() => setPath("github")}
               >
                 <strong>Import from GitHub</strong>
                 <span className="small muted">
-                  One-time branch import. <b>W2a excludes it</b> — planned for
-                  W2b.
+                  One-time import of a repo at a branch / tag / commit. The
+                  remote is not authoritative after import.
                 </span>
               </button>
             </div>
@@ -422,13 +575,169 @@ export default function ProjectsView() {
                 </>
               )}
 
+              {path === "github" && (
+                <div className="proj-github">
+                  <div className="proj-gh-conn">
+                    {ghConn?.connected ? (
+                      <div className="proj-gh-connected">
+                        <span className="pill pill-success">connected</span>
+                        <span className="small">
+                          <b>{ghConn.account_login}</b>
+                          {ghConn.scopes.length > 0 && (
+                            <span className="small muted">
+                              {" "}
+                              · {ghConn.scopes.join(", ")}
+                            </span>
+                          )}
+                        </span>
+                        <button
+                          className="btn btn-quiet"
+                          onClick={() => void disconnectGithub()}
+                          disabled={busy === "gh-disconnect"}
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="proj-gh-connect">
+                        <p className="small muted">
+                          Connect a GitHub <b>fine-grained PAT</b> with{" "}
+                          <code>contents:read</code>. It is sealed server-side in
+                          the encrypted vault and <b>never</b> returned, logged,
+                          or written into a project.
+                        </p>
+                        <div className="proj-gh-token-row">
+                          <input
+                            type="password"
+                            value={ghToken}
+                            onChange={(e) => setGhToken(e.target.value)}
+                            placeholder="github_pat_…"
+                            autoComplete="off"
+                          />
+                          <button
+                            className="btn btn-primary"
+                            onClick={() => void connectGithub()}
+                            disabled={busy === "gh-connect" || !ghToken.trim()}
+                          >
+                            Connect
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {ghConn?.connected && (
+                    <>
+                      <label className="proj-field">
+                        <span>Repository</span>
+                        <div className="proj-gh-repo-search">
+                          <input
+                            value={ghRepoQuery}
+                            onChange={(e) => setGhRepoQuery(e.target.value)}
+                            placeholder="Filter your repositories…"
+                          />
+                          <button
+                            className="btn btn-quiet"
+                            onClick={() => void loadGhRepos(ghRepoQuery)}
+                          >
+                            Search
+                          </button>
+                        </div>
+                      </label>
+                      <ul className="proj-gh-repos">
+                        {ghRepos.map((r) => (
+                          <li key={r.repo_external_id}>
+                            <button
+                              className={`proj-gh-repo${
+                                ghRepo?.repo_external_id === r.repo_external_id
+                                  ? " active"
+                                  : ""
+                              }`}
+                              onClick={() => void selectRepo(r)}
+                            >
+                              <span className="proj-gh-repo-name">
+                                {r.owner}/{r.repo}
+                              </span>
+                              <span className="small muted">
+                                {r.private ? "private" : "public"} ·{" "}
+                                {r.default_branch}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                        {ghRepos.length === 0 && (
+                          <li className="small muted">
+                            No repositories loaded — Search to list them.
+                          </li>
+                        )}
+                      </ul>
+
+                      {ghRepo && (
+                        <div className="proj-gh-ref">
+                          <div className="proj-gh-ref-tabs">
+                            {(["branch", "tag", "commit"] as const).map((k) => (
+                              <button
+                                key={k}
+                                className={`proj-gh-ref-tab${
+                                  ghRefType === k ? " active" : ""
+                                }`}
+                                onClick={() => setGhRefType(k)}
+                              >
+                                {k}
+                              </button>
+                            ))}
+                          </div>
+                          {ghRefType === "commit" ? (
+                            <label className="proj-field">
+                              <span>Commit SHA</span>
+                              <input
+                                value={ghCommit}
+                                onChange={(e) => setGhCommit(e.target.value)}
+                                placeholder="full or short commit SHA"
+                              />
+                            </label>
+                          ) : (
+                            <label className="proj-field">
+                              <span>
+                                {ghRefType === "branch" ? "Branch" : "Tag"}
+                              </span>
+                              <select
+                                value={ghRefName}
+                                onChange={(e) => setGhRefName(e.target.value)}
+                              >
+                                {ghRefs
+                                  .filter((r) => r.ref_type === ghRefType)
+                                  .map((r) => (
+                                    <option key={r.name} value={r.name}>
+                                      {r.name}
+                                    </option>
+                                  ))}
+                              </select>
+                            </label>
+                          )}
+                          <p className="proj-safety small muted">
+                            <b>Bounded archive fetch, no git history.</b> The ref
+                            resolves to a commit OID, then that tree is fetched
+                            and expanded under the same safety caps as archive
+                            import (traversal / device / escaping-symlink
+                            rejected). The credential stays in the vault.
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
               <div className="proj-form-actions">
                 <button
                   className="btn btn-primary"
                   onClick={() => void submitCreate()}
                   disabled={busy === "create"}
                 >
-                  {path === "archive" ? "Import project" : "Create project"}
+                  {path === "archive" || path === "github"
+                    ? "Import project"
+                    : "Create project"}
                 </button>
                 <button
                   className="btn btn-quiet"
@@ -453,7 +762,9 @@ export default function ProjectsView() {
                 <h3>{detail.name}</h3>
                 <span className="small muted">
                   {detail.current_snapshot_id
-                    ? `head snapshot · unbound (no source)`
+                    ? detail.source?.provider === "github"
+                      ? `head snapshot · ${detail.source.owner}/${detail.source.repo}@${detail.source.ref_name}`
+                      : `head snapshot · ${detail.source_status}`
                     : detail.import_status === "failed"
                       ? `import failed${detail.import_failure_reason ? ` · ${detail.import_failure_reason}` : ""}`
                       : "importing…"}
@@ -467,6 +778,16 @@ export default function ProjectsView() {
                 >
                   Open in Chat
                 </button>
+              ) : detail.import_status === "failed" &&
+                detail.source?.provider === "github" ? (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => void retryImport(detail.id)}
+                  disabled={busy === "retry"}
+                  title="Re-fetch by the resolved commit OID (idempotent)"
+                >
+                  重试导入 · Retry import
+                </button>
               ) : (
                 <span className="small muted proj-open-off">
                   {detail.import_status === "failed"
@@ -476,13 +797,55 @@ export default function ProjectsView() {
               )}
             </div>
 
+            {detail.source?.provider === "github" && (
+              <div className="proj-provenance">
+                <h4>Source (provenance)</h4>
+                <div className="proj-facts">
+                  <span className="fact">
+                    <strong>Provider</strong>GitHub
+                  </span>
+                  <span className="fact">
+                    <strong>Repository</strong>
+                    {detail.source.owner}/{detail.source.repo}
+                  </span>
+                  <span className="fact">
+                    <strong>Repo id</strong>
+                    {detail.source.repo_external_id}
+                  </span>
+                  <span className="fact">
+                    <strong>Ref</strong>
+                    {detail.source.ref_type}: {detail.source.ref_name}
+                  </span>
+                  <span className="fact proj-oid">
+                    <strong>Source OID</strong>
+                    <code>{detail.source.source_oid ?? "—"}</code>
+                  </span>
+                  <span className="fact">
+                    <strong>Imported</strong>
+                    {fmtTime(detail.source.imported_at)}
+                  </span>
+                  <span className="fact">
+                    <strong>Connection</strong>
+                    {ghConn?.account_login ?? "—"}
+                  </span>
+                </div>
+                <p className="small muted">
+                  This is a <b>one-time import</b> pinned to the resolved commit
+                  OID. The remote is <b>not authoritative</b>: renaming,
+                  deleting, or revoking it does not affect this project. No
+                  background sync, push, or PR (those are later).
+                </p>
+              </div>
+            )}
+
             <div className="proj-facts">
               <span className="fact">
                 <strong>Storage</strong>
                 {fmtSize(detail.used_bytes)}
               </span>
               <span className="fact">
-                <strong>Source</strong>unbound
+                <strong>Source</strong>
+                {detail.source_status}
               </span>
               <span className="fact">
                 <strong>Snapshots</strong>
