@@ -1652,13 +1652,13 @@ class KnowledgeSearchResult(StrictModel):
 
 ### 10.5 Projects — Workspace W2a (ADR-037)
 
-> **Design/contract-first only (ADR-037).** These routes are **not yet implemented** and the
-> SPA route `/work/projects` is **not exposed in production navigation** in W2a — the shape is
-> frozen here so implementation (after owner review) matches exactly. W2a covers **blank /
-> template / archive** projects + Project detail + **Open in Chat**. **GitHub import is W2b**;
-> working-copy/sandbox/change-review is W3; Git sync/push is W4 (each its own ADR). Capability
-> layer `services/projects.py` behind thin REST (below) + the W2a agent tools (ADR-023 dual
-> adapter). All routes are `Session`-authenticated, tenant + user scoped.
+> **✅ W2a SHIPPED (routes implemented; SPA `/work/projects` nav exposed).** (This banner was the
+> design/contract-first note; W2a is now implemented — see the "UI" bullet + realization note at the
+> end of this section. **§10.6 below (W2b GitHub import) stays design/contract-first.**) W2a covers
+> **blank / template / archive** projects + Project detail + **Open in Chat**. **GitHub import is
+> W2b (§10.6)**; working-copy/sandbox/change-review is W3; Git sync/push is W4 (each its own ADR).
+> Capability layer `services/projects.py` behind thin REST (below) + the W2a agent tools (ADR-023
+> dual adapter). All routes are `Session`-authenticated, tenant + user scoped.
 
 ```python
 class ProjectSummary(StrictModel):
@@ -1666,7 +1666,7 @@ class ProjectSummary(StrictModel):
     name: str
     description: str | None
     status: Literal["active", "archived", "deleting"]
-    source_status: Literal["unbound"]          # W2b adds clean/remote_ahead/diverged/...
+    source_status: Literal["unbound"]          # W2b (§10.6) adds importing/imported/import_failed; W4 adds clean/remote_ahead/diverged/...
     current_snapshot_id: UUID | None
     used_bytes: int
     last_activity_at: datetime | None
@@ -1684,9 +1684,9 @@ class ProjectCreate(StrictModel):
     template_id: str | None = None             # None => blank project
 
 class ProjectImportRequest(StrictModel):
-    kind: Literal["archive", "github"]         # 'github' returns 501 in W2a (W2b)
+    kind: Literal["archive", "github"]         # 'github' returns 501 in W2a; W2b (§10.6) upgrades it to 202
     name: Annotated[str, Field(min_length=1, max_length=200)]
-    # archive: multipart file part; github: repo/branch (W2b) — validated per kind.
+    # archive: multipart file part; github: a GithubImportSpec (repo + ref, §10.6) — validated per kind.
 
 class ProjectEntry(StrictModel):
     path: str
@@ -1749,3 +1749,123 @@ class ProjectContext(StrictModel):
   with GitHub disabled→W2b / detail read-only tree + snapshots + activity / Open in Chat) ported
   from the [static draft](../design-workspace/index.html) onto the Quiet Work system; the
   capability-matrix UI cells (docs/11 §9) flip to ✅. Agent tools remain the ADR-023 dual adapter.
+
+### 10.6 Projects — Workspace W2b GitHub one-time import (ADR-038)
+
+> **Design/contract-first only (ADR-038).** These routes are **not yet implemented** and no W2b
+> production navigation is exposed; the shape is frozen here so the implementation (after owner
+> review) matches exactly. W2b upgrades `POST /projects/imports kind='github'` from **`501` to a
+> durable `202`** and adds read-only **repo/ref pickers** + **GitHub connection** management. It is
+> a **one-time import** (select repo + ref → bounded archive fetch → immutable initial snapshot →
+> record source repo/ref/OID); **no sync/fetch loop, working copy, push, or PR** (those are W3/W4).
+> All routes are `Session`-authenticated, tenant + user scoped; writes require CSRF. GitHub
+> credentials stay in the vault/connector boundary (ADR-019) and never reach the client, a project
+> tree, a prompt, a log, or a tool result.
+
+```python
+class GithubConnectionStatus(StrictModel):
+    id: UUID | None                             # connection id (null when not connected); referenced by imports
+    connected: bool
+    auth_kind: Literal["pat", "app_installation"] | None
+    account_login: str | None                  # display only; never the token
+    scopes: list[str]                           # e.g. ["contents:read"]
+    status: Literal["pending", "active", "revoked", "error"] | None
+    last_error_redacted: str | None
+
+class GithubConnectionCreate(StrictModel):
+    # v1 first-version credential = a fine-grained PAT with contents:read. The token is AEAD-sealed
+    # server-side on receipt and never returned. app_installation (GitHub App) is the forward path.
+    auth_kind: Literal["pat"] = "pat"
+    token: Annotated[SecretStr, Field(min_length=1)]
+
+class GithubRepo(StrictModel):
+    repo_external_id: str                        # stable GitHub numeric repo id (survives rename)
+    owner: str
+    repo: str
+    private: bool
+    default_branch: str
+
+class GithubRef(StrictModel):
+    ref_type: Literal["branch", "tag"]
+    name: str
+    oid: str                                     # tip commit OID for the ref
+
+class GithubImportSpec(StrictModel):
+    # POST /projects/imports body when kind='github'. A commit ref_type accepts a full/short SHA in
+    # `ref`; branch/tag resolve to a concrete OID before fetch and are pinned to it.
+    repo_external_id: str
+    owner: str
+    repo: str
+    ref_type: Literal["branch", "tag", "commit"]
+    ref: str                                     # branch/tag name, or commit SHA
+    connection_id: UUID | None = None            # None => use the owner's active connection; W2b first
+                                                 # version requires an active connection (public-repo
+                                                 # import without a connection is a later relaxation).
+```
+
+`ProjectImportRequest` (api §10.5) is extended for W2b: when `kind='github'` the request carries a
+`github: GithubImportSpec` (instead of a multipart archive part). `ProjectSummary.source_status`
+widens to `Literal["unbound","importing","imported","import_failed"]` (W2a value stays `unbound`);
+its existing derived `import_status` (`none|importing|ready|failed`) still conveys async progress —
+a **failed import keeps `status='active'`** with `import_status='failed'` + `source_status='import_failed'`
+and **no snapshot** (never a `status='failed'`). `ProjectSummary` also gains an optional
+`source: ProjectSource | None` on `GET /projects/{id}` surfacing the provenance:
+
+```python
+class ProjectSource(StrictModel):
+    provider: Literal["github"]
+    repo_external_id: str                        # stable GitHub numeric repo id (survives rename)
+    owner: str
+    repo: str
+    ref_type: Literal["branch", "tag", "commit"]
+    ref_name: str
+    source_oid: str | None                       # resolved commit OID (null until resolved)
+    status: Literal["importing", "imported", "import_failed"]
+    imported_at: datetime | None
+    # NOTE: no credential/token field ever — provenance only.
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /connections/github` | none → `GithubConnectionStatus` | Session | `200`, `401` |
+| `POST /connections/github` | `GithubConnectionCreate` → `GithubConnectionStatus` | Session + CSRF | `201`, `401`, `422` |
+| `DELETE /connections/github` | none → `204` | Session + CSRF | `204`, `401`, `404` |
+| `GET /projects/github/repos?query=&cursor=&limit=` | none → `CursorPage[GithubRepo]` | Session | `200`, `401`, `409`, `422`, `502` |
+| `GET /projects/github/refs?repo_external_id=&kind=&query=` | none → `list[GithubRef]` | Session | `200`, `401`, `409`, `422`, `502` |
+| `POST /projects/imports` (`kind='github'`) | `ProjectImportRequest` → `ProjectSummary` | Session + CSRF | `202`, `401`, `404`, `409`, `422`, `507` |
+| `POST /projects/{id}/imports/retry` | none → `ProjectSummary` | Session + CSRF | `202`, `401`, `404`, `409` |
+
+- **`POST /projects/imports` `kind='github'`** validates the request **synchronously** (active
+  connection present → else `409`; repo/ref spec well-formed → else `422`; quota reservation fits →
+  else `507`) and returns `202` with `import_status='importing'` (no snapshot yet). The **durable,
+  async** worker then resolves the ref → a concrete commit OID, fetches the **tarball** of that OID
+  (contents only, no git history), expands it through the **same W2a isolated bounded safe expander**,
+  materializes the initial immutable `reason='import'` snapshot with `source_oid` set, and records
+  `project_sources`. **All async failures** (upstream GitHub unavailable/auth, oversize over
+  `PROJECT_MAX_*`, unsafe/traversal/device entries) surface as `import_status='failed'` +
+  `source_status='import_failed'` with a named `termination_reason` (events §2.10) — **no** snapshot,
+  the project stays `status='active'` (visible + deletable), never a snapshot over the wrong bytes.
+- **`POST /projects/{id}/imports/retry`** re-enqueues the durable import job for a `failed` project
+  (idempotent on `(project_id, import)`; read-only re-fetch by the resolved OID → identical bytes) —
+  the UI "重试导入" action. Only valid while the project has no active snapshot (`409` otherwise).
+- **`GET /projects/github/repos` / `.../refs`** are read-only pickers the server proxies **through
+  the stored connection credential** (decrypted only server-side; the token never reaches the
+  client); `409` when there is no active connection, `502` on a redacted upstream GitHub error.
+- **`GET /connections/github`** returns connection status for the UI (id + display login + scopes +
+  status) — **never** the token. `POST` seals a fine-grained PAT into the AEAD vault on receipt and
+  returns only status; `DELETE` revokes + deletes the sealed token.
+- **Idempotency / effect semantics:** the GitHub fetch is **read-only** (no remote mutation), so —
+  unlike a W4 push — there is no `effect_unknown` remote reconciliation: a failed/partial fetch is
+  safely retryable (re-fetch by resolved OID → identical bytes). Idempotency key `(project_id,
+  import)` (one import per project); a crash/replay never yields a half-built or duplicate project
+  (events §2.10).
+- **Tool surface (W2b, ADR-023):** **no new agent tool.** GitHub import is **human-only** (it
+  crosses the credential boundary and pulls untrusted external content, and avoids letting the
+  agent enumerate the user's private repos) — consistent with W2a archive upload. After import the
+  agent reads the project via the existing `project_tree`/`project_read` (project files remain
+  **untrusted content**, ADR-009). **Not given to the agent:** `project_push` (W4), `project_run`
+  (W3), any destructive purge.
+- **UI:** the W2b flow (GitHub connection status / repo + ref selection / import progress / success
+  source metadata / failure + retry) is delivered in this batch as a **static draft only**
+  ([`github-import.html`](../design-workspace/github-import.html)); the capability-matrix UI cells
+  (docs/11 §9) stay ⬜ and **no W2b production navigation is exposed** until implementation lands.

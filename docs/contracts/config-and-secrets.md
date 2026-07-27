@@ -128,6 +128,17 @@ class Settings(BaseSettings):
     project_max_path_depth: int = Field(default=40, ge=1)
     project_snapshot_retention_days: int = Field(default=30, ge=1)          # unpinned snapshot GC (pinned kept)
 
+    # Projects — Workspace W2b (ADR-038): GitHub ONE-TIME import (select repo + ref -> bounded
+    # archive fetch -> immutable initial snapshot -> record source repo/ref/OID). No sync/push/PR
+    # (W4), no sandbox (W3). The archive-fetch path reuses the PROJECT_MAX_* bounds above.
+    # (Design/contract-first — not yet wired; frozen here so the W2b impl reads them exactly.)
+    github_api_base: str = Field(default="https://api.github.com")          # override for GHE
+    github_default_auth_kind: str = Field(default="pat")                    # pat | app_installation
+    github_import_ref_types: list[str] = Field(default_factory=lambda: ["branch", "tag", "commit"])
+    github_app_id: str | None = None                                        # GitHub App (app_installation)
+    github_app_private_key: SecretStr | None = None                        # PEM; vault/secret, never logged
+    github_archive_timeout_seconds: int = Field(default=120, ge=1)          # bounded archive fetch deadline
+
     # Agent observability (ADR-033): OpenTelemetry gen_ai spans, off by default.
     # A derived diagnostic layer over the ADR-016 journal — never a source of truth.
     otel_enabled: bool = False
@@ -352,6 +363,12 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Projects (W2a) | `PROJECT_MAX_EXPANSION_RATIO` | `int` ≥ 1 | `100` | No | No | Zip-bomb guard: expanded/compressed ratio. |
 | Projects (W2a) | `PROJECT_MAX_PATH_DEPTH` | `int` ≥ 1 | `40` | No | No | Max path component depth in a snapshot entry. |
 | Projects (W2a) | `PROJECT_SNAPSHOT_RETENTION_DAYS` | `int` ≥ 1 | `30` | No | No | Unpinned snapshot GC window; pinned checkpoints kept. |
+| Projects (W2b) | `GITHUB_API_BASE` | `str` | `https://api.github.com` | `web`, `worker` | No | GitHub REST base (override for GitHub Enterprise); ref-resolve + archive fetch (ADR-038). |
+| Projects (W2b) | `GITHUB_DEFAULT_AUTH_KIND` | `pat \| app_installation` | `pat` | No | No | First-version credential kind; `app_installation` (GitHub App) is the forward path. |
+| Projects (W2b) | `GITHUB_IMPORT_REF_TYPES` | JSON list of `branch \| tag \| commit` | `["branch","tag","commit"]` | No | No | Accepted one-time-import ref kinds (all three first-version, ADR-038). |
+| Projects (W2b) | `GITHUB_APP_ID` | `str` | None | `web`, `worker` | No | GitHub App id (only when `app_installation`). |
+| Projects (W2b) | `GITHUB_APP_PRIVATE_KEY` | `SecretStr` | None | `worker` | **Yes** | GitHub App PEM for minting installation tokens; vault/secret, never logged or in project content. |
+| Projects (W2b) | `GITHUB_ARCHIVE_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Bounded deadline for the archive (tarball) fetch. |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
 | Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | `AnyHttpUrl` | None | No | No | OTLP endpoint (e.g. self-hosted Phoenix `http://phoenix:4317`); unset = console/in-memory exporter only. |
 | Observability | `OTEL_CAPTURE_MESSAGE_CONTENT` | `bool` | `false` | No | No | Opt-in capture of prompt/completion/tool content into spans (PII); redacted when on. Also set the upstream `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` if using OTel auto-instrumentation. |
@@ -399,6 +416,16 @@ Design/contract-first (ADR-037); the settings above are frozen but **not yet wir
 - **Project bytes are content-addressed and reference-counted** via the ADR-030 `storage_blobs`/quota ledger (reserve before write, `507` over quota; distinct blobs charged once). Snapshot entries are immutable; snapshot bytes are never in the append-only journal (events §2.9).
 - **No credentials in project state.** Project file trees, snapshots, prompts, logs, and tool results MUST NOT contain provider/model/storage/source credentials. GitHub source credentials arrive only in **W2b** and stay in the vault/connector boundary (ADR-019); they never enter a snapshot or (W3) a sandbox.
 - **W2a has no sandbox.** Open in Chat is read/discuss only — no working copy, no container, no mount. The scratch-copy sandbox and the `docker.sock`/multi-user isolation hardening are **W3 preconditions** governed by a later ADR-025 revision (ADR-037 §决策3/4).
+
+### 1.6 GitHub source boundary — Workspace W2b (ADR-038)
+
+Design/contract-first (ADR-038); the `GITHUB_*` settings above are frozen but **not yet wired**. W2b is a **one-time GitHub import** (select repo + ref → bounded archive fetch → immutable initial snapshot → record source repo/ref/OID); the remote is **not** authoritative after import. When the W2b implementation lands it MUST honor this boundary:
+
+- **Credentials live only in the vault/connector boundary (ADR-019).** The GitHub token (a fine-grained PAT with `contents:read`, or a GitHub App installation token) is AEAD-sealed in `github_connections` and decrypted **only** by the import worker at the connector boundary. It MUST NOT appear in a project file tree, snapshot, snapshot entry, prompt, log, tool result, the event journal, an export, or (W3) a sandbox. `project_sources.connection_id` is a reference, never the token. `GITHUB_APP_PRIVATE_KEY` is a secret handled like other AEAD/KEK material (never logged).
+- **The fetched archive is untrusted input.** The worker resolves the ref → a concrete commit OID, fetches the **tarball** of that OID (contents only, no git history — no `git clone`, no `.git`, no working copy), and expands it through the **same W2a isolated, bounded, in-memory safe expander**: enforce `PROJECT_MAX_ARCHIVE_BYTES`/`PROJECT_MAX_EXPANDED_BYTES`/`PROJECT_MAX_ENTRIES`/`PROJECT_MAX_EXPANSION_RATIO`/`PROJECT_MAX_PATH_DEPTH` and reject absolute/traversal (`..`)/NUL paths, device/FIFO nodes, hard links, and escaping symlinks before materializing. Do not trust upstream file names as safe.
+- **Bytes are content-addressed + reference-counted** via the ADR-030 `storage_blobs`/quota ledger (reserve before write, `507` over quota; distinct blobs charged once) — the same as Drive/archive imports. Snapshot bytes are never in the append-only journal (events §2.10).
+- **Read-only fetch ⇒ idempotent; no external write.** The archive fetch does not mutate the remote, so there is no `effect_unknown` remote reconciliation in W2b (that is W4 push). A failed/partial fetch is retryable by resolved OID. `source_oid` is recorded as provenance; W2b never re-fetches or tracks the remote.
+- **No sandbox / no external write in W2b.** Working copy + scratch-copy sandbox is W3; GitHub sync/push/PR (ADR-020 approval, expected remote OID, no first-version force push) is W4. Each is a later ADR.
 
 ## 2. Frozen `.env.example`
 

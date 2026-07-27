@@ -2526,13 +2526,13 @@ Notes:
 
 ### Projects — Workspace W2a (ADR-037, source-backed development state — additive, post-v1)
 
-> **Design/contract-first only (ADR-037).** These tables are **not yet migrated** and
-> production Projects navigation is **not exposed**; this section freezes the W2a shape so
-> implementation (after owner review) writes to it exactly. W2a = **blank / template /
-> archive** projects (no GitHub — that is W2b). Every table carries `tenant_id` + composite
-> tenant-scoped keys (ADR-015). **Canonical** = `projects` + immutable `project_snapshots` +
-> `project_snapshot_entries` pointing at ADR-030 `storage_blobs`; **no derived/rebuildable**
-> tables in W2a. Deferred to later ADRs (do **not** add in W2a): `project_sources` (W2b),
+> **✅ W2a SHIPPED (migration `0028`, `/work/projects` nav exposed).** (The banner below was
+> the design/contract-first note; W2a is now implemented — see the "Realization" note at the end
+> of this section. W2b below it stays design/contract-first.) Every table carries `tenant_id` +
+> composite tenant-scoped keys (ADR-015). W2a = **blank / template / archive** projects (no GitHub
+> — that is W2b). **Canonical** = `projects` + immutable `project_snapshots` +
+> `project_snapshot_entries` pointing at ADR-030 `storage_blobs`; **no derived/rebuildable** tables
+> in W2a. Deferred to later ADRs: `project_sources` (**W2b**, now specified below),
 > `project_working_copies` / `project_change_sets` / `project_artifacts` (W3).
 
 ```sql
@@ -2702,3 +2702,155 @@ Notes:
   frozen run-scoped `event_journal` (run_id NOT NULL) is not used for `project.lifecycle`;
   the job's stage/termination_reason + at-least-once enqueue + a recovery tick provide the
   same durability guarantee (see events §2.9).
+
+### Projects — Workspace W2b GitHub one-time import (ADR-038, additive, post-v1)
+
+> **Design/contract-first only (ADR-038).** These deltas are **not yet migrated** and no W2b
+> production navigation is exposed; this section freezes the W2b shape so the implementation
+> (after owner review) writes to it exactly. **W2b = GitHub *one-time* import** — select a
+> repository + ref (branch/tag/commit), bounded **archive fetch** of that ref's tree (no git
+> history), record source repo/ref/OID provenance, materialize an **immutable initial snapshot**.
+> After import the project lives independently; **the remote is not the source of truth.** No
+> background fetch/sync, working copy, git init/commit/branch, merge, push, PR, force push, or
+> sandbox (those are W3/W4). Every table carries `tenant_id` + composite tenant-scoped keys
+> (ADR-015). **Canonical** = `project_sources` (provenance) + the existing immutable
+> `project_snapshots`/`project_snapshot_entries`; the GitHub **credential** lives only in
+> `github_connections` (AEAD, ADR-019) and **never** enters a project tree/snapshot/prompt/log/
+> tool result/sandbox. Deferred to later ADRs (do **not** add in W2b): W4 sync/fetch columns on
+> `project_sources`; `project_working_copies`/`project_change_sets`/`project_artifacts` (W3).
+
+```sql
+-- GitHub credential record (one active connection per owner in v1). Reuses the connectors AEAD
+-- column shape (ADR-019); the token is decrypted ONLY by the import worker at the connector
+-- boundary and never leaves it. auth_kind is extensible: 'pat' = fine-grained PAT (contents:read,
+-- first-version, lowest setup for self-hosted single-user); 'app_installation' = GitHub App
+-- installation token (contents:read, <=8h, not user-bound) — the recommended/forward path, added
+-- later WITHOUT a schema change. Public-repo import may use no token.
+CREATE TABLE github_connections (
+    tenant_id       uuid NOT NULL,
+    id              uuid NOT NULL,
+    user_id         uuid NOT NULL,
+    auth_kind       text NOT NULL,                 -- pat | app_installation
+    account_login   text,                          -- GitHub login/org the token acts as (display)
+    installation_id text,                          -- GitHub App installation id (app_installation only)
+    token_enc       bytea,                         -- AEAD ciphertext (never logged/exported plaintext)
+    nonce           bytea,
+    kek_id          text,
+    key_version     integer,
+    token_algorithm text,
+    aad_version     smallint,
+    scopes          text[] NOT NULL DEFAULT ARRAY[]::text[],  -- e.g. {'contents:read'}
+    status          text NOT NULL DEFAULT 'pending',  -- pending|active|revoked|error
+    last_error_redacted text,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_github_connections PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_ghc_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ghc_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_ghc_auth_kind CHECK (auth_kind IN ('pat','app_installation')),
+    CONSTRAINT ck_ghc_status CHECK (status IN ('pending','active','revoked','error')),
+    -- AEAD all-or-none, mirroring connectors (a live connection MUST carry a sealed token).
+    CONSTRAINT ck_ghc_aead_all_or_none CHECK (
+        (token_enc IS NULL AND nonce IS NULL AND kek_id IS NULL AND key_version IS NULL
+             AND token_algorithm IS NULL AND aad_version IS NULL)
+        OR (token_enc IS NOT NULL AND nonce IS NOT NULL AND kek_id IS NOT NULL
+             AND key_version IS NOT NULL AND token_algorithm IS NOT NULL AND aad_version IS NOT NULL)),
+    CONSTRAINT ck_ghc_active_has_token CHECK (status <> 'active' OR token_enc IS NOT NULL)
+);
+CREATE UNIQUE INDEX uq_ghc_owner_active
+    ON github_connections (tenant_id, user_id)
+    WHERE status <> 'revoked';
+
+-- Canonical GitHub source provenance: one row per project once a github import starts. After a
+-- successful import this is a frozen provenance record (repo id + ref + resolved OID). The remote
+-- is NOT authoritative; W2b never re-fetches. W4 EXTENDS this table with sync/fetch columns
+-- (source_base_oid, last remote OID, last_fetched_at, sync state) under its own ADR — not here.
+CREATE TABLE project_sources (
+    tenant_id        uuid NOT NULL,
+    id               uuid NOT NULL,
+    project_id       uuid NOT NULL,
+    user_id          uuid NOT NULL,
+    provider         text NOT NULL DEFAULT 'github',  -- W2b: only 'github'
+    connection_id    uuid,                            -- vault credential ref; W2b first version
+                                                      -- requires an active connection (public-repo
+                                                      -- import without a connection is a later relaxation)
+    repo_external_id text NOT NULL,                   -- stable GitHub numeric repo id (survives rename)
+    owner            text NOT NULL,                   -- display owner/org (not a source of truth key)
+    repo             text NOT NULL,                   -- display repo name
+    ref_type         text NOT NULL,                   -- branch | tag | commit
+    ref_name         text NOT NULL,                   -- the selected branch/tag name or commit sha
+    source_oid       text,                            -- resolved commit OID (NULL until resolved)
+    status           text NOT NULL DEFAULT 'importing',  -- importing | imported | import_failed
+    imported_at      timestamptz,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_project_sources PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_psrc_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_psrc_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_psrc_project FOREIGN KEY (tenant_id, project_id)
+        REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_psrc_connection FOREIGN KEY (tenant_id, connection_id)
+        REFERENCES github_connections (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT ck_psrc_provider CHECK (provider IN ('github')),
+    CONSTRAINT ck_psrc_ref_type CHECK (ref_type IN ('branch','tag','commit')),
+    CONSTRAINT ck_psrc_status CHECK (status IN ('importing','imported','import_failed'))
+);
+-- One source binding per project in W2b (one-time import).
+CREATE UNIQUE INDEX uq_psrc_project ON project_sources (tenant_id, project_id);
+
+-- projects.source_status CHECK widens for W2b (W2a was 'unbound' only). Richer W4 sync states
+-- (clean/remote_ahead/local_ahead/diverged/conflicted/auth_required/remote_unavailable/sync_error)
+-- are DEFERRED to W4.
+ALTER TABLE projects DROP CONSTRAINT ck_projects_source_status;
+ALTER TABLE projects ADD CONSTRAINT ck_projects_source_status
+    CHECK (source_status IN ('unbound','importing','imported','import_failed'));
+
+-- project_import_jobs learns the github create_kind + carries the source spec/credential ref so
+-- the durable worker can resolve ref->OID and fetch the archive. (No token here — only a
+-- connection_id reference; the token stays in github_connections/vault.)
+ALTER TABLE project_import_jobs DROP CONSTRAINT ck_pij_kind;
+ALTER TABLE project_import_jobs ADD CONSTRAINT ck_pij_kind
+    CHECK (create_kind IN ('archive','github'));
+ALTER TABLE project_import_jobs ADD COLUMN connection_id   uuid;   -- github credential ref (nullable)
+ALTER TABLE project_import_jobs ADD COLUMN source_ref_type text;   -- branch|tag|commit (github)
+ALTER TABLE project_import_jobs ADD COLUMN source_ref      text;   -- selected ref name/sha (github)
+ALTER TABLE project_import_jobs ADD COLUMN resolved_oid    text;   -- filled after ref->OID resolution
+ALTER TABLE project_import_jobs
+    ADD CONSTRAINT fk_pij_connection FOREIGN KEY (tenant_id, connection_id)
+        REFERENCES github_connections (tenant_id, id) ON DELETE RESTRICT;
+```
+
+Notes:
+
+- **Credential boundary (ADR-019/038):** the GitHub token lives **only** in `github_connections`
+  (AEAD, all-or-none), is decrypted **only** by the import worker at the connector boundary, and
+  is **never** written into `project_sources`, a snapshot, an entry, the journal, logs, prompts,
+  tool results, or (W3) a sandbox. `project_sources.connection_id` is a reference, not the token.
+- **Bounded archive fetch, no git:** the import worker resolves the ref → a concrete commit OID
+  (GitHub `git/ref/...` / `commits/{sha}`), fetches the **tarball** of that OID (contents only, no
+  git history), and feeds it through the **same W2a in-memory safe expander** (`services/archive.py`
+  bounds + traversal/device/FIFO/hardlink/escaping-symlink rejection). No `git` binary, no `.git`,
+  no working copy (that is W3). Snapshot bytes are the same immutable, content-addressed,
+  ref-counted ADR-030 `storage_blobs` as Drive/archive imports.
+- **Provenance, remote non-authoritative:** `project_sources.source_oid` = the exact imported
+  commit; `project_snapshots.source_oid` records the same on the initial `reason='import'` snapshot.
+  W2b never re-fetches; branch/tag imports are pinned to the OID resolved at import time. Renamed/
+  deleted/transferred/revoked remotes do not affect the durable project.
+- **Read-only fetch ⇒ idempotent, no `effect_unknown` remote reconciliation:** the GitHub archive
+  fetch does not mutate the remote (unlike a W4 push), so a failed/partial fetch is safely
+  retryable within the durable `project_import_jobs` row (re-fetch by resolved OID → identical
+  bytes). Idempotency key stays `(project_id, import)`; a crash/replay never yields a half-built or
+  duplicate project. On any failure the project keeps `status='active'` with `import_status='failed'`
+  (derived, api §10.6) + `source_status='import_failed'` and **no** snapshot (visible + deletable) —
+  never a `projects.status='failed'` and never a snapshot over the wrong bytes.
+- **Ownership:** `project_sources` carries `user_id` (FK to `users`), matching the owning project;
+  the connection reference is user-scoped by the service (single-user v1 keeps one active connection
+  per owner via `uq_ghc_owner_active`), mirroring how `sessions.project_id` ownership is service-
+  enforced rather than trigger-enforced.
+- **Deferred (NOT W2b):** W4 sync/fetch columns on `project_sources` (base/remote OIDs, fetch time,
+  sync state) + the richer `source_status` values; `project_working_copies`/`project_change_sets`/
+  `project_artifacts` (W3). Each lands with its own ADR + contract-first batch.

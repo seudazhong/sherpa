@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sherpa · GitHub 一次性导入 — Workspace W2b (静态 UI 稿)</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --canvas: #f7f7f5;
+        --canvas-strong: #efefed;
+        --sidebar: #fbfbfa;
+        --surface: #ffffff;
+        --surface-subtle: #f8f8f7;
+        --surface-hover: #f1f1ef;
+        --ink: #242523;
+        --ink-soft: #454642;
+        --muted: #72716d;
+        --faint: #9b9a97;
+        --border: rgba(55, 53, 47, 0.12);
+        --border-strong: rgba(55, 53, 47, 0.2);
+        --brand: #47705b;
+        --brand-strong: #355443;
+        --brand-soft: #e8f0eb;
+        --blue: #2383e2;
+        --blue-soft: #e7f3ff;
+        --success: #2f7d4d;
+        --success-soft: #e5f3e9;
+        --warning: #9a6700;
+        --warning-soft: #fbf0d5;
+        --danger: #b4233a;
+        --danger-soft: #fbe9ec;
+        --radius-sm: 8px;
+        --radius: 12px;
+        --radius-lg: 18px;
+        --shadow-sm: 0 1px 2px rgba(15, 15, 15, 0.04);
+        --shadow: 0 10px 28px rgba(15, 15, 15, 0.08), 0 2px 6px rgba(15, 15, 15, 0.04);
+        --font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        color: var(--ink);
+        background: var(--canvas);
+        font-family: var(--font);
+        font-size: 14px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        display: grid;
+        grid-template-columns: 264px 1fr;
+        min-height: 100%;
+      }
+
+      /* ---------- Sidebar ---------- */
+      .sidebar {
+        background: var(--sidebar);
+        border-right: 1px solid var(--border);
+        padding: 18px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+      }
+      .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); }
+      .logo { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--brand); color: #fff; font-weight: 700; }
+      .brand strong { display: block; font-size: 15px; }
+      .brand small { color: var(--muted); font-size: 12px; }
+      .workspace-card { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+      .workspace-card i { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+      .workspace-card strong { display: block; font-size: 13px; }
+      .workspace-card small { color: var(--muted); font-size: 12px; }
+      nav { display: flex; flex-direction: column; gap: 2px; }
+      nav .group { margin-top: 8px; color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 6px 10px 2px; }
+      nav a { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink-soft); padding: 7px 10px; border-radius: var(--radius-sm); font-size: 13.5px; }
+      nav a .ic { width: 16px; text-align: center; color: var(--faint); }
+      nav a:hover { background: var(--surface-hover); }
+      nav a.active { background: var(--brand-soft); color: var(--brand-strong); font-weight: 600; }
+      nav a.active .ic { color: var(--brand); }
+      nav a .tag { margin-left: auto; font-size: 10px; font-weight: 600; color: var(--faint); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; }
+      .spacer { flex: 1; }
+      .user-card { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; }
+      .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--canvas-strong); display: grid; place-items: center; font-weight: 600; font-size: 12px; }
+      .user-card strong { display: block; font-size: 12.5px; }
+      .user-card small { color: var(--muted); font-size: 11.5px; }
+
+      /* ---------- Main ---------- */
+      main { padding: 26px 30px 60px; max-width: 1080px; }
+      .eyebrow { color: var(--brand); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+      .mono { font-family: var(--mono); }
+      h1 { font-size: 24px; margin: 4px 0 4px; }
+      .lede { color: var(--muted); margin: 0 0 18px; max-width: 64ch; }
+
+      .draftbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--warning-soft); border: 1px solid rgba(154,103,0,.3); color: var(--warning); border-radius: var(--radius); padding: 9px 14px; margin-bottom: 16px; font-size: 12.5px; }
+      .draftbar b { color: #7a5200; }
+
+      /* Tabs */
+      .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 0 0 20px; flex-wrap: wrap; }
+      .tabs label { padding: 9px 14px; font-size: 13.5px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: 8px 8px 0 0; }
+      .tabs label:hover { color: var(--ink); background: var(--surface-hover); }
+      .view { display: none; }
+      #t-conn, #t-pick, #t-prog, #t-done { position: absolute; left: -9999px; }
+      #t-conn:checked ~ .tabs label[for="t-conn"],
+      #t-pick:checked ~ .tabs label[for="t-pick"],
+      #t-prog:checked ~ .tabs label[for="t-prog"],
+      #t-done:checked ~ .tabs label[for="t-done"] { color: var(--brand-strong); border-bottom-color: var(--brand); font-weight: 600; }
+      #t-conn:checked ~ #v-conn,
+      #t-pick:checked ~ #v-pick,
+      #t-prog:checked ~ #v-prog,
+      #t-done:checked ~ #v-done { display: block; }
+
+      /* Buttons */
+      .btn { border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); border-radius: var(--radius-sm); padding: 7px 13px; font-size: 13px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+      .btn:hover { background: var(--surface-hover); }
+      .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+      .btn.primary:hover { background: var(--brand-strong); }
+      .btn.sm { padding: 4px 9px; font-size: 12px; }
+      .btn.danger { color: var(--danger); border-color: rgba(180,35,58,.4); }
+      .btn.danger:hover { background: var(--danger-soft); }
+      .btn.disabled { color: var(--faint); border-style: dashed; cursor: not-allowed; background: var(--surface-subtle); }
+
+      .head-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+      .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+      .panel { padding: 16px 18px; }
+      .panel h3 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); }
+      .section-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); font-weight: 600; }
+
+      .pill { font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+      .pill i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+      .pill.ok { color: var(--success); background: var(--success-soft); }
+      .pill.neutral { color: var(--muted); background: var(--canvas-strong); }
+      .pill.progress { color: var(--blue); background: var(--blue-soft); }
+      .pill.danger { color: var(--danger); background: var(--danger-soft); }
+      .pill.progress i { animation: pulse 1.1s infinite; }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+      .notice { background: var(--surface-subtle); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: 12px 14px; font-size: 12.5px; color: var(--ink-soft); margin-top: 14px; }
+      .notice b { color: var(--ink); }
+      .notice.warn { background: var(--warning-soft); border-color: rgba(154,103,0,.35); color: #7a5200; }
+      .notice.danger { background: var(--danger-soft); border-color: rgba(180,35,58,.35); color: #8f1c2f; }
+      .notice.secure { background: var(--brand-soft); border-color: rgba(71,112,91,.28); color: var(--brand-strong); }
+
+      /* ---------- Connection surface ---------- */
+      .conn-head { display: flex; align-items: center; gap: 14px; padding: 18px; border-bottom: 1px solid var(--border); }
+      .conn-head .gh { width: 44px; height: 44px; border-radius: 11px; background: #1f2328; color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 18px; }
+      .conn-head .grow { flex: 1; }
+      .conn-head strong { font-size: 15px; }
+      .conn-head .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+      .kv { display: grid; grid-template-columns: 150px 1fr; gap: 8px 14px; font-size: 13px; margin: 0; }
+      .kv dt { color: var(--muted); }
+      .kv dd { margin: 0; }
+      .scopepill { font-family: var(--mono); font-size: 11.5px; color: var(--brand-strong); background: var(--brand-soft); border: 1px solid rgba(71,112,91,.3); border-radius: 6px; padding: 1px 7px; }
+      .form-grid { display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 440px; }
+      .form-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--ink-soft); }
+      .form-grid input, .form-grid select { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 8px 11px; font-size: 13.5px; background: var(--surface); font-family: var(--mono); }
+      .form-actions { display: flex; justify-content: flex-start; gap: 10px; margin-top: 4px; }
+
+      /* ---------- Repo / ref picker ---------- */
+      .pick-grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; }
+      .searchbar { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 7px 11px; background: var(--surface); margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+      .repo { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: center; padding: 11px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
+      .repo:last-child { border-bottom: none; }
+      .repo:hover { background: var(--surface-subtle); }
+      .repo.sel { background: var(--brand-soft); }
+      .repo .rico { width: 28px; height: 28px; border-radius: 7px; background: #1f2328; color: #fff; display: grid; place-items: center; font-size: 12px; }
+      .repo .rname { font-weight: 600; font-size: 13.5px; }
+      .repo .rmeta { color: var(--muted); font-size: 12px; margin-top: 1px; display: flex; gap: 9px; flex-wrap: wrap; }
+      .privtag { font-size: 10.5px; font-weight: 700; border-radius: 5px; padding: 0 6px; }
+      .privtag.priv { color: var(--warning); background: var(--warning-soft); }
+      .privtag.pub { color: var(--muted); background: var(--canvas-strong); }
+
+      .reftype { display: flex; gap: 6px; margin-bottom: 12px; }
+      .reftype span { flex: 1; text-align: center; font-size: 12.5px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--muted); background: var(--surface); }
+      .reftype span.on { border-color: var(--brand); color: var(--brand-strong); background: var(--brand-soft); font-weight: 600; }
+      .reflist { list-style: none; margin: 0 0 12px; padding: 0; max-height: 220px; overflow: auto; }
+      .reflist li { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid var(--border); font-size: 13px; cursor: pointer; }
+      .reflist li:last-child { border-bottom: none; }
+      .reflist li.on { color: var(--brand-strong); font-weight: 600; }
+      .reflist li .refoid { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+      .reflist li .refic { font-size: 10px; }
+      .named-input { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 8px 11px; font-size: 13.5px; width: 100%; }
+      .summary-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; margin: 14px 0 6px; }
+      .summary-line .mono { background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-size: 12px; }
+
+      /* ---------- Progress ---------- */
+      .prog-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+      .stages { list-style: none; margin: 0; padding: 0; }
+      .stages li { display: flex; align-items: flex-start; gap: 12px; padding: 12px 4px; border-bottom: 1px solid var(--border); }
+      .stages li:last-child { border-bottom: none; }
+      .stages .dot { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; flex-shrink: 0; margin-top: 1px; }
+      .dot.done { background: var(--success-soft); color: var(--success); }
+      .dot.active { background: var(--blue-soft); color: var(--blue); animation: pulse 1.1s infinite; }
+      .dot.wait { background: var(--canvas-strong); color: var(--faint); }
+      .dot.fail { background: var(--danger-soft); color: var(--danger); }
+      .stages .st-name { font-weight: 600; font-size: 13.5px; }
+      .stages .st-sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+      .stages .st-sub .mono { font-size: 12px; }
+      .bar { height: 6px; border-radius: 999px; background: var(--canvas-strong); overflow: hidden; margin: 8px 0 2px; }
+      .bar > span { display: block; height: 100%; background: var(--blue); border-radius: 999px; }
+
+      /* ---------- Source metadata (done) ---------- */
+      .facts { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+      .fact { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 12.5px; }
+      .fact strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); }
+      .fact .v { font-family: var(--mono); font-size: 12.5px; }
+      .grid2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; }
+      .src-card { padding: 16px 18px; }
+      .src-line { display: grid; grid-template-columns: 128px 1fr; gap: 7px 14px; font-size: 13px; margin: 0; }
+      .src-line dt { color: var(--muted); }
+      .src-line dd { margin: 0; }
+      .src-line dd.mono { font-family: var(--mono); }
+      .tree { font-size: 13px; font-family: var(--mono); }
+      .tree .t { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; }
+      .tree .t:hover { background: var(--surface-subtle); }
+      .tree .t.nest { padding-left: 24px; }
+      .tree .t .fic { font-size: 10px; font-weight: 700; color: #fff; border-radius: 4px; padding: 0 4px; background: var(--faint); }
+      .tree .t .fic.dir { background: var(--brand); }
+      .tree .t .fic.py { background: #3572A5; }
+      .tree .t .fic.md { background: #34495e; }
+      .tree .t .fic.toml { background: #6b7280; }
+      .snaps { list-style: none; margin: 0; padding: 0; }
+      .snaps li { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+      .snaps li:last-child { border-bottom: none; }
+      .snaps .rn { font-size: 10.5px; font-weight: 700; border-radius: 5px; padding: 1px 6px; color: var(--brand-strong); background: var(--brand-soft); }
+      .snaps small { color: var(--muted); }
+
+      .foot-note { color: var(--faint); font-size: 12px; margin-top: 26px; border-top: 1px solid var(--border); padding-top: 14px; line-height: 1.7; }
+      .foot-note code { font-family: var(--mono); }
+
+      /* Long unbreakable mono values (OIDs, paths) must wrap so narrow viewports don't overflow.
+         overflow-wrap:anywhere also lowers min-content width, letting grid columns shrink. */
+      .src-line dd, .kv dd, .fact .v, .foot-note, .summary-line .mono,
+      .st-sub, .tree, .scopepill, .reflist li .refoid { overflow-wrap: anywhere; }
+
+      /* ---------- Responsive ---------- */
+      @media (max-width: 900px) {
+        body { grid-template-columns: 1fr; }
+        .sidebar { display: none; }
+        main { padding: 20px 16px 48px; min-width: 0; }
+        .pick-grid, .grid2 { grid-template-columns: 1fr; }
+        .kv { grid-template-columns: 120px 1fr; }
+        .src-line { grid-template-columns: 104px 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ============ SIDEBAR ============ -->
+    <aside class="sidebar">
+      <a class="brand" href="#">
+        <span class="logo">S</span>
+        <span><strong>Sherpa</strong><small>Personal agent</small></span>
+      </a>
+      <div class="workspace-card">
+        <i></i>
+        <span><strong>Personal workspace</strong><small>Private · self-hosted</small></span>
+      </div>
+      <nav>
+        <div class="group">Agent</div>
+        <a href="#"><span class="ic">◌</span> Chat</a>
+        <a href="#"><span class="ic">✉</span> Inbox</a>
+        <a href="#"><span class="ic">▤</span> Activity</a>
+        <div class="group">Workspace</div>
+        <a class="active" href="index.html"><span class="ic">▧</span> Projects <span class="tag">/work/projects</span></a>
+        <a href="#"><span class="ic">▦</span> Drive <span class="tag">/work/drive</span></a>
+        <div class="group">Organize</div>
+        <a href="#"><span class="ic">◷</span> Schedules</a>
+        <a href="#"><span class="ic">◈</span> Memory</a>
+        <a href="#"><span class="ic">▧</span> Knowledge</a>
+        <div class="group">Channels</div>
+        <a href="#"><span class="ic">◎</span> Messaging</a>
+        <a href="#"><span class="ic">⌁</span> Connectors</a>
+      </nav>
+      <div class="spacer"></div>
+      <a href="#" style="color:var(--ink-soft);text-decoration:none;padding:7px 10px;font-size:13.5px;">⚙ Settings</a>
+      <div class="user-card">
+        <span class="avatar">O</span>
+        <span><strong>owner@localhost</strong><small>Workspace owner</small></span>
+      </div>
+    </aside>
+
+    <!-- ============ MAIN ============ -->
+    <main>
+      <span class="eyebrow">Workspace · Projects · <span class="mono">新建来自 GitHub</span></span>
+      <h1>GitHub 一次性导入</h1>
+      <p class="lede">选择一个 GitHub 仓库与 ref（分支 / 标签 / 提交），Sherpa 有界拉取该 ref 的<b>内容树</b>（不含 git 历史），记录来源 repo/ref/OID，物化为项目的<b>不可变初始快照</b>。导入后项目独立存活——远端不是权威源。</p>
+
+      <div class="draftbar">
+        <span>⚠️ <b>设计与契约先行稿（ADR-038 · W2b）</b></span>
+        <span>此为静态设计稿，功能<b>尚未实现</b>、W2b 生产入口/导航<b>未暴露</b>。请勿当作已上线行为。W2b = GitHub 一次性导入（只读）；工作副本 + 沙箱 = W3；GitHub 同步 / push / PR = W4（各自后续 ADR）。</span>
+      </div>
+
+      <input type="radio" name="tab" id="t-conn" />
+      <input type="radio" name="tab" id="t-pick" checked />
+      <input type="radio" name="tab" id="t-prog" />
+      <input type="radio" name="tab" id="t-done" />
+
+      <div class="tabs">
+        <label for="t-conn">① 连接 GitHub</label>
+        <label for="t-pick">② 选择 repo / ref</label>
+        <label for="t-prog">③ 导入进度</label>
+        <label for="t-done">④ 成功 · 来源元数据</label>
+      </div>
+
+      <!-- ========================================================= -->
+      <!-- ① CONNECTION -->
+      <!-- ========================================================= -->
+      <section class="view" id="v-conn">
+        <div class="head-row">
+          <div>
+            <div class="section-label">GET / POST / DELETE /connections/github</div>
+            <p class="lede" style="margin:6px 0 0;">GitHub 凭据只保存在 <b>AEAD 加密的 vault</b>（复用 connector/credential 边界），仅由导入 worker 在服务端解密使用，<b>绝不</b>进入项目树 / 快照 / prompt / 日志 / 工具结果 / 沙箱。</p>
+          </div>
+          <span class="pill ok"><i></i> 已连接</span>
+        </div>
+
+        <div class="card" style="margin-bottom:16px;">
+          <div class="conn-head">
+            <span class="gh">GH</span>
+            <span class="grow">
+              <strong>GitHub · octo-owner</strong>
+              <div class="sub">Fine-grained personal access token · 首版凭据</div>
+            </span>
+            <span class="btn danger sm">断开连接</span>
+          </div>
+          <div class="panel">
+            <dl class="kv">
+              <dt>Auth kind</dt><dd><span class="mono">pat</span> — fine-grained PAT<span class="section-label" style="margin-left:8px;text-transform:none;">（可扩展 GitHub App 安装令牌，无需改表）</span></dd>
+              <dt>Account</dt><dd class="mono">octo-owner</dd>
+              <dt>Scopes</dt><dd><span class="scopepill">contents:read</span></dd>
+              <dt>Status</dt><dd><span class="pill ok"><i></i> active</span></dd>
+              <dt>Token</dt><dd class="mono" style="color:var(--faint);">••••••••••••  （已封存，永不回显 / 导出明文）</dd>
+            </dl>
+            <div class="notice secure"><b>🔒 凭据边界（ADR-019/038）：</b>token 经 AEAD 密封入库，只在 connector 边界内解密；`project_sources.connection_id` 只是引用，不含 token 本体。私有仓导入才需凭据；公共仓可不带凭据。</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="panel">
+            <h3>连接新凭据（未连接时）</h3>
+            <div class="form-grid">
+              <label>Auth kind
+                <select disabled><option>Fine-grained PAT（contents:read）</option><option>GitHub App 安装令牌（前向路径）</option></select>
+              </label>
+              <label>Fine-grained personal access token
+                <input type="password" placeholder="github_pat_••••••••••••••••" value="github_pat_11ABCDE0000EXAMPLE" />
+              </label>
+              <div class="form-actions">
+                <span class="btn primary">连接并封存</span>
+                <span class="btn">取消</span>
+              </div>
+            </div>
+            <div class="notice"><b>最小权限：</b>只需 <span class="mono">contents:read</span> 即可只读拉取私有仓的内容归档。提交后 token 立即服务端 AEAD 密封，接口只返回连接状态，不回显 token。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- ② REPO / REF PICKER -->
+      <!-- ========================================================= -->
+      <section class="view" id="v-pick">
+        <div class="section-label" style="margin-bottom:10px;">GET /projects/github/repos · GET /projects/github/refs · POST /projects/imports (kind=github)</div>
+        <div class="pick-grid">
+          <!-- repo list -->
+          <div class="card">
+            <div class="panel" style="padding-bottom:6px;">
+              <h3>选择仓库</h3>
+              <div class="searchbar"><span>🔍</span> 搜索可访问的仓库…</div>
+            </div>
+            <div class="repo sel">
+              <span class="rico">GH</span>
+              <span>
+                <div class="rname">octo-owner / sherpa-notes</div>
+                <div class="rmeta"><span class="privtag priv">Private</span> <span>默认分支 main</span> <span class="mono">id: 84213771</span></div>
+              </span>
+              <span class="pill ok" style="font-size:11px;">已选</span>
+            </div>
+            <div class="repo">
+              <span class="rico">GH</span>
+              <span>
+                <div class="rname">octo-owner / infra-templates</div>
+                <div class="rmeta"><span class="privtag priv">Private</span> <span>默认分支 main</span> <span class="mono">id: 55190022</span></div>
+              </span>
+            </div>
+            <div class="repo">
+              <span class="rico">GH</span>
+              <span>
+                <div class="rname">acme-labs / demo-cli</div>
+                <div class="rmeta"><span class="privtag pub">Public</span> <span>默认分支 trunk</span> <span class="mono">id: 12008841</span></div>
+              </span>
+            </div>
+            <div class="panel" style="padding-top:12px;">
+              <div class="notice"><b>稳定标识：</b>导入按 GitHub <b>数字 repo id</b> 记录来源（仓库改名 / 转移仍可追溯），不只靠显示 URL。列表经 vault 凭据在<b>服务端</b>代理，token 不下发前端。</div>
+            </div>
+          </div>
+
+          <!-- ref selector -->
+          <div class="card">
+            <div class="panel">
+              <h3>选择 ref</h3>
+              <div class="reftype">
+                <span class="on">分支 branch</span>
+                <span>标签 tag</span>
+                <span>提交 commit</span>
+              </div>
+              <ul class="reflist">
+                <li class="on"><span class="refic">✔</span> main <span class="refoid">a1b2c3d</span></li>
+                <li><span class="refic">◦</span> release/2.1 <span class="refoid">9f0e1d2</span></li>
+                <li><span class="refic">◦</span> feature/import-flow <span class="refoid">4c5b6a7</span></li>
+                <li><span class="refic">◦</span> docs/refresh <span class="refoid">7788aa9</span></li>
+              </ul>
+              <div class="section-label" style="margin-bottom:5px;">或直接粘贴 commit SHA</div>
+              <input class="named-input mono" placeholder="a1b2c3d4e5f6…（40 或短 SHA）" style="margin-bottom:12px;" />
+
+              <div class="section-label" style="margin-bottom:5px;">项目名称</div>
+              <input class="named-input" value="sherpa-notes" />
+
+              <div class="summary-line">
+                <span class="pill neutral">github</span>
+                <span class="mono">octo-owner/sherpa-notes</span>
+                <span>·</span>
+                <span class="mono">branch</span>
+                <span class="mono">main</span>
+                <span>→ 钉住</span>
+                <span class="mono">a1b2c3d</span>
+              </div>
+              <div class="form-actions" style="margin-top:12px;">
+                <label for="t-prog" class="btn primary">开始导入</label>
+                <span class="btn">取消</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="notice"><b>首版 ref 范围 = branch + tag + commit（三者皆首版）。</b>分支 / 标签在拉取前先解析成具体 commit OID 并<b>钉住</b>——所以一次导入等于钉在导入当刻的那个提交，与「远端非权威」一致。获取走 GitHub 归档端点（<span class="mono">tarball/&lt;oid&gt;</span>，只含内容、无 git 历史），复用 W2a 内存内有界安全解压器；不跑 <span class="mono">git clone</span>、不落 <span class="mono">.git</span>、不建工作副本（那是 W3）。</div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- ③ PROGRESS (importing + failed/retry) -->
+      <!-- ========================================================= -->
+      <section class="view" id="v-prog">
+        <div class="prog-head">
+          <span class="pill progress"><i></i> 导入中</span>
+          <strong style="font-size:15px;">sherpa-notes</strong>
+          <span class="mono" style="color:var(--muted);font-size:12.5px;">octo-owner/sherpa-notes · branch main</span>
+        </div>
+
+        <div class="card" style="margin-bottom:18px;">
+          <div class="panel">
+            <div class="bar"><span style="width:64%"></span></div>
+            <p class="section-label" style="margin:4px 0 12px;text-transform:none;">durable job · <span class="mono">project_import_jobs (create_kind=github)</span> · 幂等键 <span class="mono">(project_id, import)</span> · 崩溃/重放不产生半成品或重复项目</p>
+            <ul class="stages">
+              <li>
+                <span class="dot done">✓</span>
+                <span><div class="st-name">解析 ref → commit OID</div>
+                  <div class="st-sub">GitHub <span class="mono">git/ref/heads/main</span> → <span class="mono">a1b2c3d4…</span>（提交用 <span class="mono">commits/{sha}</span> 校验）</div></span>
+              </li>
+              <li>
+                <span class="dot done">✓</span>
+                <span><div class="st-name">有界归档获取</div>
+                  <div class="st-sub"><span class="mono">tarball/a1b2c3d4</span> → 隔离 staging（只读拉取，<b>不改远端</b>；超时 <span class="mono">120s</span>）· 12.4 MB / 上限 200 MB</div></span>
+              </li>
+              <li>
+                <span class="dot active">●</span>
+                <span><div class="st-name">安全解压 + 物化条目</div>
+                  <div class="st-sub">复用 W2a 内存安全解压器：拒绝绝对/穿越/NUL/设备/FIFO/硬链接/逃逸 symlink，强制 <span class="mono">PROJECT_MAX_*</span>（膨胀比 / 条目数 / 深度）· 已处理 418 / ~640 条目</div></span>
+              </li>
+              <li>
+                <span class="dot wait">3</span>
+                <span><div class="st-name">建不可变初始快照</div>
+                  <div class="st-sub"><span class="mono">reason=import</span> · <span class="mono">source_oid=a1b2c3d4</span> · 字节走 ADR-030 内容寻址去重 blob（配额记账）</div></span>
+              </li>
+              <li>
+                <span class="dot wait">4</span>
+                <span><div class="st-name">原子激活</div>
+                  <div class="st-sub">置 <span class="mono">current_snapshot_id</span> + <span class="mono">source_status=imported</span></div></span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="section-label" style="margin-bottom:8px;">失败态 · 可见 + 可删 + 可重试</div>
+        <div class="card">
+          <div class="prog-head" style="margin:0;padding:16px 18px 0;">
+            <span class="pill danger"><i></i> 导入失败</span>
+            <strong style="font-size:14.5px;">infra-templates</strong>
+            <span class="mono" style="color:var(--muted);font-size:12.5px;">octo-owner/infra-templates · tag v3.0</span>
+          </div>
+          <div class="panel">
+            <ul class="stages">
+              <li>
+                <span class="dot done">✓</span>
+                <span><div class="st-name">解析 ref → commit OID</div><div class="st-sub"><span class="mono">git/ref/tags/v3.0</span> → <span class="mono">55aa66b…</span></div></span>
+              </li>
+              <li>
+                <span class="dot done">✓</span>
+                <span><div class="st-name">有界归档获取</div><div class="st-sub">已下载 41 MB</div></span>
+              </li>
+              <li>
+                <span class="dot fail">✕</span>
+                <span><div class="st-name">安全解压 + 物化条目</div>
+                  <div class="st-sub"><span class="mono">termination_reason = expansion_ratio</span>：展开/压缩比超过 <span class="mono">PROJECT_MAX_EXPANSION_RATIO</span>（疑似 zip-bomb）——已停止，<b>未激活任何快照</b>。</div></span>
+              </li>
+            </ul>
+            <div class="notice danger"><b>失败即安全：</b>项目停在 <span class="mono">failed</span> / <span class="mono">source_status=import_failed</span>，<b>没有</b>快照（绝不在错误字节上激活），可见且可删。只读拉取<b>幂等</b>——重试按同一 OID 重取相同字节，无 <span class="mono">effect_unknown</span> 远端对账（那是 W4 push）。</div>
+            <div class="form-actions" style="margin-top:12px;">
+              <span class="btn primary">重试导入</span>
+              <span class="btn danger">删除项目</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- ④ SUCCESS · SOURCE METADATA -->
+      <!-- ========================================================= -->
+      <section class="view" id="v-done">
+        <div class="head-row">
+          <div>
+            <div class="section-label">GET /projects/{id}</div>
+            <h1 style="margin:6px 0 2px;font-size:20px;">sherpa-notes</h1>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span class="pill ok"><i></i> ready</span>
+            <label for="t-pick" class="btn sm">再导入一个</label>
+            <span class="btn primary sm">Open in Chat</span>
+          </div>
+        </div>
+
+        <div class="facts">
+          <div class="fact"><strong>来源</strong><span class="v">github</span></div>
+          <div class="fact"><strong>Source status</strong><span class="v">imported</span></div>
+          <div class="fact"><strong>Snapshot</strong><span class="v">reason=import</span></div>
+          <div class="fact"><strong>存储</strong>3.9 MB · 42 blobs</div>
+          <div class="fact"><strong>条目</strong>128 files · 21 dirs</div>
+        </div>
+
+        <div class="grid2">
+          <div class="card src-card">
+            <h3 style="margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);">来源元数据（provenance）</h3>
+            <dl class="src-line">
+              <dt>Provider</dt><dd>github</dd>
+              <dt>Repository</dt><dd class="mono">octo-owner/sherpa-notes</dd>
+              <dt>Repo id</dt><dd class="mono">84213771 <span style="color:var(--faint);font-family:var(--font);">（稳定，改名不变）</span></dd>
+              <dt>Ref</dt><dd class="mono">branch · main</dd>
+              <dt>Source OID</dt><dd class="mono">a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0</dd>
+              <dt>Imported at</dt><dd>2026-07-27 16:41 UTC</dd>
+              <dt>Connection</dt><dd>octo-owner <span style="color:var(--faint);">· contents:read（凭据留 vault）</span></dd>
+            </dl>
+            <div class="notice"><b>远端不是权威源。</b>Sherpa 快照才是。W2b 是一次性导入，不追远端；即便仓库被改名 / 删除 / 转移 / 掉权，项目仍可用。GitHub 同步 / apply / push / PR 是 <b>W4</b>（走 ADR-020 审批，带期望远程 OID，首版不 force push）。</div>
+            <div class="notice secure" style="margin-top:10px;"><b>🔒 无凭据入内容：</b>来源元数据只有 provenance，<b>永不含</b> token；文件树 / 快照 / prompt / 日志 / 工具结果里都没有凭据。</div>
+          </div>
+
+          <div>
+            <div class="card panel" style="margin-bottom:16px;">
+              <h3>文件树（只读 · 初始快照）</h3>
+              <div class="tree">
+                <div class="t"><span class="fic dir">DIR</span> src/</div>
+                <div class="t nest"><span class="fic py">PY</span> main.py</div>
+                <div class="t nest"><span class="fic py">PY</span> loop.py</div>
+                <div class="t"><span class="fic dir">DIR</span> docs/</div>
+                <div class="t nest"><span class="fic md">MD</span> README.md</div>
+                <div class="t"><span class="fic toml">TOML</span> pyproject.toml</div>
+                <div class="t"><span class="fic">TXT</span> .gitignore</div>
+              </div>
+              <div class="notice" style="margin-top:12px;">只读浏览。编辑 / 运行 / 测试需要任务工作副本 + 沙箱 = <b>W3</b>（仅挂一次性 scratch 副本，绝不挂真相源）。项目文件是<b>不可信内容</b>（ADR-009）。</div>
+            </div>
+            <div class="card panel">
+              <h3>快照</h3>
+              <ul class="snaps">
+                <li><span class="rn">import</span> 初始导入 <small>· a1b2c3d · 刚刚</small></li>
+              </ul>
+              <p class="section-label" style="margin:10px 0 0;text-transform:none;">后续 save / checkpoint / sync 快照 = W3 / W4。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <p class="foot-note">
+        静态设计稿 · <code>docs/design-workspace/github-import.html</code> · ADR-038 Workspace W2b（GitHub 一次性导入）。
+        契约：data-model <code>project_sources</code> / <code>github_connections</code> + <code>projects.source_status</code> + <code>project_import_jobs (github)</code>；api §10.6（501→202 + repo/ref 选择 + connection 端点）；events §2.10（<code>create_kind=github</code>，只读拉取无 <code>effect_unknown</code>）；config <code>GITHUB_*</code> + §1.6 安全边界。
+        路由复用 <code>/work/projects</code>——W2b 生产入口/导航<b>本阶段不暴露</b>，能力矩阵 UI 列保持 ⬜。GitHub 导入<b>不给 agent</b>（人工·跨凭据+不可信外部内容）。W3（sandbox）/ W4（对外写）为后续 ADR。
+      </p>
+    </main>
+  </body>
+</html>

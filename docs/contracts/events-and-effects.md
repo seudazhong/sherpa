@@ -712,6 +712,66 @@ Project-bound Chat (`sessions.project_id`, api §10.5) creates no new event type
 is set at session creation and is immutable after the first admitted user message; the existing
 run/message events carry `session_id` as usual.
 
+### 2.10 Project lifecycle — Workspace W2b GitHub one-time import (ADR-038, additive)
+
+> **Design/contract-first only (ADR-038).** Extends §2.9 for the W2b GitHub one-time import.
+> No new event **type** — the `project.lifecycle` shape is reused with `create_kind='github'`.
+> Project **file bytes and GitHub credentials never appear anywhere in the durable record**
+> (bytes → immutable ADR-030 `storage_blobs`; token → the AEAD vault only). As in §2.9 the
+> project lifecycle is **not** written to the run-scoped `event_journal`; the durable record is
+> the `project_import_jobs` row + structured logs, carrying ids + bounded metadata + the resolved
+> source OID + a named termination reason (ADR-016/019/021).
+
+`project.lifecycle` gains a `github` create_kind and a `source` sub-object:
+
+```text
+{
+  project_id: uuid,
+  snapshot_id: uuid | null,
+  create_kind: string,           // blank | template | archive | github   (W2b adds 'github')
+  stage: string,                 // created | import_staged | snapshot_activated | failed
+  entry_count: integer | null,
+  size_bytes: integer | null,
+  source: {                      // present only when create_kind='github'
+    provider: "github",
+    repo_external_id: string,    // stable numeric repo id (survives rename)
+    owner: string, repo: string, // display only
+    ref_type: string,            // branch | tag | commit
+    ref_name: string,
+    source_oid: string | null    // resolved commit OID (null until source-resolve stage)
+    // NOTE: never a token/credential — provenance only.
+  },
+  termination_reason: string | null
+    // done | source_resolve_failed | auth_required | repo_unavailable
+    // | unsafe_archive | too_large | expansion_ratio | error:...
+}
+```
+
+A **GitHub import** is a durable job reusing the W2a `project_import_jobs` realization
+(`create_kind='github'`): claim → **resolve ref → commit OID** (GitHub `git/ref/...` /
+`commits/{sha}`) → **bounded archive (tarball) fetch** of that OID into isolated staging → expand
+through the same W2a in-memory safe expander (verify bounds/safety) → build the initial immutable
+`reason='import'` snapshot (`source_oid` set) → **atomically set `projects.current_snapshot_id`** +
+`source_status='imported'`. The activate is idempotent on `(project_id, import_idempotency_key)`; a
+crash/replay never produces a half-built or duplicate project. On any failure the project keeps
+`projects.status='active'` with `import_status='failed'` (derived, api §10.6) +
+`source_status='import_failed'` and **no** snapshot (visible + deletable), never a snapshot over the
+wrong bytes.
+
+**Realization (same as §2.9).** A project's lifecycle is **not run-scoped**, so the frozen
+run-scoped `event_journal` (run_id NOT NULL) is **not** used for `project.lifecycle`; the durable
+job is the `project_import_jobs` table (data-model §Projects), whose `stage` +
+named `termination_reason` capture the lifecycle stages, with at-least-once dispatch = the explicit
+worker enqueue backed by a recovery tick (mirroring `knowledge_ingestion_job`) and structured logs
+carrying ids + bounded metadata + the resolved `source_oid`. **Read-only fetch ⇒ no `effect_unknown`
+remote reconciliation.** The GitHub archive fetch does **not** mutate the remote (unlike a W4 push),
+so there is no external effect to reconcile: a failed/partial fetch is safely retryable within the
+durable job (re-fetch by the resolved OID → identical bytes). `effect_unknown`/expected-remote-OID
+reconciliation semantics belong to **W4** (push/PR), not W2b. GitHub source **credentials** are
+decrypted only by the import worker at the connector boundary and never enter any journal, log,
+prompt, tool result, snapshot, or (W3) sandbox (ADR-019). Establishing/removing a GitHub connection
+is an owner user-level operation and emits no `project.lifecycle` event (it touches no project).
+
 ## 3. Delivery and SSE
 
 ### 3.1 Required path

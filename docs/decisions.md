@@ -22,6 +22,7 @@
 | 2026-07-23 | 记忆机制重构 + embedding 用自带 ollama | ✅ **分层记忆**（核心 blocks + 自动形成语义层 + 会话搜索情景层）+ **确定性 ADD/UPDATE/INVALIDATE/NOOP 写合并** + **双时态软失效** + **缓存稳定注入**；embedding 走**自带 ollama**(bge-m3 1024d)，与聊天 provider 解耦 | 新增 ADR-032（扩展 ADR-004、修订 ADR-012；源自 R-MEMORY）|
 | 2026-07-23 | Agent 可观测性 + 是否用 OpenTelemetry | ✅ 用 **OTel `gen_ai` span** 作 ADR-016 日志之上的**薄诊断层**（日志仍真相源；内容默认不采集；`InMemorySpanExporter` 确定性测试）；后端首选自托管 **Phoenix**（复用现有 Postgres），**修订 docs/07 的 Langfuse 默认**；补上 STATUS item0 的 LLM 调用级观测 | 新增 ADR-033（源自 R-OBSERVABILITY）|
 | 2026-07-27 | Workspace 产品模型 + Projects 上线顺序 | ✅ **Workspace 为总入口**，Projects 与 Drive 并列；实现顺序 **W2a→W2b→W3→W4**；**W2a=空/模板/归档导入（不含 GitHub）**，GitHub 一次性导入放 W2b；W3 沙箱**仅挂一次性 scratch 副本**、绝不挂项目真相源，且 ADR-025 正式修订在 W3 开始前经隔离评审后进行；W3 前先加固 docker.sock/多用户隔离。本批次**只做契约与设计先行**（不写生产代码/迁移/不暴露 Projects 导航） | 新增 ADR-037（延伸 ADR-030；源自 R-WORKSPACE-PRODUCT）|
+| 2026-07-27 | Projects W2b = GitHub 一次性导入的契约与设计先行 | ✅ **一次性导入**（选 repo + ref：**branch/tag/commit 三者皆首版**，先 ref→OID 解析并**钉住 OID**）→ **有界归档获取**（GitHub `tarball/{ref}` 只含内容、无 git 历史，复用 W2a 内存安全解压器，**不用 git clone/不落 .git**）→ 记录 source repo/ref/OID provenance → 物化为不可变初始快照；**导入后项目独立存活、远端非权威源**。凭据 = **AEAD vault 内的 GitHub connection**（首版 fine-grained PAT `contents:read`，`auth_kind` 可扩展到 GitHub App 安装令牌），**绝不进树/快照/prompt/日志/工具结果/沙箱**。只读拉取**幂等**、无 `effect_unknown` 远端对账（那是 W4 push）。GitHub 导入**不给 agent**（人工，跨凭据+不可信外部内容边界）。**本批次只做契约与设计先行**（无生产代码/迁移/不暴露 W2b 导航） | 新增 ADR-038（延伸 ADR-037；复用 ADR-019/030；源自 R-WORKSPACE-PRODUCT §9）|
 
 ---
 
@@ -486,3 +487,58 @@
 - **验收关键（本契约先行批次）**：ADR-037 被接受；data-model 有 `projects`/`project_snapshots`/`project_snapshot_entries` + `sessions.project_id` 不可变绑定（canonical vs 派生清晰、快照不可变、每表 `tenant_id`+复合键）；api 有 §10.5 Projects REST + schema；events 有项目生命周期事件 + 幂等/outbox；config 有 `PROJECT_*` + 安全边界；能力矩阵有 Projects 行且 **UI 列 ⬜**；W2a 静态稿（Projects 列表/新建/详情/Open in Chat）落在生产 Quiet Work 设计系统、桌面与 390px 均合理；**无生产代码/迁移/导航暴露**；W2b/W3/W4 非目标与后续 ADR 边界写清。契约**先于代码**（本 ADR 同批）。
 
 - **来源**：R-WORKSPACE-PRODUCT 调研 [`research/workspace-product-report.md`](research/workspace-product-report.md)（Google Drive · Dropbox · OneDrive · Notion · GitHub Codespaces · Replit · Gitpod/Ona · Devin · OpenAI Codex · Firebase Studio）；负责人输入「批准 Workspace 建议，执行第一阶段：顺序 W2a→W2b→W3→W4；Workspace 总入口、Projects 与 Drive 并列；W2a 仅空/模板/归档导入不含 GitHub，GitHub 一次性导入放 W2b；W3 仅挂一次性 scratch 副本、绝不挂真相源、ADR-025 修订在 W3 前经隔离评审；W3 前先加固 docker.sock/多用户隔离；本阶段只做契约与设计先行」。
+
+---
+
+### ADR-038 · Projects W2b = GitHub 一次性导入（选 repo/ref + 有界归档获取 + 记录 source OID + 物化不可变初始快照）——契约与设计先行（延伸 ADR-037；复用 ADR-019/030；源自 R-WORKSPACE-PRODUCT §9）
+
+> **状态：方向由负责人拍板（2026-07-27，「按 W2a→W2b→W3→W4 正常顺序继续，现执行 W2b 的研究收敛 + ADR/契约/设计先行」）；本批次先契约后代码——只写 ADR-038 + 冻结契约增量（data-model/api/events/config）+ 能力矩阵行 + W2b 静态 UI 稿，禁止写生产代码、禁止迁移、禁止暴露新生产入口/导航。** 完整调研见 [`research/workspace-product-report.md`](research/workspace-product-report.md) §9（Project 与 Git 语义）；本批 W2b 生产设计系统静态稿见 [`design-workspace/github-import.html`](design-workspace/github-import.html)。
+
+- **背景（承接谁、为何要）**：ADR-037 把 Projects 分四步落地并在 §决策2 明确「**W2b = GitHub 一次性分支导入**（浅拉取分支头 → 初始快照 + 记录稳定 repo id/branch/source OID；不保留全量远程历史、不后台合并/推送），需**后续 ADR**（`project_sources` 契约 + GitHub App 凭据边界）」。W2a（空/模板/归档）已上线（migration `0028`、`/work/projects`）。本 ADR 就是 ADR-037 预告的那个「后续 ADR」，把 GitHub 一次性导入的**契约与设计**冻结下来，实现待本批评审通过再开始。
+
+- **决策（负责人方向 + 仓库研究证据收敛，2026-07-27）**：
+
+  1. **W2b 严格限定为「GitHub 一次性导入」**：选择 repository + ref → 有界获取该 ref 的**内容树**（无 git 历史）→ 记录 source repo/ref/OID provenance 元数据 → 物化为 Sherpa **不可变初始快照**（`project_snapshots.reason='import'`，`source_oid=<resolved commit OID>`）。**导入后项目独立存活**：远端**不是**权威源，Sherpa 快照才是；即便远端被改名/删除/转移/掉权，项目仍可用。
+
+  2. **首版 ref 范围 = branch + tag + commit SHA（三者皆首版）**——由仓库研究证据收敛：
+     - GitHub REST 归档端点 `GET /repos/{owner}/{repo}/tarball/{ref}`（及 `zipball`）对 **branch / tag / commit SHA** 三种 ref **统一**接受，返回该 ref 处**只含文件内容、不含 git 历史**的 gzip tar，归档根目录名 `repo-<SHA>/` 已带解析出的 commit OID（[Downloading source code archives](https://docs.github.com/en/repositories/working-with-files/using-files/downloading-source-code-archives)）。
+     - ref→OID 解析统一：`GET /repos/{owner}/{repo}/git/ref/heads/{branch}`、`.../git/ref/tags/{tag}`（[REST · Git refs](https://docs.github.com/en/rest/git/refs)）、commit SHA 用 `GET /repos/{owner}/{repo}/commits/{sha}` 校验。
+     - 因此三种 ref 的边际成本近乎为零，且都能**先解析成具体 OID 再获取并钉住**——branch/tag 导入等于钉在导入当刻的那个 commit，天然满足「远端非权威」。→ 首版即支持三者，`ref_type ∈ (branch, tag, commit)`，默认 branch（默认分支）。
+
+  3. **获取机制 = 有界归档获取（tarball），不是 `git clone`**——由证据收敛：
+     - 归档端点天然满足 ADR-037「不保留全量远程历史」，产物是一个 **tar（gzip）**——恰好可**复用 W2a 的内存内有界安全解压器**（`services/archive.py`：拒绝绝对/穿越/NUL/设备/FIFO/硬链接/逃逸 symlink，强制 `PROJECT_MAX_*` 大小/条目/膨胀比/深度）。**不引入 git 二进制/子进程、不落 `.git`、不建工作副本**（工作副本是 W3）。
+     - 相较 `git clone --depth 1`：归档路径无需在 worker 内跑 git、无需处理 packfile/`allowAnySHA1InWant`、无网络化开发环境，攻击面与运维面都更小；代价是拿不到 git 对象（submodule/LFS/历史）——这些本就都是 later（W4+）非目标。私有仓需带凭据；归档重定向 URL 短时（约 5 分钟）失效，worker 端即时跟随。
+     - 若未来需要 submodule/LFS/增量 fetch，再在 W4 引入受控 git 传输（各带 ADR），不影响本 provenance 与快照语义。
+
+  4. **凭据 = AEAD vault 内的「GitHub connection」，复用 connector/credential/approval 架构**——由证据收敛：
+     - 首版凭据 = **fine-grained PAT（`contents:read`）**：自托管单用户最低门槛（无需注册/托管 GitHub App），足以只读克隆/归档私有仓；`auth_kind` 设计为可扩展，**GitHub App 安装令牌（`contents:read`，≤8h 短时、非用户绑定）**为推荐/前向路径，加它**不需要改表**。公共仓导入可不带凭据。
+     - **凭据边界（守 ADR-019/037 §安全边界）**：GitHub token **只**存在 AEAD vault（复用 `connectors` 的 `token_enc/nonce/kek_id/key_version/token_algorithm/aad_version` 加密列形态），**只**由导入 worker 在 connector 边界内解密使用，**绝不**进入项目文件树 / 快照 / prompt / 日志 / 工具结果 / （W3）沙箱。凭据也不进 append-only journal。
+     - 复用 approval 架构：**W2b 无对外写**（无 push/PR），故导入本身不需要 ADR-020 审批信封（那是 W4）；但建立/删除 GitHub connection、以及导入一个私有仓的动作是 owner 用户级操作（Session + CSRF），不给 agent（见决策6）。
+
+  5. **持久化 / 幂等 / effect 语义（复用 ADR-016/017、承接 W2a 的 durable job）**：
+     - GitHub 导入是 **durable job**（复用 `project_import_jobs`，`create_kind='github'`）：认领（lease）→ ref→OID 解析 → 有界归档获取到隔离 staging → 安全解压校验 → 建初始不可变快照 → 原子置 `projects.current_snapshot_id` 并置 `source_status='imported'`。幂等键 `(project_id, import)`（一项目一次导入），crash/replay 不产生半成品或重复项目。失败保留无快照的 `failed`/`import_failed` 项目（可见、可删），绝不激活错误字节。
+     - **只读拉取 ⇒ 幂等，无 `effect_unknown` 远端对账**：GitHub 归档获取**不改远端**，与 W4 push 的对外写不同——失败/部分获取可安全重试（按解析出的 OID 重取 → 同一字节）。`effect_unknown`/远端 ref 对账语义属于 **W4**（push/PR），本 ADR 不引入。
+     - 事件：复用 events §2.10（延伸 §2.9 形状）`project.lifecycle`，`create_kind` 增 `github`，stage 复用 `created|import_staged|snapshot_activated|failed` + 具名 `termination_reason`（`done|source_resolve_failed|auth_required|repo_unavailable|unsafe_archive|too_large|expansion_ratio|error:...`）。文档/文件字节**不进** journal（只存引用 + 有界元数据）。
+
+  6. **能力面（ADR-023 单能力层 + 薄 REST/Tool 双适配）**：
+     - service `services/projects.py` + `services/github_source.py`（ref→OID 解析、归档获取、connection 凭据取用）。**REST**（见 api §10.6 增量）：`POST /projects/imports` 的 `kind='github'` 由 **501 改为 202**（body 带 `GithubImportSpec`：repo + ref_type + ref + 可空 connection 引用，默认取 owner 的 active connection）；失败态经 `import_status='failed'` + `source_status='import_failed'`（`projects.status` 仍恒 active）暴露，`POST /projects/{id}/imports/retry` 重跑幂等 durable job；新增只读选择端点 `GET /projects/github/repos?query=`（列出该 connection 可见仓库）与 `GET /projects/github/refs?repo_external_id=`（列出分支/标签），二者**服务端**经 connection 凭据代理 GitHub（`502` 透传上游、`409` 无 active connection），**凭据不下发前端**；GitHub connection 管理端点 `GET/POST/DELETE /connections/github`（状态含连接 id、授权、断开）。W2b 首版**要求 active connection**（无连接的公共仓直连为后续放宽）。
+     - **Tool（W2b）= 不新增 agent 写工具**：GitHub 导入**不给 agent**（人工触发，理由：跨凭据边界 + 拉取不可信外部内容；与 W2a「归档上传不给 agent」一致，也避免 agent 枚举用户私有仓的隐私面）。导入完成后 agent 用**既有** W2a 只读工具（`project_tree`/`project_read`）读取项目内容（项目文件仍是**不可信内容**，ADR-009）。**不给** agent：`project_push`（W4）、任何破坏性 purge、`project_run`（W3）。
+     - **UI**：SPA 路由复用 `/work/projects`——**W2b 只交付静态稿**，能力矩阵 UI 列保持 ⬜，**本阶段不暴露 W2b 生产入口/导航**。
+
+- **数据模型（W2b；canonical 与派生分离；名义命名，见 data-model 契约增量）**：
+  - **新增 `project_sources`（canonical，一项目一行、导入后即 provenance）**：`provider='github'`、稳定 `repo_external_id`（GitHub 数字 repo id）、`owner`/`repo` 显示名、`ref_type ∈ (branch,tag,commit)`、`ref_name`、解析出的 `source_oid`、`connection_id`（→ vault 凭据引用，**不存 token 本体**）、`imported_at`、`status`。W4 再在此表**扩展** fetch/sync 字段（`source_base_oid`/最近 remote OID/`last_fetched_at`/sync 态）——本 ADR 不建那些列。带 `tenant_id`+复合键（ADR-015）。
+  - **新增 `github_connections`（凭据记录，复用 AEAD 列形态）**：`auth_kind ∈ (pat,app_installation)`、`account_login`、可空 `installation_id`、AEAD 加密列（`token_enc/nonce/kek_id/key_version/token_algorithm/aad_version`）、`scopes`、`status`、时间戳。带 `tenant_id`+复合键。
+  - **`projects.source_status` CHECK 扩展**：W2a 恒 `unbound` → W2b 增 `importing`、`imported`、`import_failed`；更丰富的同步态（`clean/remote_ahead/local_ahead/diverged/conflicted/auth_required/remote_unavailable/sync_error`）**留 W4**。
+  - **`project_import_jobs` 扩展**：`create_kind` CHECK 增 `github`；增可空 github 列（`connection_id`、`source_ref_type`、`source_ref`、`resolved_oid`）；`termination_reason` 词表增 github 具名原因。
+  - **`project_snapshots.source_oid`**：W2a 已预留（W2b GitHub commit OID）——本 ADR 起 github 导入填该列。
+  - **W2b 明确不建的表**（留后续 ADR）：`project_working_copies`/`project_change_sets`/`project_artifacts`（W3）；W4 的对外写/同步字段。
+
+- **安全边界（守 ADR-009/019/021/037 §1.5）**：归档是**不可信输入**——隔离 staging + 有界内存解压 + 拒绝绝对/`..`/NUL/设备/FIFO/硬链接/逃逸 symlink + 强制 `PROJECT_MAX_*`（tar gzip 同样受 zip-bomb 膨胀比守卫）；服务端生成对象键，不信任 client `Content-Type`/文件名。**GitHub 凭据永远留 vault/connector 边界**，绝不进树/快照/prompt/日志/工具结果/沙箱。**W2b 不涉及沙箱**（Open in Chat 只读/讨论，工作副本+沙箱是 W3）。`source_oid` 是 provenance；远端非权威，导入后不追远端。
+
+- **W3/W4 非目标与后续 ADR 边界（W2b 明确不做）**：后台 fetch/sync、working copy、`git init/commit/branch`、merge、push、建远程分支、PR、force push、submodule、Git LFS、多 remote、全历史镜像、网络化开发环境、依赖安装、sandbox、把凭据喂进项目内容——**全部 later**。W3（工作副本 + 一次性 scratch 沙箱 + 变更评审 + **ADR-025 修订** + docker.sock/多用户隔离加固）与 W4（GitHub 同步/push/PR，走 ADR-020，带期望远程 OID、首版不 force push）各自**再带自己的 ADR + 契约先行**。
+
+- **取代/延伸关系**：**延伸 ADR-037**（把 §决策2 的 W2b 从预告落成契约）；ADR-037 §决策2 把 W2b 粗描为「浅拉取分支头」——**本 ADR 收敛并取代该处的 ref/机制细节**：首版 ref = branch **+ tag + commit**（三者），机制 = 有界**归档（tarball）获取**而非 `git clone`（先解析 OID 再钉住）。**复用** ADR-019 密钥 AEAD/KEK 边界、ADR-030 不可变去重 blob + 配额记账（GitHub 归档字节走同一 `storage_blobs`）、ADR-023 能力层双适配、ADR-016/017 journal+outbox 真相源与 durable job、ADR-015 租户键、ADR-009 不可信内容。**不改**任何既有 ADR 正文（本批只新增 ADR-038 + 契约增量）；不动 ADR-025（W3 的事）。
+
+- **验收关键（本契约先行批次）**：ADR-038 被接受；data-model 有 `project_sources` + `github_connections` + `projects.source_status` 扩展 + `project_import_jobs` github 扩展（canonical vs 派生清晰、凭据不入表本体、每表 `tenant_id`+复合键）；api §10.6 有 github 导入 202 + repo/ref 选择端点 + connection 端点 + schema；events §2.10 有 `create_kind=github` + durable job/幂等/恢复 tick + 「只读拉取无 effect_unknown」说明；config 有 `GITHUB_*` + 安全边界增补；能力矩阵有 GitHub 导入 + connection 行且 **UI 列 ⬜**；W2b 静态稿（连接状态/repo·ref 选择/导入进度/成功来源元数据/失败·重试）落在生产 Quiet Work 设计系统、桌面与 390px 均合理，且**明标设计稿、不冒充已实现**；**无生产代码/迁移/新入口暴露**；W3/W4 非目标与后续 ADR 边界写清。契约**先于代码**（本 ADR 同批）。
+
+- **来源**：R-WORKSPACE-PRODUCT 调研 [`research/workspace-product-report.md`](research/workspace-product-report.md) §9（Project 与 Git 语义：一次性导入、shallow-by-default、稳定 repo id + 期望 OID、凭据留 connector/vault 边界）；GitHub 官方文档 [Downloading source code archives](https://docs.github.com/en/repositories/working-with-files/using-files/downloading-source-code-archives)、[REST · Git refs](https://docs.github.com/en/rest/git/refs)、[Permissions required for GitHub Apps](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps)、[Fine-grained PAT 介绍](https://github.blog/security/application-security/introducing-fine-grained-personal-access-tokens-for-github/)；负责人输入「按 W2a→W2b→W3→W4 正常顺序继续，W2b 严格限定 GitHub 一次性导入，复用现有 connector/credential/approval，凭据不进 sandbox/prompt/tree/snapshot/日志，本阶段只做契约与设计先行，不写生产代码/迁移/不暴露导航」。
