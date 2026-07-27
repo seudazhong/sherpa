@@ -97,11 +97,23 @@ async def test_projects_rest_flow() -> None:
         missing = await client.get(f"/projects/{uuid.uuid4()}")
         assert missing.status_code == 404
 
-        # GitHub import → 501.
+        # GitHub import without a connection → 409 (W2b; was 501 in W2a).
         gh = await client.post(
-            "/projects/imports", data={"kind": "github", "name": "GH"}, headers=headers
+            "/projects/imports",
+            json={
+                "kind": "github",
+                "name": "GH",
+                "github": {
+                    "repo_external_id": "1",
+                    "owner": "o",
+                    "repo": "r",
+                    "ref_type": "branch",
+                    "ref": "main",
+                },
+            },
+            headers=headers,
         )
-        assert gh.status_code == 501
+        assert gh.status_code == 409
 
         # Archive import → 202 (importing), then run the durable job inline → ready.
         raw = _zip([("README.md", b"# imported"), ("src/x.py", b"print(1)")])
