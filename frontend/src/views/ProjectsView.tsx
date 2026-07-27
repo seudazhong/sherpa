@@ -400,7 +400,8 @@ export default function ProjectsView() {
                 </span>
                 <strong>No projects yet</strong>
                 <p className="small muted">
-                  Start blank, from a template, or import an archive.
+                  Start blank, from a template, from an archive, or from a
+                  GitHub one-time import.
                 </p>
                 <button
                   className="btn btn-primary"
@@ -474,7 +475,8 @@ export default function ProjectsView() {
           <section className="panel proj-new">
             <h3>Choose a starting point</h3>
             <p className="small muted">
-              A project is durable Sherpa state. W2a offers three creation paths.
+              A project is durable Sherpa state. Start blank, from a template,
+              from an archive, or from a GitHub one-time import.
             </p>
             <div className="proj-paths">
               <button
