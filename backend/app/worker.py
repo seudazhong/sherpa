@@ -441,6 +441,13 @@ async def _qq_gateway_loop() -> None:
 async def _startup(ctx: dict[str, Any]) -> None:
     configure_logging()
     configure_tracing()
+    # Crash cleanup: scratch trees are rebuildable caches, never recovery truth (ADR-039).
+    try:
+        from app.services import project_sandbox as sbx_svc
+
+        sbx_svc.sweep_orphan_scratch()
+    except Exception:  # noqa: BLE001 - best-effort cache cleanup, never fatal to startup
+        pass
     ctx["relay_task"] = asyncio.create_task(_relay_loop())
     ctx["qq_gateway_task"] = asyncio.create_task(_qq_gateway_loop())
 
@@ -663,6 +670,22 @@ async def project_import_tick(ctx: dict[str, Any]) -> str:
     return f"redispatched={len(jobs)}"
 
 
+async def project_workcopy_maintenance(ctx: dict[str, Any]) -> str:
+    """Leader-gated: expire idle Project working copies (release their quota reservation in
+    one atomic transition) + sweep orphan scratch trees left by crashed runs (ADR-040/039).
+    Scratch is a rebuildable cache — deleting it never loses a persisted boundary."""
+    if not await try_acquire_leader("project_workcopy_maintenance", ttl_ms=280_000):
+        return "not_leader"
+    from app.services import project_sandbox as sbx_svc
+    from app.services import project_workcopy as wc_svc
+
+    async with SessionLocal() as session:
+        expired = await wc_svc.expire_idle(session)
+        await session.commit()
+    swept = sbx_svc.sweep_orphan_scratch()
+    return f"expired={expired} scratch_swept={swept}"
+
+
 class WorkerSettings:
     functions = [
         ping,
@@ -683,6 +706,7 @@ class WorkerSettings:
         cron(knowledge_ingest_tick, second={10, 40}),
         cron(knowledge_maintenance, minute=set(range(5, 60, 10))),
         cron(project_import_tick, second={20, 50}),
+        cron(project_workcopy_maintenance, minute=set(range(7, 60, 10))),
     ]
     on_startup = _startup
     on_shutdown = _shutdown
