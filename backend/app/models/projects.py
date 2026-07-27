@@ -318,9 +318,7 @@ class ProjectSandboxRun(Base):
     exit_code: Mapped[int | None] = mapped_column(Integer)
     timed_out: Mapped[bool] = mapped_column(Boolean, server_default="false")
     termination_reason: Mapped[str | None] = mapped_column(Text)
-    persisted_boundary_at: Mapped[datetime.datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
+    persisted_boundary_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
