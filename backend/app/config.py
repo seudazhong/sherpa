@@ -114,6 +114,21 @@ class Settings(BaseSettings):
     sandbox_mem_mb: int = 256
     sandbox_pids_limit: int = 128
 
+    # Projects — Workspace W3 (ADR-040 + ADR-039): task working copy + one-time
+    # scratch-copy sandbox + change review (config §1.7). The sandbox reuses the
+    # ADR-025 hardened container and adds a SINGLE read-write mount of a per-run
+    # disposable scratch copy (nosuid,nodev) — never the snapshot/blob store/creds.
+    # These bound the working-copy/change-set/sandbox paths; NOT wired until W3.
+    working_copy_idle_ttl_seconds: int = 86400  # durable working-copy idle expiry
+    sandbox_warm_ttl_seconds: int = 900  # warm-container idle TTL (cache hint; 0=always cold)
+    sandbox_scratch_root: str = ".sherpa/scratch"  # node-local disposable scratch dir
+    sandbox_scratch_max_bytes: int = 2 * 1024 * 1024 * 1024  # per-run scratch cap (2 GiB)
+    working_copy_max_changed_files: int = 5000  # change-set bound: changed-file count
+    working_copy_max_changed_bytes: int = 500 * 1024 * 1024  # change-set bound: changed bytes
+    working_copy_max_artifact_bytes: int = 200 * 1024 * 1024  # change-set bound: artifact bytes
+    working_copy_max_diff_bytes: int = 2 * 1024 * 1024  # per-file spilled unified-diff cap (2 MiB)
+    sandbox_run_timeout_seconds: int = 120  # per project_run wall-clock deadline
+
     # QQ official bot (ADR-028) is configured at runtime in the DB (channel_configs,
     # AppID/AppSecret via the sealed vault), NOT via env — no qq_* settings here. The
     # botpy WebSocket client runs in the worker; see app/channels/qq_official.py.

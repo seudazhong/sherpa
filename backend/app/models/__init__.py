@@ -34,10 +34,16 @@ from app.models.memory import MemoryPassage, UserMemory
 from app.models.observability import Trace
 from app.models.projects import (
     Project,
+    ProjectArtifact,
+    ProjectChangeSet,
+    ProjectChangeSetEntry,
     ProjectImportJob,
+    ProjectSandboxRun,
     ProjectSnapshot,
     ProjectSnapshotEntry,
     ProjectSource,
+    ProjectWorkingCopy,
+    ProjectWorkingCopyEntry,
 )
 from app.models.schedules import Schedule, ScheduleFiring
 from app.models.search import SessionSearchEntry
@@ -89,5 +95,11 @@ __all__ = [
     "ProjectSnapshotEntry",
     "ProjectImportJob",
     "ProjectSource",
+    "ProjectWorkingCopy",
+    "ProjectWorkingCopyEntry",
+    "ProjectChangeSet",
+    "ProjectChangeSetEntry",
+    "ProjectArtifact",
+    "ProjectSandboxRun",
     "GithubConnection",
 ]

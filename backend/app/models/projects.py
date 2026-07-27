@@ -31,6 +31,7 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="active")
     current_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    head_generation: Mapped[int] = mapped_column(Integer, server_default="0")
     default_branch_label: Mapped[str] = mapped_column(Text, server_default="main")
     source_status: Mapped[str] = mapped_column(Text, server_default="unbound")
     used_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
@@ -141,6 +142,185 @@ class ProjectSource(Base):
     source_oid: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="importing")
     imported_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# --- Workspace W3 (ADR-040 + ADR-039; migration 0030) ------------------------
+# A Project-bound Chat's first mutating action opens a DURABLE task working copy from
+# the current Project head. The scratch tree / warm container are rebuildable caches of
+# these rows (never recovery truth). File bytes are the shared ADR-030 storage_blobs;
+# bytes/credentials never enter the journal.
+
+
+class ProjectWorkingCopy(Base):
+    """One durable pending task working copy, owned by exactly one Project-bound Chat
+    (session) + Project. Authoritative pending state that spans chat turns. Single-writer:
+    (lease_owner, lease_expires_at) gives mutual exclusion; ``fence_token`` (monotonic,
+    bumped on lease (re)acquire) is stamped on every overlay/change-set publish so a STALE
+    sandbox can never publish a later overlay."""
+
+    __tablename__ = "project_working_copies"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    base_snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    base_head_generation: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(Text, server_default="open")
+    version: Mapped[int] = mapped_column(Integer, server_default="0")
+    fence_token: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    lease_owner: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    reserved_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    overlay_entry_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    overlay_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    last_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    last_boundary_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ProjectWorkingCopyEntry(Base):
+    """The durable overlay: the working copy's delta vs its base snapshot, sufficient
+    (with the base) to rebuild the exact scratch tree. A 'deleted' entry is a whiteout
+    over a base path; file bytes are immutable ADR-030 storage_blobs."""
+
+    __tablename__ = "project_working_copy_entries"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    working_copy_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    path: Mapped[str] = mapped_column(Text)
+    change_kind: Mapped[str] = mapped_column(Text)
+    entry_kind: Mapped[str] = mapped_column(Text, server_default="file")
+    content_hash: Mapped[bytes | None] = mapped_column(LargeBinary)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    executable: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    symlink_target: Mapped[str | None] = mapped_column(Text)
+    fence_token: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ProjectChangeSet(Base):
+    """A bounded, REVIEWABLE change set produced at an execution boundary: overlay-vs-base
+    compared, bounds enforced, ready for the human Change Review UI. Durable projection."""
+
+    __tablename__ = "project_change_sets"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    working_copy_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    base_snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    fence_token: Mapped[int] = mapped_column(BigInteger)
+    state: Mapped[str] = mapped_column(Text, server_default="open")
+    added_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    modified_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    deleted_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    artifact_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    changed_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    diff_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    truncated: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    created_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ProjectChangeSetEntry(Base):
+    """One reviewable file change in a change set. Save-selected applies the subset with
+    ``selected=true``; a bounded textual diff MAY be spilled to MinIO (diff_object_key)."""
+
+    __tablename__ = "project_change_set_entries"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    change_set_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    path: Mapped[str] = mapped_column(Text)
+    change_kind: Mapped[str] = mapped_column(Text)
+    old_content_hash: Mapped[bytes | None] = mapped_column(LargeBinary)
+    new_content_hash: Mapped[bytes | None] = mapped_column(LargeBinary)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    executable: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    is_binary: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    diff_object_key: Mapped[str | None] = mapped_column(Text)
+    diff_truncated: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    selected: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ProjectArtifact(Base):
+    """Run OUTPUTS that are not project files (test/build logs, generated reports).
+    Ephemeral by default: charges quota ONLY after explicit Keep/Export."""
+
+    __tablename__ = "project_artifacts"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    working_copy_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    name: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text, server_default="file")
+    content_hash: Mapped[bytes | None] = mapped_column(LargeBinary)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    mime: Mapped[str | None] = mapped_column(Text)
+    retention: Mapped[str] = mapped_column(Text, server_default="ephemeral")
+    retained_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ProjectSandboxRun(Base):
+    """A sandbox execution: links a run to a working copy + records BOUNDED,
+    NON-AUTHORITATIVE operational metadata plus the durable execution-boundary outcome.
+    ``scratch_ref``/``container_ref`` are node-local caches — NEVER recovery truth."""
+
+    __tablename__ = "project_sandbox_runs"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    working_copy_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    base_snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    fence_token: Mapped[int] = mapped_column(BigInteger)
+    state: Mapped[str] = mapped_column(Text, server_default="materializing")
+    scratch_ref: Mapped[str | None] = mapped_column(Text)
+    container_ref: Mapped[str | None] = mapped_column(Text)
+    warm_until: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    exit_code: Mapped[int | None] = mapped_column(Integer)
+    timed_out: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    termination_reason: Mapped[str | None] = mapped_column(Text)
+    persisted_boundary_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
