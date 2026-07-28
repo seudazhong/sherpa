@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 
+from app.config import settings
 from app.db import SessionLocal, ping_db
 from app.models import Session as SessionModel
 from app.models import Tenant, User
@@ -217,6 +218,71 @@ async def test_session_model_override_and_resolution() -> None:
                     )
                 finally:
                     await s2.rollback()
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_effective_model_state_tracks_the_real_precedence() -> None:
+    # B-1: the chat header must show what a run WOULD use, not the env default.
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            sid = await _session(s, ctx)
+
+            # Nothing configured → env fallback (tests run with PROVIDER_KIND=mock).
+            env_state = await svc.get_session_model_state(s, ctx, session_id=sid)
+            assert env_state.effective_source == "env"
+            assert env_state.effective_provider_id is None
+            assert env_state.effective_kind == settings.provider_kind
+            assert env_state.effective_model == (
+                "mock" if settings.provider_kind == "mock" else settings.provider_model
+            )
+
+            default = await svc.create_provider(
+                s,
+                ctx,
+                kind="openai_compatible",
+                display_name="Local litellm",
+                api_key="k",
+                default_model="gpt-5.5",
+            )
+            other = await svc.create_provider(
+                s,
+                ctx,
+                kind="anthropic",
+                display_name="Anthropic",
+                api_key="k",
+                default_model="claude-opus-4-8",
+            )
+
+            # Global default source, no per-chat override.
+            st = await svc.get_session_model_state(s, ctx, session_id=sid)
+            assert st.effective_source == "default"
+            assert st.effective_provider_id == default.id
+            assert st.effective_provider_name == "Local litellm"
+            assert st.effective_model == "gpt-5.5"
+            assert st.model_provider_id is None  # nothing pinned to the session
+
+            # Per-conversation override wins and is reported as such.
+            await svc.set_session_model(
+                s, ctx, session_id=sid, model_provider_id=other.id, model="claude-sonnet-4-6"
+            )
+            st2 = await svc.get_session_model_state(s, ctx, session_id=sid)
+            assert st2.effective_source == "session"
+            assert st2.effective_provider_id == other.id
+            assert st2.effective_model == "claude-sonnet-4-6"
+
+            # A disabled override falls back to the default source, and says "default".
+            other.enabled = False
+            await s.flush()
+            st3 = await svc.get_session_model_state(s, ctx, session_id=sid)
+            assert st3.model_provider_id == other.id  # the stored selection is unchanged
+            assert st3.effective_source == "default"
+            assert st3.effective_provider_id == default.id
+            assert st3.effective_model == "gpt-5.5"
         finally:
             await s.rollback()
 

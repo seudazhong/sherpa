@@ -4046,6 +4046,7 @@ div.run-log {
 }
 .mp-form-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 .model-switcher { display: inline-flex; align-items: center; gap: 5px; }
+.model-effective { color: var(--faint); white-space: nowrap; }
 .model-switcher select {
   font: inherit; font-size: 12px; padding: 3px 8px; border-radius: 999px;
   border: 1px solid var(--border-strong); background: var(--surface-subtle, #f8f8f7); color: var(--ink); cursor: pointer;

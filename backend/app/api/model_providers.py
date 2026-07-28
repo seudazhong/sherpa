@@ -77,6 +77,19 @@ class SessionModelSelection(BaseModel):
     model: str | None = None
 
 
+class SessionModelState(SessionModelSelection):
+    """Selection + the model a run on this session would actually use (ADR-041).
+
+    Clients must render `effective_*`: once a source is configured, the env
+    `PROVIDER_MODEL` echoed by `GET /meta` is no longer the truth (backlog B-1)."""
+
+    effective_source: Literal["session", "default", "env"]
+    effective_provider_id: uuid.UUID | None
+    effective_provider_name: str | None
+    effective_kind: str
+    effective_model: str
+
+
 def _summary(p: ModelProvider) -> ModelProviderSummary:
     return ModelProviderSummary(
         id=p.id,
@@ -91,6 +104,18 @@ def _summary(p: ModelProvider) -> ModelProviderSummary:
         last_error=p.last_error_redacted,
         has_key=p.token_enc is not None,
         updated_at=p.updated_at,
+    )
+
+
+def _state(s: svc.SessionModelState) -> SessionModelState:
+    return SessionModelState(
+        model_provider_id=s.model_provider_id,
+        model=s.model,
+        effective_source=s.effective_source,  # type: ignore[arg-type]
+        effective_provider_id=s.effective_provider_id,
+        effective_provider_name=s.effective_provider_name,
+        effective_kind=s.effective_kind,
+        effective_model=s.effective_model,
     )
 
 
@@ -235,12 +260,12 @@ async def get_session_model(
     session_id: uuid.UUID,
     ctx: Annotated[RequestContext, Depends(require_context)],
     db: Annotated[AsyncSession, Depends(get_session)],
-) -> SessionModelSelection:
+) -> SessionModelState:
     try:
-        sel = await svc.get_session_model(db, _caller(ctx), session_id=session_id)
+        state = await svc.get_session_model_state(db, _caller(ctx), session_id=session_id)
     except ServiceError as e:
         raise _http(e) from None
-    return SessionModelSelection(model_provider_id=sel.model_provider_id, model=sel.model)
+    return _state(state)
 
 
 @router.post("/sessions/{session_id}/model")
@@ -249,17 +274,18 @@ async def set_session_model(
     body: SessionModelSelection,
     ctx: Annotated[RequestContext, Depends(require_csrf)],
     db: Annotated[AsyncSession, Depends(get_session)],
-) -> SessionModelSelection:
+) -> SessionModelState:
     try:
-        sel = await svc.set_session_model(
+        await svc.set_session_model(
             db,
             _caller(ctx),
             session_id=session_id,
             model_provider_id=body.model_provider_id,
             model=body.model,
         )
+        state = await svc.get_session_model_state(db, _caller(ctx), session_id=session_id)
         await db.commit()
     except ServiceError as e:
         await db.rollback()
         raise _http(e) from None
-    return SessionModelSelection(model_provider_id=sel.model_provider_id, model=sel.model)
+    return _state(state)

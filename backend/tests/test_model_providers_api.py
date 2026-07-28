@@ -69,7 +69,8 @@ async def test_model_providers_rest_flow() -> None:
 
         # Duplicate name → 409.
         dup = await client.post(
-            "/providers", json={"kind": "gemini", "display_name": "OpenAI", "api_key": "k"},
+            "/providers",
+            json={"kind": "gemini", "display_name": "OpenAI", "api_key": "k"},
             headers=headers,
         )
         assert dup.status_code == 409
@@ -99,18 +100,36 @@ async def test_model_providers_rest_flow() -> None:
         # Per-conversation model override.
         gen = await client.post("/sessions", json={"title": "chat"}, headers=headers)
         sid = gen.json()["id"]
-        assert (await client.get(f"/sessions/{sid}/model")).json()["model_provider_id"] is None
+        base = (await client.get(f"/sessions/{sid}/model")).json()
+        assert base["model_provider_id"] is None
+        # B-1: the response also reports what a run would actually use. The global
+        # default source (Anthropic) has no model yet, so a run still falls back to
+        # the env provider — and the response says so instead of guessing.
+        assert base["effective_source"] == "env"
+        assert base["effective_provider_id"] is None
         sel = await client.post(
             f"/sessions/{sid}/model",
             json={"model_provider_id": oai_id, "model": "gpt-5.1"},
             headers=headers,
         )
         assert sel.json()["model_provider_id"] == oai_id and sel.json()["model"] == "gpt-5.1"
+        assert sel.json()["effective_source"] == "session"
+        assert sel.json()["effective_model"] == "gpt-5.1"
+        assert sel.json()["effective_provider_name"] == "OpenAI"
         cleared = await client.post(
-            f"/sessions/{sid}/model", json={"model_provider_id": None, "model": None},
+            f"/sessions/{sid}/model",
+            json={"model_provider_id": None, "model": None},
             headers=headers,
         )
         assert cleared.json()["model_provider_id"] is None
+        # Give the default source a model → the effective pair now names that source.
+        await client.patch(
+            f"/providers/{anth_id}", json={"default_model": "claude-opus-4-8"}, headers=headers
+        )
+        back = (await client.get(f"/sessions/{sid}/model")).json()
+        assert back["effective_source"] == "default"
+        assert back["effective_provider_id"] == anth_id
+        assert back["effective_model"] == "claude-opus-4-8"
 
         # Unknown provider → 404; delete works.
         assert (await client.get(f"/providers/{uuid.uuid4()}")).status_code == 404

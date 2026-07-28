@@ -8,27 +8,39 @@
 
 | # | Kind | Item | Status |
 | --- | --- | --- | --- |
-| B-1 | bug | [Chat header shows a stale hard-coded model](#b-1-chat-header-shows-a-stale-hard-coded-model) | open |
+| B-1 | bug | [Chat header shows a stale hard-coded model](#b-1-chat-header-shows-a-stale-hard-coded-model) | ✅ done |
 | B-2 | design | [Built-in tool surface is too large (53 tools)](#b-2-built-in-tool-surface-is-too-large-53-tools) | open |
 | B-3 | bug | [The model cannot see the chat's bound project](#b-3-the-model-cannot-see-the-chats-bound-project) | open |
-| B-4 | bug/dx | [OTel tracing silently off after a stack restart](#b-4-otel-tracing-silently-off-after-a-stack-restart) | open |
+| B-4 | bug/dx | [OTel tracing silently off after a stack restart](#b-4-otel-tracing-silently-off-after-a-stack-restart) | ✅ done |
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | open |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | open |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | open |
 
-Suggested order: **B-4 → B-3** (restore observability first, then confirm what the model actually receives) → **B-1, B-7** (cheap, high perceived quality) → **B-5, B-6** (need a contract decision) → **B-2** (largest design question, own ADR).
+Suggested order: ~~**B-4 → B-1**~~ (done 2026-07-28) → **B-7** (cheap, needs a naming decision) → **B-3** (now inspectable again, since tracing works) → **B-5, B-6** (need a contract decision) → **B-2** (largest design question, own ADR).
 
 ---
 
 ## B-1 Chat header shows a stale hard-coded model
 
-*Reported 2026-07-28 (manual test) · kind: bug · status: open*
+*Reported 2026-07-28 (manual test) · kind: bug · status: ✅ done 2026-07-28*
 
-**Observed.** The Chat page header always renders `claude-sonnet-4.6` next to the `Web chat` chip, while the session actually runs a different model (the session model switcher showed `Local litellm · gpt-5.5`).
+**Observed.** The Chat page header always rendered `claude-sonnet-4.6` next to the `Web chat` chip, while the session actually runs a different model (the session model switcher showed `Local litellm · gpt-5.5`).
 
-**Evidence.** `frontend/src/views/ChatView.tsx:695-703` renders `meta.model` from `GET /meta`; `backend/app/main.py:89-98` returns `settings.provider_model`, i.e. the **process-level env default** (`PROVIDER_MODEL`, default `claude-sonnet-4.6`). It reflects neither the DB-configured model source (ADR-041) nor the per-session override (`sessions.model_provider_id` / `sessions.model`).
+**Evidence.** `frontend/src/views/ChatView.tsx:695-703` rendered `meta.model` from `GET /meta`; `backend/app/main.py:89-98` returns `settings.provider_model`, i.e. the **process-level env default** (`PROVIDER_MODEL`, default `claude-sonnet-4.6`). It reflected neither the DB-configured model source (ADR-041) nor the per-session override (`sessions.model_provider_id` / `sessions.model`).
 
-**Direction (undecided).** Either drop the static label and let the model switcher be the single source of truth, or make the label show the **session's effective** provider/model (resolved the same way the worker resolves it) and fall back to the env default only when unset. Also decide whether `/meta` should keep advertising the env model at all.
+**Fixed by** making the *effective* model a first-class read instead of a client guess:
+`GET`/`POST /sessions/{id}/model` now answer `SessionModelState` (selection + `effective_source` ∈ `session|default|env` + provider id/name/kind + model), resolved with the run's own precedence in
+`services/model_providers.get_session_model_state()`. The chat header no longer uses `/meta` when a session
+exists — `ModelSwitcher` owns the label and hides it when the select already spells the pair out. `/meta`
+keeps reporting the process env provider (it is the honest answer to "what is this server's default"), and
+the contract now says so (`docs/contracts/api.md` §10.8).
+
+**Verified.** Backend gate green (full pytest, ruff, `mypy app`); new service + REST tests cover
+session-override / global-default / env fallback / disabled-override. Live in the browser: with no source
+configured → `Server default · claude-sonnet-4.6` ("no source configured"); after adding the litellm source
+(29 models, default `gpt-5.5`) → `Local litellm · gpt-5.5` ("your default source"); with a per-chat override
+→ `Local litellm · gpt-4o-mini` and the worker log for that message reads `provider=openai_compatible
+model=gpt-4o-mini`. 390 px overflow = 0.
 
 ---
 
@@ -66,17 +78,22 @@ Suggested order: **B-4 → B-3** (restore observability first, then confirm what
 
 ## B-4 OTel tracing silently off after a stack restart
 
-*Reported 2026-07-28 (manual test) · kind: bug/dx · status: open*
+*Reported 2026-07-28 (manual test) · kind: bug/dx · status: ✅ done 2026-07-28*
 
-**Observed.** Phoenix (`localhost:6006`) shows the `default` project *last updated 2 days ago*, 12 traces — no new traces, so the assembled prompt for B-3 could not be inspected.
+**Observed.** Phoenix (`localhost:6006`) showed the `default` project *last updated 2 days ago*, 12 traces — no new traces, so the assembled prompt for B-3 could not be inspected.
 
-**Evidence (checked live).** `infra-phoenix-1` is up, but `infra-worker-1` / `infra-web-1` (rebuilt ~1 h earlier) run with `OTEL_ENABLED=false` and an empty `OTEL_EXPORTER_OTLP_ENDPOINT`. `infra/docker-compose.yml:99-101,146-149` default these to `false`/empty, so tracing depends on shell env at `up` time and is **silently lost on every rebuild/restart** that does not export them. Neither the app nor Phoenix indicates that collection is off.
+**Evidence (checked live).** `infra-phoenix-1` was up, but `infra-worker-1` / `infra-web-1` (rebuilt ~1 h earlier) ran with `OTEL_ENABLED=false` and an empty `OTEL_EXPORTER_OTLP_ENDPOINT`. `infra/docker-compose.yml:99-101,146-149` default these to `false`/empty, so tracing depended on shell env at `up` time and was **silently lost on every rebuild/restart** that did not export them. Neither the app nor Phoenix indicated that collection was off.
 
-**Direction (undecided).**
-- Keep the settings across restarts — put `OTEL_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_CAPTURE_MESSAGE_CONTENT` in `.env(.example)`, or bind them to the `observability` compose profile.
-- Log one startup line in web + worker stating tracing enabled/disabled and the endpoint, so the failure is never invisible.
-- Optionally surface tracing status (and a Phoenix link) in Settings.
-- Note in `AGENTS.md` / docs that the two verification lanes want tracing on.
+**Fixed by** making the state audible and the config durable:
+`configure_tracing()` now logs exactly one startup line either way — `tracing disabled` (with how to enable
+it) or `tracing enabled` with exporter kind / endpoint / sampler / content-capture — and `.env.example` +
+the compose comments say these belong in the `--env-file`, not a shell export. Defaults stay off (ADR-033),
+so the config contract is unchanged.
+
+**Verified.** `pytest tests/test_otel.py` green (two new tests assert both startup lines). Live: web and
+worker log `tracing enabled … exporter=otlp endpoint=http://phoenix:4317`, and a real chat produced a new
+Phoenix trace (12 → 13, "last updated 1 minute ago") with `trace_id`/`span_id` on the worker's `llm call`
+log line.
 
 ---
 

@@ -715,6 +715,16 @@ export interface SessionModelSelection {
   model: string | null;
 }
 
+/** Selection + what a run on this session would actually use (ADR-041). Render
+ *  `effective_*`: once a source is configured, `/meta.model` (the env default) lies. */
+export interface SessionModelState extends SessionModelSelection {
+  effective_source: "session" | "default" | "env";
+  effective_provider_id: string | null;
+  effective_provider_name: string | null;
+  effective_kind: string;
+  effective_model: string;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -1235,12 +1245,12 @@ export const api = {
   setDefaultModelProvider: (csrf: string, id: string) =>
     req<ModelProvider>(`/providers/${id}/default`, jsonInit("POST", csrf)),
   getSessionModel: (sid: string) =>
-    req<SessionModelSelection>(`/sessions/${sid}/model`),
+    req<SessionModelState>(`/sessions/${sid}/model`),
   setSessionModel: (
     csrf: string,
     sid: string,
     body: { model_provider_id: string | null; model: string | null },
-  ) => req<SessionModelSelection>(`/sessions/${sid}/model`, jsonInit("POST", csrf, body)),
+  ) => req<SessionModelState>(`/sessions/${sid}/model`, jsonInit("POST", csrf, body)),
   // W3 — task working copy + one-time scratch sandbox + change review (ADR-040/039).
   getWorkingCopy: (sid: string) =>
     req<WorkingCopySummary | null>(`/sessions/${sid}/working-copy`),

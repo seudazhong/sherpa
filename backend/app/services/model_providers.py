@@ -290,6 +290,30 @@ class SessionSelection:
     model: str | None
 
 
+@dataclasses.dataclass(frozen=True)
+class SessionModelState:
+    """The stored selection **plus** what a run on this session would actually use.
+
+    ``effective_source`` names where the model came from: the per-conversation
+    override (``session``), the owner's global-default source (``default``), or the
+    process env fallback (``env``). Clients render the effective pair — the env
+    ``PROVIDER_MODEL`` alone is not the truth once a source is configured (B-1).
+
+    Resolution mirrors :func:`provider_for_session` with one honest exception: a
+    configured source whose sealed key cannot be opened falls back to env at run
+    time, which this read path does not (it never decrypts). Such a source is
+    already surfaced as ``status='error'`` in Settings.
+    """
+
+    model_provider_id: uuid.UUID | None
+    model: str | None
+    effective_source: str  # "session" | "default" | "env"
+    effective_provider_id: uuid.UUID | None
+    effective_provider_name: str | None
+    effective_kind: str
+    effective_model: str
+
+
 async def get_session_model(
     db: AsyncSession, ctx: CallerContext, *, session_id: uuid.UUID
 ) -> SessionSelection:
@@ -298,6 +322,41 @@ async def get_session_model(
     if session is None or session.user_id != uid or session.status == "deleted":
         raise NotFound("session not found")
     return SessionSelection(model_provider_id=session.model_provider_id, model=session.model)
+
+
+async def get_session_model_state(
+    db: AsyncSession, ctx: CallerContext, *, session_id: uuid.UUID
+) -> SessionModelState:
+    """The stored selection resolved to the effective (provider, model) for this session.
+
+    Same precedence as a run: session override → owner's global default → env
+    ``PROVIDER_*``. Read-only; never opens a sealed key."""
+    sel = await get_session_model(db, ctx, session_id=session_id)
+    resolved = await resolve_for_session(db, tenant_id=ctx.tenant_id, session_id=session_id)
+    if resolved is not None:
+        provider, model = resolved
+        effective_model = model or provider.default_model
+        if effective_model:
+            return SessionModelState(
+                model_provider_id=sel.model_provider_id,
+                model=sel.model,
+                effective_source=("session" if sel.model_provider_id == provider.id else "default"),
+                effective_provider_id=provider.id,
+                effective_provider_name=provider.display_name,
+                effective_kind=provider.kind,
+                effective_model=effective_model,
+            )
+    # No usable configured source ⇒ the env provider, exactly like provider_for_session().
+    env_mock = settings.provider_kind == "mock"
+    return SessionModelState(
+        model_provider_id=sel.model_provider_id,
+        model=sel.model,
+        effective_source="env",
+        effective_provider_id=None,
+        effective_provider_name=None,
+        effective_kind=settings.provider_kind,
+        effective_model="mock" if env_mock else settings.provider_model,
+    )
 
 
 async def set_session_model(

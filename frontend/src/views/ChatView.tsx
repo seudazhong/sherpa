@@ -693,14 +693,20 @@ export default function ChatView() {
         <div className="thread">
           <div className="thread-meta">
             <span className="chip">Web chat</span>
-            <span>
-              {meta
-                ? meta.real_model
-                  ? meta.model
-                  : "Mock model"
-                : "Loading model…"}
-            </span>
-            {sessionId && <ModelSwitcher sessionId={sessionId} />}
+            {/* With a session the switcher owns the model label (it knows the
+                effective source); before one exists we can only show the server
+                default from /meta. */}
+            {sessionId ? (
+              <ModelSwitcher sessionId={sessionId} />
+            ) : (
+              <span>
+                {meta
+                  ? meta.real_model
+                    ? `Server default · ${meta.model}`
+                    : "Mock model"
+                  : "Loading model…"}
+              </span>
+            )}
             {projectCtx?.project_id && (
               <span
                 className="chip project-chip"

@@ -2067,12 +2067,13 @@ class ProjectContext(StrictModel):        # extended
 
 ### 10.8 Model providers — user-configurable multi-source model layer (ADR-041)
 
-> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-041).** These routes/schemas are **frozen but NOT implemented**
-> — no code, no migration. They let the owner configure **multiple model sources** in Settings (OpenAI /
-> Anthropic / Gemini / DeepSeek / Qwen / …), select a global default + a per-chat model, and test a
-> connection. The **API key is write-only** (AEAD-sealed server-side, never returned) and used only at the
-> `Provider.stream()` boundary. All routes are `Session`-authenticated, tenant + user scoped; writes require
-> CSRF. There is **no agent tool** for provider config (a human Settings action, like GitHub connections).
+> **Status: implemented** (ADR-041; migration `0031` — `model_providers` + `sessions.model_provider_id/model`;
+> Settings **Models** panel + chat model switcher shipped). These routes let the owner configure **multiple
+> model sources** in Settings (OpenAI / Anthropic / Gemini / DeepSeek / Qwen / …), select a global default +
+> a per-chat model, and test a connection. The **API key is write-only** (AEAD-sealed server-side, never
+> returned) and used only at the `Provider.stream()` boundary. All routes are `Session`-authenticated,
+> tenant + user scoped; writes require CSRF. There is **no agent tool** for provider config (a human
+> Settings action, like GitHub connections).
 
 ```python
 class ModelProviderSummary(StrictModel):
@@ -2109,10 +2110,20 @@ class ModelProviderTest(StrictModel):
     models: list[str]                                  # fetched catalog on success
     detail: str | None                                 # redacted error on failure
 
-class SessionModelSelection(StrictModel):
+class SessionModelSelection(StrictModel):               # request body
     # null model_provider_id => use the global default source + its default_model.
     model_provider_id: UUID | None
     model: str | None
+
+class SessionModelState(SessionModelSelection):         # response
+    # What a run on this session would ACTUALLY use, resolved with the run's own
+    # precedence: session override -> global default source -> env PROVIDER_*.
+    # Clients MUST render this, not GET /meta.model (the process env default).
+    effective_source: Literal["session", "default", "env"]
+    effective_provider_id: UUID | None                 # null when source == "env"
+    effective_provider_name: str | None                # display name of the source
+    effective_kind: str                                # provider kind, or PROVIDER_KIND for env
+    effective_model: str                               # "mock" when the env provider is the mock
 ```
 
 | Route | Body → response | Auth | Status |
@@ -2125,8 +2136,8 @@ class SessionModelSelection(StrictModel):
 | `POST /providers/{id}/test` | none → `ModelProviderTest` | Session + CSRF | `200`, `401`, `404` |
 | `GET /providers/{id}/models` | none → `list[str]` | Session | `200`, `401`, `404` |
 | `POST /providers/{id}/default` | none → `ModelProviderSummary` | Session + CSRF | `200`, `401`, `404`, `409` |
-| `GET /sessions/{id}/model` | none → `SessionModelSelection` | Session | `200`, `401`, `404` |
-| `POST /sessions/{id}/model` | `SessionModelSelection` → `SessionModelSelection` | Session + CSRF | `200`, `401`, `404`, `422` |
+| `GET /sessions/{id}/model` | none → `SessionModelState` | Session | `200`, `401`, `404` |
+| `POST /sessions/{id}/model` | `SessionModelSelection` → `SessionModelState` | Session + CSRF | `200`, `401`, `404`, `422` |
 
 - **Write-only key.** `api_key` is accepted on create/update, AEAD-sealed under the active KEK
   (`security/github_token.py` pattern), and **never** returned — `ModelProviderSummary.has_key` reports only
@@ -2138,12 +2149,19 @@ class SessionModelSelection(StrictModel):
   global default (atomically clears the prior default). `POST /sessions/{id}/model` sets the per-conversation
   override (source + model); `null` clears it back to the global default. The switch persists **both** the
   source id and the model so a later message never reuses a stale endpoint/wire (hermes #25106).
+- **Effective model is a first-class read.** Both session-model routes answer with `SessionModelState`,
+  resolving the same precedence a run uses (session override → global default → env `PROVIDER_*`) so a
+  client can label a chat honestly. `GET /meta` keeps reporting the **process env** provider/model and is
+  therefore *not* a per-chat answer — the chat surface must use `effective_*` (backlog B-1). Two honest
+  edge cases: a default source with no model at all resolves to `env`, and a source whose sealed key
+  cannot be opened falls back to env only at run time (the read path never decrypts; such a source already
+  shows `status='error'`).
 - **No agent tool.** Provider configuration crosses the credential boundary and is owner-only; model
   selection is a Settings action, not an agent action. (Contrast: the agent simply runs on whatever model
   the owner configured.) Deferred (own ADRs): cross-provider failover, MoA/ensemble, cost ledger,
   Bedrock/Vertex/OpenAI-Responses, sub-agents.
 - **UI:** the Settings **Models** panel (source list / add-source [kind + base_url + a password-input key
-  that is never echoed] / test connection / model picker / global-default toggle) + a chat top-bar model
-  switcher is a **design/contract-first static draft only**
-  ([`../design-settings-models/index.html`](../design-settings-models/index.html)); the capability-matrix
-  UI cells (docs/11 §9) stay **⬜** until implementation lands after owner review.
+  that is never echoed] / test connection / model picker / global-default toggle) plus the chat top-bar
+  model switcher are **implemented**; the original static draft remains at
+  ([`../design-settings-models/index.html`](../design-settings-models/index.html)). The switcher renders the
+  session's `effective_*` pair, so the header names the model a run would really use.
