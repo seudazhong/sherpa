@@ -686,6 +686,35 @@ export interface ThreadTranscript {
   pending_approvals: PendingApprovalBrief[];
 }
 
+export type ModelProviderKind = "openai_compatible" | "anthropic" | "gemini";
+
+export interface ModelProvider {
+  id: string;
+  kind: ModelProviderKind;
+  display_name: string;
+  base_url: string | null;
+  models: string[];
+  default_model: string | null;
+  enabled: boolean;
+  is_default: boolean;
+  status: "pending" | "active" | "error";
+  last_error: string | null;
+  has_key: boolean;
+  updated_at: string;
+}
+
+export interface ModelProviderTest {
+  ok: boolean;
+  status: "active" | "error";
+  models: string[];
+  detail: string | null;
+}
+
+export interface SessionModelSelection {
+  model_provider_id: string | null;
+  model: string | null;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -1174,6 +1203,44 @@ export const api = {
     ),
   retryProjectImport: (csrf: string, id: string) =>
     req<Project>(`/projects/${id}/imports/retry`, jsonInit("POST", csrf)),
+  // Model providers (ADR-041): user-configured multi-source model layer. The API key is
+  // write-only — never returned; these methods only send it on create/update.
+  listModelProviders: () => req<ModelProvider[]>("/providers"),
+  getModelProvider: (id: string) => req<ModelProvider>(`/providers/${id}`),
+  createModelProvider: (
+    csrf: string,
+    body: {
+      kind: ModelProviderKind;
+      display_name: string;
+      api_key: string;
+      base_url?: string | null;
+      default_model?: string | null;
+    },
+  ) => req<ModelProvider>("/providers", jsonInit("POST", csrf, body)),
+  updateModelProvider: (
+    csrf: string,
+    id: string,
+    body: {
+      display_name?: string;
+      base_url?: string | null;
+      api_key?: string;
+      default_model?: string | null;
+      enabled?: boolean;
+    },
+  ) => req<ModelProvider>(`/providers/${id}`, jsonInit("PATCH", csrf, body)),
+  deleteModelProvider: (csrf: string, id: string) =>
+    req<void>(`/providers/${id}`, jsonInit("DELETE", csrf)),
+  testModelProvider: (csrf: string, id: string) =>
+    req<ModelProviderTest>(`/providers/${id}/test`, jsonInit("POST", csrf)),
+  setDefaultModelProvider: (csrf: string, id: string) =>
+    req<ModelProvider>(`/providers/${id}/default`, jsonInit("POST", csrf)),
+  getSessionModel: (sid: string) =>
+    req<SessionModelSelection>(`/sessions/${sid}/model`),
+  setSessionModel: (
+    csrf: string,
+    sid: string,
+    body: { model_provider_id: string | null; model: string | null },
+  ) => req<SessionModelSelection>(`/sessions/${sid}/model`, jsonInit("POST", csrf, body)),
   // W3 — task working copy + one-time scratch sandbox + change review (ADR-040/039).
   getWorkingCopy: (sid: string) =>
     req<WorkingCopySummary | null>(`/sessions/${sid}/working-copy`),

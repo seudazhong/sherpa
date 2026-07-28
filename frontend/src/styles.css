@@ -4009,3 +4009,49 @@ div.run-log {
   .cr-actions .btn-primary { margin-left: 0; }
   .cr-checkpoint { flex-basis: 100%; }
 }
+
+/* Model providers (ADR-041) — Settings Models panel + chat switcher */
+.models-panel .settings-panel-head { align-items: center; }
+.mp-add { margin-left: auto; }
+.mp-list { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.mp-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--surface);
+}
+.mp-card.mp-default { border-color: var(--success); box-shadow: inset 3px 0 0 var(--success); }
+.mp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mp-head strong { font-size: 14px; }
+.mp-kind { background: var(--blue-soft, #e7f3ff); color: var(--blue, #2383e2); }
+.mp-spacer { flex: 1 1 auto; }
+.mp-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; }
+.mp-facts .mono { font-family: var(--mono, ui-monospace, monospace); }
+.mp-err { color: var(--danger); }
+.mp-model { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; max-width: 320px; }
+.mp-model select { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); font: inherit; font-size: 13px; }
+.mp-form {
+  margin-top: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  padding: 14px;
+}
+.mp-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mp-form-grid .full { grid-column: 1 / -1; }
+.mp-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mp-field span { font-size: 12.5px; font-weight: 600; color: var(--ink-soft, #454642); }
+.mp-field input, .mp-field select {
+  font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); width: 100%; min-width: 0;
+}
+.mp-form-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.model-switcher { display: inline-flex; align-items: center; gap: 5px; }
+.model-switcher select {
+  font: inherit; font-size: 12px; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--surface-subtle, #f8f8f7); color: var(--ink); cursor: pointer;
+  max-width: 220px;
+}
+@media (max-width: 620px) {
+  .mp-form-grid { grid-template-columns: 1fr; }
+  .model-switcher select { max-width: 160px; }
+}

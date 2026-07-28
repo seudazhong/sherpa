@@ -27,6 +27,7 @@ export default defineConfig({
       "/files": target,
       "/drive": target,
       "/projects": target,
+      "/providers": target,
       "/knowledge": target,
       "/grants": target,
       "/memory": target,

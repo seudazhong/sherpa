@@ -20,6 +20,7 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import { ChangeReview } from "../components/ChangeReview";
+import { ModelSwitcher } from "../components/ModelSwitcher";
 import Sidebar from "../components/Sidebar";
 
 interface Bubble {
@@ -699,6 +700,7 @@ export default function ChatView() {
                   : "Mock model"
                 : "Loading model…"}
             </span>
+            {sessionId && <ModelSwitcher sessionId={sessionId} />}
             {projectCtx?.project_id && (
               <span
                 className="chip project-chip"

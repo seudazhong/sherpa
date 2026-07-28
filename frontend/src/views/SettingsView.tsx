@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api, type Settings } from "../api";
 import { useAuth } from "../auth";
+import { ModelsPanel } from "../components/ModelsPanel";
 import Sidebar from "../components/Sidebar";
 
 function tzValid(tz: string): boolean {
@@ -243,6 +244,7 @@ export default function SettingsView() {
                   </div>
                 </article>
               </section>
+              <ModelsPanel />
               <datalist id="settings-timezones">
                 <option value="UTC" />
                 <option value="Asia/Shanghai" />
