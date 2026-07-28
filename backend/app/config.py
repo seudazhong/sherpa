@@ -29,9 +29,13 @@ class Settings(BaseSettings):
     provider_model: str = "claude-sonnet-4.6"
     provider_timeout_seconds: int = 60
 
-    # Embeddings (ADR-032): a Sherpa-bundled local model by default, decoupled
-    # from the chat provider. embedding_dim MUST equal the memory_passages vector
-    # column width; changing the model/dim is a full re-embed, not a toggle.
+    # Embeddings (ADR-032): a Sherpa-bundled local model, decoupled from the chat
+    # provider. embedding_dim MUST equal the memory_passages vector column width;
+    # changing the model/dim is a full re-embed, not a toggle.
+    # The *deployment* default is ollama (compose starts the bundled service and
+    # sets EMBEDDING_KIND/EMBEDDING_BASE_URL); this *code* default stays "mock" so a
+    # bare `uv run` / `uv run pytest` never makes a real model call (ADR-032 amended
+    # 2026-07-28).
     embedding_kind: str = "mock"  # mock | ollama | openai_compatible
     embedding_base_url: str | None = None  # e.g. http://ollama:11434
     embedding_model: str = "bge-m3"
