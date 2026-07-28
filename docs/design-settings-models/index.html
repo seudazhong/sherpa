@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sherpa · Settings — Models (多来源模型 provider · 静态 UI 稿)</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --canvas: #f7f7f5;
+        --sidebar: #fbfbfa;
+        --surface: #ffffff;
+        --surface-subtle: #f8f8f7;
+        --surface-hover: #f1f1ef;
+        --ink: #242523;
+        --ink-soft: #454642;
+        --muted: #72716d;
+        --faint: #9b9a97;
+        --border: rgba(55, 53, 47, 0.12);
+        --border-strong: rgba(55, 53, 47, 0.2);
+        --brand: #47705b;
+        --brand-strong: #355443;
+        --brand-soft: #e8f0eb;
+        --blue: #2383e2;
+        --blue-soft: #e7f3ff;
+        --success: #2f7d4d;
+        --success-soft: #e5f3e9;
+        --warning: #9a6700;
+        --warning-soft: #fbf0d5;
+        --danger: #b4233a;
+        --danger-soft: #fbe9ec;
+        --radius-sm: 8px;
+        --radius: 12px;
+        --radius-lg: 18px;
+        --shadow-sm: 0 1px 2px rgba(15, 15, 15, 0.04);
+        --shadow: 0 10px 28px rgba(15, 15, 15, 0.08), 0 2px 6px rgba(15, 15, 15, 0.04);
+        --font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; }
+      body {
+        color: var(--ink);
+        background: var(--canvas);
+        font-family: var(--font);
+        font-size: 14px;
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 920px; margin: 0 auto; padding: 28px 20px 64px; }
+      .eyebrow {
+        text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px;
+        color: var(--faint); font-weight: 600;
+      }
+      h1 { font-size: 26px; margin: 4px 0 6px; }
+      h2 { font-size: 16px; margin: 28px 0 12px; }
+      p.sub { color: var(--muted); margin: 0 0 4px; max-width: 640px; }
+      .draft-banner {
+        margin: 16px 0 8px; padding: 12px 14px; border-radius: var(--radius);
+        background: var(--warning-soft); color: var(--warning); font-size: 13px;
+        border: 1px solid rgba(154, 103, 0, 0.2);
+      }
+      code, .mono { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+      .callout {
+        display: flex; gap: 10px; align-items: flex-start; margin: 8px 0 4px;
+        padding: 12px 14px; border-radius: var(--radius);
+        background: var(--brand-soft); color: var(--brand-strong); font-size: 13px;
+      }
+      .pill {
+        display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
+        border-radius: 999px; font-size: 11.5px; font-weight: 600;
+        background: var(--surface-hover); color: var(--ink-soft);
+      }
+      .pill.ok { background: var(--success-soft); color: var(--success); }
+      .pill.err { background: var(--danger-soft); color: var(--danger); }
+      .pill.wait { background: var(--warning-soft); color: var(--warning); }
+      .pill.kind { background: var(--blue-soft); color: var(--blue); }
+      .pill.def { background: var(--brand-soft); color: var(--brand-strong); }
+
+      .cards { display: flex; flex-direction: column; gap: 12px; }
+      .card {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 16px;
+      }
+      .card.default { border-color: var(--brand); box-shadow: inset 3px 0 0 var(--brand), var(--shadow-sm); }
+      .card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .card-head strong { font-size: 15px; }
+      .card-head .spacer { flex: 1 1 auto; }
+      .facts { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0; color: var(--muted); font-size: 12.5px; }
+      .facts .k { color: var(--faint); }
+      .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+      label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); min-width: 0; }
+      label.field span { font-weight: 600; color: var(--ink-soft); }
+      input, select {
+        font: inherit; font-size: 13px; padding: 8px 10px; border-radius: var(--radius-sm);
+        border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink);
+        min-width: 0; width: 100%;
+      }
+      .grow { flex: 1 1 220px; }
+      .btn {
+        font: inherit; font-size: 13px; font-weight: 500; padding: 8px 12px; cursor: pointer;
+        border-radius: var(--radius-sm); border: 1px solid var(--border-strong);
+        background: var(--surface); color: var(--ink);
+      }
+      .btn:hover { background: var(--surface-hover); }
+      .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+      .btn.quiet { border-color: transparent; color: var(--muted); }
+      .btn.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+      .btn.small { padding: 5px 9px; font-size: 12px; }
+      .hint { font-size: 12px; color: var(--faint); margin-top: 6px; }
+      .keyhint { font-size: 12px; color: var(--brand-strong); margin-top: 6px; }
+
+      .form {
+        background: var(--surface); border: 1px dashed var(--border-strong);
+        border-radius: var(--radius); padding: 16px; margin-top: 4px;
+      }
+      .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .form-grid .full { grid-column: 1 / -1; }
+
+      .chatbar {
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 10px 14px; box-shadow: var(--shadow-sm);
+      }
+      .chatbar .tag { font-size: 12px; color: var(--muted); }
+      .switcher {
+        display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
+        border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface-subtle);
+        font-size: 12.5px; cursor: pointer;
+      }
+      .switcher .kind { font-size: 10.5px; }
+      footer { margin-top: 34px; color: var(--faint); font-size: 12px; line-height: 1.7; }
+
+      @media (max-width: 620px) {
+        .form-grid { grid-template-columns: 1fr; }
+        .card-head .spacer { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="eyebrow">Settings · /preferences → Models</div>
+      <h1>Models</h1>
+      <p class="sub">
+        配置你自己的模型来源。每个来源 = 一个 provider 端点 + 一把密钥 + 可用 model
+        列表。选一个全局默认；每个对话也能单独切换。密钥只在服务端加密保存、绝不回显。
+      </p>
+
+      <div class="draft-banner">
+        ⚠️ 设计与契约先行稿（ADR-041）。此为静态设计稿，功能尚未实现、无迁移、无生产代码。
+        密钥 <strong>AEAD 加密存 DB</strong>（复用 <code>github_token.py</code> 的 KEK 直封），
+        仅在 <code>Provider.stream()</code> 边界解密，绝不进日志/事件/prompt/工具输出/前端。
+        provider 配置是<strong>人工设置</strong>，不给 agent（跨凭据边界，同 GitHub 连接）。
+      </div>
+
+      <div class="callout">
+        <span aria-hidden="true">◈</span>
+        <div>
+          <strong>全局默认：</strong> OpenAI · <code>gpt-5.1</code>。没配置任何来源时回退到
+          env <code>PROVIDER_*</code>（离线/mock）。跨-provider failover、成本 ledger、子 agent
+          为后续里程碑（各自 ADR）。
+        </div>
+      </div>
+
+      <h2>已配置的来源</h2>
+      <div class="cards">
+        <article class="card default">
+          <div class="card-head">
+            <span class="pill kind">openai_compatible</span>
+            <strong>OpenAI</strong>
+            <span class="pill def">◈ 默认</span>
+            <span class="pill ok">● active</span>
+            <span class="spacer"></span>
+            <button class="btn small">测试连接</button>
+            <button class="btn small">编辑</button>
+            <button class="btn small danger">删除</button>
+          </div>
+          <div class="facts">
+            <span><span class="k">base_url</span> <code>https://api.openai.com/v1</code></span>
+            <span><span class="k">密钥</span> ✓ 已设置（sk-…，永不回显）</span>
+            <span><span class="k">models</span> 14 个（上次拉取 2 分钟前）</span>
+          </div>
+          <div class="row">
+            <label class="field grow">
+              <span>默认 model</span>
+              <select>
+                <option>gpt-5.1</option>
+                <option>gpt-5.1-mini</option>
+                <option>o4</option>
+                <option>gpt-4.1</option>
+              </select>
+            </label>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <span class="pill kind">anthropic</span>
+            <strong>Anthropic (native)</strong>
+            <span class="pill ok">● active</span>
+            <span class="spacer"></span>
+            <button class="btn small">设为默认</button>
+            <button class="btn small">测试连接</button>
+            <button class="btn small">编辑</button>
+            <button class="btn small danger">删除</button>
+          </div>
+          <div class="facts">
+            <span><span class="k">base_url</span> <code>（默认 api.anthropic.com）</code></span>
+            <span><span class="k">密钥</span> ✓ 已设置（sk-ant-…）</span>
+            <span><span class="k">models</span> 6 个</span>
+          </div>
+          <div class="row">
+            <label class="field grow">
+              <span>默认 model</span>
+              <select>
+                <option>claude-opus-4-8</option>
+                <option>claude-sonnet-4-6</option>
+                <option>claude-haiku-4-5</option>
+              </select>
+            </label>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <span class="pill kind">openai_compatible</span>
+            <strong>DeepSeek</strong>
+            <span class="pill ok">● active</span>
+            <span class="spacer"></span>
+            <button class="btn small">设为默认</button>
+            <button class="btn small">测试连接</button>
+            <button class="btn small">编辑</button>
+            <button class="btn small danger">删除</button>
+          </div>
+          <div class="facts">
+            <span><span class="k">base_url</span> <code>https://api.deepseek.com/v1</code></span>
+            <span><span class="k">密钥</span> ✓ 已设置</span>
+            <span><span class="k">models</span> 2 个</span>
+          </div>
+          <div class="row">
+            <label class="field grow">
+              <span>默认 model</span>
+              <select>
+                <option>deepseek-chat</option>
+                <option>deepseek-reasoner</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint">
+            提示：DeepSeek / Qwen / Moonshot / Mistral / xAI / OpenRouter / Ollama 等都用同一个
+            <code>openai_compatible</code> 适配器，只需换 <code>base_url</code>。
+          </p>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <span class="pill kind">gemini</span>
+            <strong>Gemini (native)</strong>
+            <span class="pill err">● error</span>
+            <span class="spacer"></span>
+            <button class="btn small">测试连接</button>
+            <button class="btn small">编辑</button>
+            <button class="btn small danger">删除</button>
+          </div>
+          <div class="facts">
+            <span><span class="k">base_url</span> <code>（默认 generativelanguage.googleapis.com）</code></span>
+            <span><span class="k">密钥</span> ✓ 已设置</span>
+            <span><span class="k">上次错误</span> <code>401 · API key not valid（脱敏）</code></span>
+          </div>
+          <p class="hint">测试连接失败 → 状态 error、记录脱敏错误；密钥仍在保险库、绝不下发前端。修正密钥后重测。</p>
+        </article>
+      </div>
+
+      <h2>添加来源</h2>
+      <form class="form" onsubmit="return false">
+        <div class="form-grid">
+          <label class="field">
+            <span>类型 (kind)</span>
+            <select>
+              <option value="openai_compatible">OpenAI 兼容（OpenAI / DeepSeek / Qwen / Moonshot / xAI / OpenRouter / Ollama …）</option>
+              <option value="anthropic">Anthropic（native Messages API）</option>
+              <option value="gemini">Gemini（native generateContent）</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>显示名</span>
+            <input placeholder="例如 Qwen (DashScope)" />
+          </label>
+          <label class="field full">
+            <span>Base URL（可空 → 用该类型默认端点）</span>
+            <input placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+          </label>
+          <label class="field full">
+            <span>API 密钥</span>
+            <input type="password" placeholder="粘贴密钥（password 输入，永不回显）" />
+            <span class="keyhint">🔒 服务端 AEAD 加密保存；写只入不出；仅用于连接该 provider。</span>
+          </label>
+          <label class="field">
+            <span>默认 model（可选，测试连接后可从列表选）</span>
+            <input placeholder="qwen-max" />
+          </label>
+        </div>
+        <div class="row" style="margin-top: 14px">
+          <button class="btn">测试连接</button>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn primary">保存来源</button>
+        </div>
+        <p class="hint">
+          「测试连接」在服务端用密钥拉该来源的 <code>/models</code>（或发一次极小 chat）；成功 → active + 填充 model 列表，失败 → 记录脱敏错误。
+        </p>
+      </form>
+
+      <h2>对话里切换 model</h2>
+      <p class="sub">除全局默认外，每个对话可单独切换来源 / model；切换持久化到该会话（携带来源引用，避免用到旧端点/协议）。</p>
+      <div class="chatbar">
+        <span class="tag">Chat 顶栏 ·</span>
+        <button class="switcher">
+          <span class="pill kind">anthropic</span>
+          <span>claude-opus-4-8</span>
+          <span aria-hidden="true">▾</span>
+        </button>
+        <span class="tag">本会话已切到 Anthropic（默认仍是 OpenAI）</span>
+      </div>
+
+      <footer>
+        静态设计稿 · Sherpa Quiet Work 设计系统 · ADR-041（多来源模型 provider · 契约与设计先行）。
+        契约见 <code>docs/contracts/</code>（data-model §Model providers · api §10.8 · config PROVIDER_* 兜底）。
+        本批次未实现：<code>model_providers</code> 表 / 适配器 / Settings「Models」生产 UI，待负责人审核后开始。
+        桌面 1280px + 移动 390px 均无横向滚动。
+      </footer>
+    </div>
+  </body>
+</html>

@@ -352,11 +352,11 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Security/KEK | `KEK_ID` | non-empty `str` | None | `web`, `worker` | No | Stable key identifier stored with credentials; never use a key value or hash. |
 | Security/KEK | `KEK_KEY_VERSION` | `int >= 1` | `1` | No | No | Version within `KEK_ID`; increment when key material changes. |
 | Security/KEK | `KEK_PREVIOUS_KEYS` | secret JSON object | `{}` | During rotation only | **Yes** | Map of `"<kek_id>:<version>"` to base64 32-byte old KEKs. |
-| Provider | `PROVIDER_KIND` | `mock \| openai_compatible` | `mock` | No | No | Real provider remains an open §5 choice. |
-| Provider | `PROVIDER_BASE_URL` | `AnyHttpUrl` | None | `worker` when real | No | OpenAI-compatible API root. |
-| Provider | `PROVIDER_API_KEY` | `SecretStr` | None | `worker` when real | **Yes** | Sent only to the selected provider origin. |
+| Provider | `PROVIDER_KIND` | `mock \| openai_compatible` | `mock` | No | No | **Fallback only (ADR-041):** the env single-provider used when no `model_providers` row is configured, plus the test/mock provider. Runtime multi-source config lives in `model_providers` (DB + AEAD key). |
+| Provider | `PROVIDER_BASE_URL` | `AnyHttpUrl` | None | `worker` when real | No | OpenAI-compatible API root (env fallback). |
+| Provider | `PROVIDER_API_KEY` | `SecretStr` | None | `worker` when real | **Yes** | Env-fallback key, sent only to the selected provider origin. **User-configured provider keys are NOT env** — they are AEAD-sealed in `model_providers` (ADR-041/019), decrypted only at the `Provider.stream()` boundary. |
 | Provider | `PROVIDER_MODEL` | `str` | `mock-v1` | Explicit when real | No | Persisted with generation telemetry. |
-| Provider | `PROVIDER_TIMEOUT_SECONDS` | `int`, 1–600 | `60` | No | No | Whole outbound provider request timeout. |
+| Provider | `PROVIDER_TIMEOUT_SECONDS` | `int`, 1–600 | `60` | No | No | Whole outbound provider request timeout (applies to all provider kinds). |
 | Embeddings | `EMBEDDING_KIND` | `mock \| ollama \| openai_compatible` | `mock` | `worker` when real | No | Embedding backend; **decoupled** from `PROVIDER_KIND` (ADR-032). |
 | Embeddings | `EMBEDDING_BASE_URL` | `AnyHttpUrl` | None | `worker` when ollama/openai | No | e.g. `http://ollama:11434` (bundled) or an external `/v1` root. |
 | Embeddings | `EMBEDDING_MODEL` | `str` | `bge-m3` | No | No | Persisted per passage; a change requires re-embedding all passages. |

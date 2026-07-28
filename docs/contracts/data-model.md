@@ -3193,3 +3193,98 @@ Notes:
 - **Deferred (NOT W3):** dependency installation/package managers; embedded coding-agent executors
   (`delegate_coding_agent`); `git init/commit/branch`, merge, push, PR (W4); long-running dev servers /
   hosted previews / process resurrection; network-enabled environments. Each is a later ADR.
+
+## Model providers — user-configurable multi-source model layer (ADR-041)
+
+> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-041).** Frozen shape for the multi-source model-provider
+> slice (roadmap #8's multi-provider half; failover/ensemble/sub-agents deferred). **Not implemented**
+> in this batch — no migration, no code. Replaces the env-only single provider with a DB-backed,
+> user-configured registry; **the API key is AEAD-encrypted at rest** (reuses the `github_connections`
+> column shape + `security/github_token.py` KEK sealing) and is decrypted **only** at the `Provider.stream()`
+> boundary — never in the journal, logs, events, prompt, tool output, or the frontend. Every table carries
+> `tenant_id` + composite tenant-scoped keys (ADR-015). `env PROVIDER_*` remains a no-config fallback + the
+> test/mock provider.
+
+```sql
+-- One user-configured model source (OpenAI, Anthropic, Gemini, DeepSeek, Qwen, Moonshot, xAI,
+-- OpenRouter, Ollama, ...). "Add an OpenAI-compatible provider" = a row (kind='openai_compatible'
+-- + a base_url); native wire adapters are kind='anthropic'/'gemini'. The token is sealed under the
+-- active KEK (AES-256-GCM, AAD recomputed from row identity) exactly like github_connections; only
+-- the connection boundary decrypts it. models[] is the curated/last-fetched catalog for the picker.
+CREATE TABLE model_providers (
+    tenant_id        uuid NOT NULL,
+    id               uuid NOT NULL,
+    user_id          uuid NOT NULL,
+    kind             text NOT NULL,                    -- openai_compatible | anthropic | gemini
+                                                       -- (forward, reserved: bedrock|vertex|openai_responses)
+    display_name     text NOT NULL,                    -- user-chosen label (unique per owner)
+    base_url         text,                             -- NULL => kind's default endpoint
+    -- AEAD key envelope (same columns as github_connections; NULL-together or all-set):
+    token_enc        bytea,
+    nonce            bytea,
+    kek_id           text,
+    key_version      integer,
+    token_algorithm  text,
+    aad_version      smallint,
+    models           text[] NOT NULL DEFAULT ARRAY[]::text[],  -- model catalog (fetched + curated fallback)
+    default_model    text,                             -- default model id for this source
+    enabled          boolean NOT NULL DEFAULT true,
+    is_default       boolean NOT NULL DEFAULT false,   -- the global default source (at most one active)
+    status           text NOT NULL DEFAULT 'pending',  -- pending | active | error
+    last_error_redacted text,                          -- last test/connection error (redacted, no secret)
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_model_providers PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_mp_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_mp_user FOREIGN KEY (tenant_id, user_id)
+        REFERENCES users (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_mp_kind CHECK (kind IN ('openai_compatible','anthropic','gemini')),
+    CONSTRAINT ck_mp_status CHECK (status IN ('pending','active','error')),
+    CONSTRAINT ck_mp_name CHECK (char_length(display_name) BETWEEN 1 AND 200),
+    -- key envelope is all-or-none (a source may be created before its key is set):
+    CONSTRAINT ck_mp_aead_all_or_none CHECK (
+        (token_enc IS NULL AND nonce IS NULL AND kek_id IS NULL AND key_version IS NULL
+             AND token_algorithm IS NULL AND aad_version IS NULL)
+        OR (token_enc IS NOT NULL AND nonce IS NOT NULL AND kek_id IS NOT NULL
+             AND key_version IS NOT NULL AND token_algorithm IS NOT NULL AND aad_version IS NOT NULL)),
+    -- an enabled source must carry a key (local kinds like ollama use a placeholder / empty key row):
+    CONSTRAINT ck_mp_enabled_has_key CHECK (enabled = false OR token_enc IS NOT NULL)
+);
+-- At most ONE default source per owner; unique display name per owner.
+CREATE UNIQUE INDEX uq_mp_default ON model_providers (tenant_id, user_id) WHERE is_default;
+CREATE UNIQUE INDEX uq_mp_name ON model_providers (tenant_id, user_id, display_name);
+CREATE INDEX ix_mp_owner ON model_providers (tenant_id, user_id, updated_at DESC);
+
+-- Per-conversation model override (ADR-041 §5). NULL => use the global default source + its
+-- default_model. A switch carries BOTH the source reference and the model id so a later message
+-- never reuses a stale endpoint/wire (hermes #25106). ON DELETE SET NULL falls back to the default.
+ALTER TABLE sessions ADD COLUMN model_provider_id uuid;
+ALTER TABLE sessions ADD COLUMN model text;
+ALTER TABLE sessions ADD CONSTRAINT fk_sessions_model_provider
+    FOREIGN KEY (tenant_id, model_provider_id)
+    REFERENCES model_providers (tenant_id, id) ON DELETE SET NULL;
+```
+
+Notes:
+
+- **Canonical / durable** = `model_providers` (registry + AEAD key + catalog + default flag) +
+  `sessions.model_provider_id`/`model` (per-chat override). **Rebuildable** = the live `/models` catalog
+  (cached into `models[]`; re-fetchable). Nothing here enters the event journal.
+- **Secrets (ADR-019/041).** The API key is sealed exactly like a `github_connections` token
+  (`security/github_token.py`: AES-256-GCM under the active KEK, AAD recomputed from row identity),
+  decrypted **only** inside `build_provider(db, ctx)` at the `Provider.stream()` boundary, gated by the
+  connector-vault capability. It **never** appears in the journal, logs, events, prompt, tool output, or
+  any REST response (write-only; `test`/`models` use it server-side). `last_error_redacted` passes through
+  `security/redaction.py`.
+- **Selection (ADR-041 §5).** Global default = the single `is_default` row + its `default_model`
+  (`uq_mp_default`). Per-conversation override = `sessions.model_provider_id` + `sessions.model`; a chat's
+  top-bar switcher persists both. `build_provider(db, ctx, session_id=…)` resolves: session override →
+  else global default → else the env `PROVIDER_*` fallback (offline/mock).
+- **Kinds & adapters (ADR-041 §3).** `openai_compatible` (one adapter, `base_url`-configurable — DeepSeek /
+  Qwen / Moonshot / Mistral / xAI / Groq / OpenRouter / Ollama / Gemini-OAI …), native `anthropic`
+  (Messages API), native `gemini` (`generateContent`). `bedrock`/`vertex`/`openai_responses` are reserved
+  `kind` values, **not built** this slice.
+- **Deferred (NOT this slice):** cross-provider failover; MoA/ensemble; sub-agents; a cost ledger +
+  prompt-cache metering; Bedrock/Vertex/OpenAI-Responses/Codex wire; multi-key rotation; any agent tool for
+  provider CRUD (configuration is a human Settings action). Each is a later ADR.

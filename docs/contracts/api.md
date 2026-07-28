@@ -2064,3 +2064,86 @@ class ProjectContext(StrictModel):        # extended
   draft only** ([`../design-workspace/w3-change-review.html`](../design-workspace/w3-change-review.html));
   the capability-matrix UI cells (docs/11 §9) stay **⬜** and **no W3 production navigation is exposed**
   until implementation lands after owner review.
+
+### 10.8 Model providers — user-configurable multi-source model layer (ADR-041)
+
+> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-041).** These routes/schemas are **frozen but NOT implemented**
+> — no code, no migration. They let the owner configure **multiple model sources** in Settings (OpenAI /
+> Anthropic / Gemini / DeepSeek / Qwen / …), select a global default + a per-chat model, and test a
+> connection. The **API key is write-only** (AEAD-sealed server-side, never returned) and used only at the
+> `Provider.stream()` boundary. All routes are `Session`-authenticated, tenant + user scoped; writes require
+> CSRF. There is **no agent tool** for provider config (a human Settings action, like GitHub connections).
+
+```python
+class ModelProviderSummary(StrictModel):
+    id: UUID
+    kind: Literal["openai_compatible", "anthropic", "gemini"]
+    display_name: str
+    base_url: str | None
+    models: list[str]                                  # catalog for the picker
+    default_model: str | None
+    enabled: bool
+    is_default: bool
+    status: Literal["pending", "active", "error"]
+    last_error: str | None                             # redacted; never a secret
+    has_key: bool                                      # a key is set (never the key itself)
+    updated_at: datetime
+
+class ModelProviderCreate(StrictModel):
+    kind: Literal["openai_compatible", "anthropic", "gemini"]
+    display_name: Annotated[str, Field(min_length=1, max_length=200)]
+    base_url: str | None = None                        # None => the kind's default endpoint
+    api_key: Annotated[str, Field(min_length=1, max_length=8000)]  # write-only; AEAD-sealed, never returned
+    default_model: str | None = None
+
+class ModelProviderUpdate(StrictModel):                # PATCH; all optional
+    display_name: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None                         # present => reseal; never returned
+    default_model: str | None = None
+    enabled: bool | None = None
+
+class ModelProviderTest(StrictModel):
+    ok: bool
+    status: Literal["active", "error"]
+    models: list[str]                                  # fetched catalog on success
+    detail: str | None                                 # redacted error on failure
+
+class SessionModelSelection(StrictModel):
+    # null model_provider_id => use the global default source + its default_model.
+    model_provider_id: UUID | None
+    model: str | None
+```
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /providers` | none → `list[ModelProviderSummary]` | Session | `200`, `401` |
+| `POST /providers` | `ModelProviderCreate` → `ModelProviderSummary` | Session + CSRF | `201`, `401`, `409`, `422` |
+| `GET /providers/{id}` | none → `ModelProviderSummary` | Session | `200`, `401`, `404` |
+| `PATCH /providers/{id}` | `ModelProviderUpdate` → `ModelProviderSummary` | Session + CSRF | `200`, `401`, `404`, `409`, `422` |
+| `DELETE /providers/{id}` | none → `204` | Session + CSRF | `204`, `401`, `404` |
+| `POST /providers/{id}/test` | none → `ModelProviderTest` | Session + CSRF | `200`, `401`, `404` |
+| `GET /providers/{id}/models` | none → `list[str]` | Session | `200`, `401`, `404` |
+| `POST /providers/{id}/default` | none → `ModelProviderSummary` | Session + CSRF | `200`, `401`, `404`, `409` |
+| `GET /sessions/{id}/model` | none → `SessionModelSelection` | Session | `200`, `401`, `404` |
+| `POST /sessions/{id}/model` | `SessionModelSelection` → `SessionModelSelection` | Session + CSRF | `200`, `401`, `404`, `422` |
+
+- **Write-only key.** `api_key` is accepted on create/update, AEAD-sealed under the active KEK
+  (`security/github_token.py` pattern), and **never** returned — `ModelProviderSummary.has_key` reports only
+  its presence. `409` on a duplicate `display_name`; `422` on an invalid `kind`/`base_url`.
+- **Test connection.** `POST /providers/{id}/test` decrypts the key server-side, fetches the provider's
+  `/models` (or issues a minimal chat), and stores the result: `status='active'` + `models[]` on success,
+  `status='error'` + redacted `last_error` on failure. The key never reaches the client.
+- **Default + per-chat selection (ADR-041 §5).** `POST /providers/{id}/default` makes a source the single
+  global default (atomically clears the prior default). `POST /sessions/{id}/model` sets the per-conversation
+  override (source + model); `null` clears it back to the global default. The switch persists **both** the
+  source id and the model so a later message never reuses a stale endpoint/wire (hermes #25106).
+- **No agent tool.** Provider configuration crosses the credential boundary and is owner-only; model
+  selection is a Settings action, not an agent action. (Contrast: the agent simply runs on whatever model
+  the owner configured.) Deferred (own ADRs): cross-provider failover, MoA/ensemble, cost ledger,
+  Bedrock/Vertex/OpenAI-Responses, sub-agents.
+- **UI:** the Settings **Models** panel (source list / add-source [kind + base_url + a password-input key
+  that is never echoed] / test connection / model picker / global-default toggle) + a chat top-bar model
+  switcher is a **design/contract-first static draft only**
+  ([`../design-settings-models/index.html`](../design-settings-models/index.html)); the capability-matrix
+  UI cells (docs/11 §9) stay **⬜** until implementation lands after owner review.
