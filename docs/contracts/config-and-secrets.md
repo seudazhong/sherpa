@@ -90,9 +90,6 @@ class Settings(BaseSettings):
     # Embeddings (ADR-032): a Sherpa-bundled local model by default, decoupled
     # from the chat provider. EMBEDDING_DIM MUST equal the memory_passages vector
     # column width; changing the model/dim is a full re-embed, not a toggle.
-    # NOTE (ADR-032 amendment 2026-07-28): the *shipped deployment* default is
-    # `ollama` (.env.example + docker-compose start the bundled service); this
-    # *model* default stays `mock` so a bare `uv run` / test run is offline.
     embedding_kind: Literal["mock", "ollama", "openai_compatible"] = "mock"
     embedding_base_url: AnyHttpUrl | None = None       # e.g. http://ollama:11434
     embedding_model: str = Field(default="bge-m3", min_length=1)
@@ -360,8 +357,8 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Provider | `PROVIDER_API_KEY` | `SecretStr` | None | `worker` when real | **Yes** | Env-fallback key, sent only to the selected provider origin. **User-configured provider keys are NOT env** — they are AEAD-sealed in `model_providers` (ADR-041/019), decrypted only at the `Provider.stream()` boundary. |
 | Provider | `PROVIDER_MODEL` | `str` | `mock-v1` | Explicit when real | No | Persisted with generation telemetry. |
 | Provider | `PROVIDER_TIMEOUT_SECONDS` | `int`, 1–600 | `60` | No | No | Whole outbound provider request timeout (applies to all provider kinds). |
-| Embeddings | `EMBEDDING_KIND` | `mock \| ollama \| openai_compatible` | `mock` (model default) · **`ollama` shipped deployment default** | `worker` when real | No | Embedding backend; **decoupled** from `PROVIDER_KIND` (ADR-032). The bundled `ollama` service starts with the core stack (ADR-032 amendment 2026-07-28); the `mock` model default only applies when nothing sets the variable (bare `uv run`, tests). |
-| Embeddings | `EMBEDDING_BASE_URL` | `AnyHttpUrl` | None (model default) · **`http://ollama:11434` in compose/.env.example** | `worker` when ollama/openai | No | e.g. `http://ollama:11434` (bundled) or an external `/v1` root. |
+| Embeddings | `EMBEDDING_KIND` | `mock \| ollama \| openai_compatible` | `mock` | `worker` when real | No | Embedding backend; **decoupled** from `PROVIDER_KIND` (ADR-032). |
+| Embeddings | `EMBEDDING_BASE_URL` | `AnyHttpUrl` | None | `worker` when ollama/openai | No | e.g. `http://ollama:11434` (bundled) or an external `/v1` root. |
 | Embeddings | `EMBEDDING_MODEL` | `str` | `bge-m3` | No | No | Persisted per passage; a change requires re-embedding all passages. |
 | Embeddings | `EMBEDDING_DIM` | `int`, 1–4096 | `1024` | No | No | MUST equal the `memory_passages.embedding` column width. |
 | Embeddings | `EMBEDDING_API_KEY` | `SecretStr` | None | when `openai_compatible` | **Yes** | Only for the external-provider embedding override. |
@@ -517,14 +514,13 @@ PROVIDER_TIMEOUT_SECONDS=60
 # PROVIDER_BASE_URL=https://api.example.com/v1
 # PROVIDER_API_KEY=REPLACE_WITH_PROVIDER_API_KEY  # SECRET
 
-# Embeddings (ADR-032). Default = bundled local ollama (starts with the core stack);
-# decoupled from the chat provider. Set EMBEDDING_KIND=mock only for an offline deploy.
-EMBEDDING_KIND=ollama
-EMBEDDING_BASE_URL=http://ollama:11434
+# Embeddings (ADR-032). Default = bundled local ollama; decoupled from the chat provider.
+EMBEDDING_KIND=mock
 EMBEDDING_MODEL=bge-m3
 EMBEDDING_DIM=1024
-# For EMBEDDING_KIND=openai_compatible (external override) point the URL at the
-# external /v1 root instead and also set:
+# For EMBEDDING_KIND=ollama (bundled) set the service URL:
+# EMBEDDING_BASE_URL=http://ollama:11434
+# For EMBEDDING_KIND=openai_compatible (external override) also set:
 # EMBEDDING_API_KEY=REPLACE_WITH_EMBEDDING_API_KEY  # SECRET
 MEMORY_AUTOFORM_ENABLED=false
 MEMORY_AUTOFORM_EVERY_TURNS=0

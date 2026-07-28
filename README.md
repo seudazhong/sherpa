@@ -71,15 +71,11 @@ openssl rand -base64 32                                              # Linux / m
 python -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())"   # Windows PowerShell
 ```
 
-起栈（Postgres + Redis + MinIO + 迁移 + web + worker + 前端 + 本地嵌入模型 ollama）：
+起栈（Postgres + Redis + MinIO + 迁移 + web + worker + 前端）：
 
 ```bash
 docker compose -f infra/docker-compose.yml --env-file .env up --build -d
 ```
-
-首次启动 `ollama` 会在后台拉 **bge-m3**（约 1.2 GB，存进 `ollamadata` 卷，之后秒起）——
-语义记忆和知识库（`/library`）依赖它；拉完之前这两块会报明确的失败原因，可重试。
-不想要本地嵌入就在 `.env` 设 `EMBEDDING_KIND=mock`（检索退化为确定性假向量）。
 
 打开 **http://localhost:5173**，用 `OWNER_EMAIL` / `OWNER_PASSWORD` 登录（不改就是默认的
 `owner@localhost` / `sherpa-dev-password`）。API 在 http://localhost:8000。
@@ -91,6 +87,9 @@ docker compose -f infra/docker-compose.yml --env-file .env up --build -d
 可选组件：
 
 ```bash
+# 本地嵌入模型（知识库 / 语义记忆需要），并在 .env 设 EMBEDDING_KIND=ollama
+docker compose -f infra/docker-compose.yml --env-file .env --profile embeddings up -d
+
 # 可观测：自带 Phoenix，看每次 LLM 调用的完整 prompt（UI http://localhost:6006）
 # 并在 .env 设 OTEL_ENABLED=true、OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317
 docker compose -f infra/docker-compose.yml --env-file .env --profile observability up -d

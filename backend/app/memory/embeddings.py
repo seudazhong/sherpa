@@ -1,12 +1,11 @@
 """Text embeddings for archival/RAG memory (ADR-032).
 
-Decoupled from the chat provider via the `EMBEDDING_*` config. Deployments default to
-`EMBEDDING_KIND=ollama`: a Sherpa-bundled local model served by the `ollama` container
-(`bge-m3`, 1024-d) that starts with the core stack, keeping personal text on-box
-(self-hosted ethos + ADR-019). `EMBEDDING_KIND=mock` — the *code* default, used by
-offline dev / tests where nothing sets the variable — returns a deterministic
-hash-based pseudo-vector so the pipeline runs without a network call (铁律: no real
-model calls in tests) and identical text always maps to the same vector.
+Decoupled from the chat provider via the `EMBEDDING_*` config. The default is a
+Sherpa-bundled local model served by an `ollama` container (`bge-m3`, 1024-d),
+keeping personal memory on-box (self-hosted ethos + ADR-019). `EMBEDDING_KIND=mock`
+— the default for offline dev / tests — returns a deterministic hash-based
+pseudo-vector so the pipeline runs without a network call (铁律: no real model
+calls in tests) and identical text always maps to the same vector.
 `EMBEDDING_KIND=openai_compatible` is an optional external `/v1/embeddings`
 override (e.g. the litellm proxy).
 

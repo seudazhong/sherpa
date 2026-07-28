@@ -1,4 +1,4 @@
-# Sherpa v1 stack: Postgres + Redis + MinIO + migrate + web + worker + frontend + ollama.
+# Sherpa v1 stack: Postgres + Redis + migrate + web + worker + frontend.
 # One command:  docker compose -f infra/docker-compose.yml up --build
 #
 # Boots with safe DEV defaults (owner: owner@localhost / sherpa-dev-password).
@@ -82,11 +82,10 @@ services:
       PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-http://host.docker.internal:4000}
       PROVIDER_MODEL: ${PROVIDER_MODEL:-claude-sonnet-4.6}
       PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
-      # Embeddings (ADR-032): decoupled from the chat provider. Defaults to the
-      # bundled local bge-m3 (1024-d) served by the `ollama` service below, which
-      # starts with the core stack. Web serves REST memory/knowledge search, so it
-      # embeds too. Set EMBEDDING_KIND=mock for an offline deploy.
-      EMBEDDING_KIND: ${EMBEDDING_KIND:-ollama}
+      # Embeddings (ADR-032): decoupled from the chat provider. Default mock
+      # (offline). Set EMBEDDING_KIND=ollama + run `--profile embeddings` for the
+      # bundled local bge-m3 (1024-d). Web serves REST memory search, so it embeds too.
+      EMBEDDING_KIND: ${EMBEDDING_KIND:-mock}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://ollama:11434}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
@@ -124,9 +123,6 @@ services:
       redis: {condition: service_healthy}
       minio: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
-      # Started, NOT healthy on purpose: the first-boot bge-m3 pull must not hold
-      # the app hostage — chat works without embeddings.
-      ollama: {condition: service_started}
 
   worker:
     build: ../backend
@@ -151,10 +147,10 @@ services:
       PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-http://host.docker.internal:4000}
       PROVIDER_MODEL: ${PROVIDER_MODEL:-claude-sonnet-4.6}
       PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
-      # Embeddings (ADR-032): the worker runs archival memory writes/formation and
-      # Knowledge ingestion. Defaults to the bundled local bge-m3 (1024-d) from the
-      # `ollama` service. Decoupled from PROVIDER_*; EMBEDDING_KIND=mock = offline.
-      EMBEDDING_KIND: ${EMBEDDING_KIND:-ollama}
+      # Embeddings (ADR-032): the worker runs archival memory writes/formation.
+      # Default mock (offline); set EMBEDDING_KIND=ollama + `--profile embeddings`
+      # for the bundled local bge-m3 (1024-d). Decoupled from PROVIDER_*.
+      EMBEDDING_KIND: ${EMBEDDING_KIND:-mock}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://ollama:11434}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
@@ -187,7 +183,6 @@ services:
       redis: {condition: service_healthy}
       minio: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
-      ollama: {condition: service_started}
 
   frontend:
     build: ../frontend
@@ -196,15 +191,14 @@ services:
     ports: ["5173:5173"]
     depends_on: [web]
 
-  # Bundled local embedding model (ADR-032, amended 2026-07-28: no longer behind a
-  # profile — it starts with the core stack so semantic memory + the Knowledge base
-  # (ADR-036) work out of the box). First boot pulls bge-m3 (~1.2 GB, 1024-d,
-  # multilingual incl. CJK) into the `ollamadata` volume; until the healthcheck goes
-  # healthy, embedding-dependent jobs (KB indexing, archival memory) fail with a named
-  # error and can be retried. Personal text is embedded on-box and never leaves the
-  # machine. Opt out with EMBEDDING_KIND=mock in .env.
+  # Bundled local embedding model (ADR-032). Behind the `embeddings` profile so
+  # the core stack stays light (default EMBEDDING_KIND=mock). Enable real semantic
+  # memory with `docker compose --profile embeddings up` and set
+  # EMBEDDING_KIND=ollama. Pulls bge-m3 (~1.2 GB, 1024-d, multilingual incl. CJK)
+  # on first boot; personal memory is embedded on-box and never leaves the machine.
   ollama:
     image: ollama/ollama:latest
+    profiles: ["embeddings"]
     entrypoint:
       - /bin/sh
       - -c
