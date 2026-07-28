@@ -15,8 +15,9 @@
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | open |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | open |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | open |
+| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open |
 
-Suggested order: ~~**B-4 → B-1**~~ (done 2026-07-28) → **B-7** (cheap, needs a naming decision) → **B-3** (now inspectable again, since tracing works) → **B-5, B-6** (need a contract decision) → **B-2** (largest design question, own ADR).
+Suggested order: ~~**B-4 → B-1**~~ (done 2026-07-28) → **B-7** (cheap, needs a naming decision) → **B-3** (root cause confirmed in a trace) → **B-5, B-6** (need a contract decision) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
 
 ---
 
@@ -64,9 +65,9 @@ model=gpt-4o-mini`. 390 px overflow = 0.
 
 ## B-3 The model cannot see the chat's bound project
 
-*Reported 2026-07-28 (manual test) · kind: bug · status: open · blocked-by: B-4 (to confirm the assembled prompt)*
+*Reported 2026-07-28 (manual test) · kind: bug · status: open · ~~blocked-by: B-4~~ (confirmed in a Phoenix trace 2026-07-28)*
 
-**Observed.** In a project-bound chat (the UI chip showed `hello-world-py · project`), asking *"which project is this chat in?"* produced "I can't see an explicit binding" — the model only guessed from `list_projects`.
+**Observed.** In a project-bound chat (the UI chip showed `hello-world-py · project`), asking *"which project is this chat in?"* produced "I can't see an explicit binding" — the model only guessed from `list_projects`. **Confirmed** with tracing restored (B-4): the assembled prompt in the Phoenix trace carries **no project context at all**, so the model's answer was the honest consequence, not a formatting slip. A later project-bound chat repeated the pattern — the model answered "from the tool result it appears to be helloworld", i.e. inference from `list_projects`, never from its own context.
 
 **Evidence.** The binding is real server-side: `sessions.project_id` (`backend/app/models/core.py:124`), set by `services/projects.py` `open_in_chat` and relied on by `services/project_workcopy.py:118-130`; the frontend renders it as a chip. But the assembled prompt never carries it — `backend/app/core/loop.py:474` builds `system_content = SYSTEM_PROMPT [+ core_memory]` and nothing else.
 
@@ -142,3 +143,30 @@ Order: ADR → `docs/contracts/api.md` + data-model contract → backend → UI 
 **Why it is worse here.** Gmail is *the* v1 connector (ADR-022), and other views already show an **Inbox** chip meaning the mail folder (`frontend/src/views/ConnectorsView.tsx:332`, `views/MessagingView.tsx:185`) — one word, two meanings. Secondary IA problem: the subtitle claims approvals live here while **Approvals** is a separate nav item.
 
 **Direction (undecided).** Pick a name that says *"things Sherpa surfaced for you to decide"* — candidates: Triage / For you / Suggestions / Today / Needs you — and fix the subtitle so it stops claiming approvals. Touch points: `frontend/src/components/Sidebar.tsx:34` (label), `frontend/src/App.tsx:42` (`/inbox` route), `frontend/src/views/InboxView.tsx:117,127` (heading + aria), plus the design-bright mockups, the §9 capability matrix, and contracts if the route changes. Per `AGENTS.md`, an SPA route name must not collide with an API proxy prefix.
+
+---
+
+## B-8 `project_run` always fails with `sandbox_unavailable`
+
+*Reported 2026-07-28 (manual test) · kind: bug · status: open · sequence after B-2 (the redesign may remove/merge this tool)*
+
+**Observed.** In a project-bound chat, "run the helloworld code" → the model calls `project_run({"command": "python main.py"})` and gets back
+`Sandbox run sandbox_unavailable (exit -1, state persisted). No file changes were produced.`
+It then fell back to *describing* what the code would print. The plain `run_code` tool works in the same stack (computed `1²+…+100²` = 338350, exit 0), so code execution as such is fine — only the **project** sandbox path fails.
+
+**Root cause (reproduced from inside the worker).** The worker shares the host `docker.sock`, so the daemon resolves a sibling container's bind **source** on the *host*, where the worker-local scratch path does not exist:
+
+```
+APIError 400 ... invalid mount config for type "bind":
+bind source path does not exist: /app/.sherpa/scratch/<run>
+```
+
+`app/sandbox/project_sandbox.py:252` therefore raises `DockerException` → `RunResult(error="sandbox_start_failed")`. Two follow-on problems make it opaque:
+1. `services/project_sandbox.py:141-144` collapses **every** error into `termination_reason="sandbox_unavailable"` — a start failure, a missing daemon and an unknown error are indistinguishable — and nothing is logged, so the worker log has no trace of it (DB row: `state=persisted`, `termination_reason=sandbox_unavailable`, `exit_code=-1`, empty `scratch_ref`).
+2. `docs/IMPLEMENTATION.md` (W3 exit note) describes this dev-stack limitation as "a `project_run` shell command sees an empty `/work`" — in reality it never starts. The doc needs correcting either way.
+
+**Direction (undecided).**
+- (a) Make the scratch path resolve identically on host and worker — bind a host directory at the *same absolute path* into the worker (or use a named volume shared with the sandbox container) so sibling mounts work.
+- (b) Skip the bind entirely: `docker cp` the materialized tree into the container and copy the delta back.
+- (c) The ADR-039 production posture (gVisor/microVM runner), which removes the shared-socket assumption.
+- (d) Regardless of the above: keep `sandbox_start_failed` distinct from `sandbox_unavailable`, attach a redacted detail to the tool observation, and log one worker line — the model and the user should never have to guess which failure happened.
