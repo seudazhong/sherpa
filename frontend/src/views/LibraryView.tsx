@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   api,
@@ -55,10 +55,10 @@ const STAGE_LABEL: Record<string, string> = {
 function progressLabel(s: KnowledgeSource): string {
   if (!IN_PROGRESS.includes(s.status)) return STATUS_LABEL[s.status];
   if (s.status === "deleting") return STATUS_LABEL.deleting;
-  const stage = s.stage ? (STAGE_LABEL[s.stage] ?? s.stage) : STATUS_LABEL[s.status];
   if (s.stage === "embed" && s.progress_total)
     return `embedding ${s.progress_done ?? 0}/${s.progress_total}`;
-  return stage;
+  if (s.stage) return STAGE_LABEL[s.stage] ?? s.stage;
+  return STATUS_LABEL[s.status];
 }
 
 function extLabel(name: string): { label: string; cls: string } {
@@ -133,6 +133,7 @@ export default function LibraryView() {
   // Direct upload (drop files on Knowledge)
   const [dragging, setDragging] = useState(false);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const pickedNodes = useMemo(() => Object.values(picked), [picked]);
 
   const anyInProgress = useMemo(
@@ -157,10 +158,10 @@ export default function LibraryView() {
     void load();
   }, [load]);
 
-  // Poll while an ingestion is running so status pills stay truthful.
+  // Poll while an ingestion is running so status pills and progress stay truthful.
   useEffect(() => {
     if (!anyInProgress) return;
-    const t = setInterval(() => void load(), 3500);
+    const t = setInterval(() => void load(), 1500);
     return () => clearInterval(t);
   }, [anyInProgress, load]);
 
@@ -445,6 +446,7 @@ export default function LibraryView() {
               >
                 <input
                   id="kb-file-input"
+                  ref={fileInputRef}
                   type="file"
                   multiple
                   accept=".pdf,.md,.markdown,.txt,.docx"
@@ -465,9 +467,13 @@ export default function LibraryView() {
                   <span className="muted small">
                     PDF · Markdown · DOCX · TXT — saved to your Drive first, then
                     indexed. Or{" "}
-                    <label htmlFor="kb-file-input" className="kb-linkbtn">
+                    <button
+                      className="kb-linkbtn"
+                      disabled={busy === "upload"}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
                       choose files
-                    </label>{" "}
+                    </button>{" "}
                     ·{" "}
                     <button className="kb-linkbtn" onClick={openPicker}>
                       add from Drive
@@ -484,8 +490,9 @@ export default function LibraryView() {
                     </span>
                     <strong>No documents yet</strong>
                     <span>
-                      Add a PDF, Markdown, DOCX, or TXT file from your Drive to
-                      make it searchable with citations.
+                      Drop a PDF, Markdown, DOCX, or TXT file above — or add one
+                      you already keep in Drive — to make it searchable with
+                      citations.
                     </span>
                     <button className="btn btn-primary" onClick={openPicker}>
                       Add from Drive

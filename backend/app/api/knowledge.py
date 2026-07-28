@@ -116,22 +116,25 @@ async def _source_out(db: AsyncSession, source: KnowledgeSource) -> KnowledgeSou
     if source.active_version_id is not None:
         active = await db.get(KnowledgeSourceVersion, (source.tenant_id, source.active_version_id))
 
-    # Honest in-flight detail: the durable job stage plus (while embedding) live counts.
+    # Honest in-flight detail. The durable `job.stage` only becomes visible when the
+    # worker's transaction commits (i.e. after the whole run), so the live stage comes
+    # from Redis; the job row is the fallback for a job that has not started yet.
     stage: str | None = None
     done: int | None = None
     total: int | None = None
     if source.status in _IN_PROGRESS:
-        job = await db.scalar(
-            select(KnowledgeIngestionJob).where(
-                KnowledgeIngestionJob.tenant_id == source.tenant_id,
-                KnowledgeIngestionJob.source_id == source.id,
-                KnowledgeIngestionJob.generation == source.desired_generation,
+        live = await read_progress(source.tenant_id, source.id, source.desired_generation)
+        if live is not None:
+            stage, done, total = live
+        else:
+            job = await db.scalar(
+                select(KnowledgeIngestionJob).where(
+                    KnowledgeIngestionJob.tenant_id == source.tenant_id,
+                    KnowledgeIngestionJob.source_id == source.id,
+                    KnowledgeIngestionJob.generation == source.desired_generation,
+                )
             )
-        )
-        stage = job.stage if job else None
-        progress = await read_progress(source.tenant_id, source.id, source.desired_generation)
-        if progress is not None:
-            done, total = progress
+            stage = job.stage if job else None
 
     return KnowledgeSourceOut(
         id=source.id,

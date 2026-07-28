@@ -243,3 +243,26 @@ async def test_failed_rebuild_keeps_the_previous_version_searchable(
             assert src.active_version_id == active_v1  # v1 still serves searches
         finally:
             await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_progress_is_published_and_cleared() -> None:
+    """Live stage/counts round-trip through Redis (telemetry only, ADR-016/017).
+    They cannot live in `job.stage`: that value is invisible outside the worker's
+    transaction until the whole run commits."""
+    from app.redis_client import ping_redis
+
+    if not await ping_redis():
+        pytest.skip("redis not reachable")
+    tenant_id, source_id = uuid.uuid4(), uuid.uuid4()
+
+    assert await ki.read_progress(tenant_id, source_id, 1) is None
+
+    await ki.write_progress(tenant_id, source_id, 1, "embed", 12, 40)
+    assert await ki.read_progress(tenant_id, source_id, 1) == ("embed", 12, 40)
+
+    await ki.write_progress(tenant_id, source_id, 1, "activate", 40, 40)
+    assert await ki.read_progress(tenant_id, source_id, 1) == ("activate", 40, 40)
+
+    await ki._clear_progress(tenant_id, source_id, 1)
+    assert await ki.read_progress(tenant_id, source_id, 1) is None

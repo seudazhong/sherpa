@@ -13,6 +13,7 @@ key) → **parse** (no-tool) → **chunk** → **embed + fts** (bge-m3 vectors +
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import re
 import uuid
@@ -45,18 +46,28 @@ def _progress_key(tenant_id: uuid.UUID, source_id: uuid.UUID, generation: int) -
 
 
 async def write_progress(
-    tenant_id: uuid.UUID, source_id: uuid.UUID, generation: int, done: int, total: int
+    tenant_id: uuid.UUID,
+    source_id: uuid.UUID,
+    generation: int,
+    stage: str,
+    done: int = 0,
+    total: int = 0,
 ) -> None:
-    """Publish embed progress to Redis. Deliberately NOT Postgres: the ingest
-    transaction already holds a row lock on this job, so an autonomous write would
-    deadlock. Progress is pure telemetry — Redis accelerates, it is never
-    correctness-critical (ADR-016/017); losing it just falls back to the stage pill."""
+    """Publish the live stage + embed counts to Redis.
+
+    Deliberately NOT Postgres: `job.stage` only becomes visible when this ingest's
+    transaction commits, i.e. after the whole run — so a reader outside it sees
+    `queued` for the entire job. Writing it from an autonomous session instead would
+    deadlock (this transaction already holds the job row). Progress is pure telemetry:
+    Redis accelerates, it is never correctness-critical (ADR-016/017), and losing it
+    just falls back to the coarse source status.
+    """
     from app.redis_client import client as redis
 
     try:
         await redis.set(
             _progress_key(tenant_id, source_id, generation),
-            f"{done}/{total}",
+            json.dumps({"stage": stage, "done": done, "total": total}),
             ex=_PROGRESS_TTL_SECONDS,
         )
     except Exception as exc:  # noqa: BLE001 - progress is best-effort
@@ -65,8 +76,8 @@ async def write_progress(
 
 async def read_progress(
     tenant_id: uuid.UUID, source_id: uuid.UUID, generation: int
-) -> tuple[int, int] | None:
-    """Live `(done, total)` for an in-flight ingest, or None when unknown."""
+) -> tuple[str | None, int, int] | None:
+    """Live `(stage, done, total)` for an in-flight ingest, or None when unknown."""
     from app.redis_client import client as redis
 
     try:
@@ -76,10 +87,10 @@ async def read_progress(
         return None
     if not raw:
         return None
-    done, _, total = str(raw).partition("/")
     try:
-        return int(done), int(total)
-    except ValueError:
+        data = json.loads(raw)
+        return str(data["stage"]), int(data.get("done", 0)), int(data.get("total", 0))
+    except (ValueError, KeyError, TypeError):
         return None
 
 
@@ -203,6 +214,7 @@ async def process_ingestion(
 
     # Snapshot: verify the file is unchanged, copy its exact bytes to the immutable key.
     job.stage = "snapshot"
+    await write_progress(tenant_id, source_id, generation, "snapshot")
     try:
         node, data = await drive_svc.read_node(db, ctx, source.file_id)
     except Exception:  # noqa: BLE001 - a missing/unreadable file is a named exit
@@ -219,11 +231,13 @@ async def process_ingestion(
 
     # Parse (no-tool) + chunk.
     job.stage = "parse"
+    await write_progress(tenant_id, source_id, generation, "parse")
     try:
         doc = parse_document(data, content_type=node.content_type, filename=node.name)
     except ParseError as exc:
         return await _fail(source, version, job, code=exc.code, fail_source=True)
     job.stage = "chunk"
+    await write_progress(tenant_id, source_id, generation, "chunk")
     chunks = chunk_document(
         doc,
         target_tokens=settings.knowledge_chunk_target_tokens,
@@ -240,10 +254,10 @@ async def process_ingestion(
         )
     )
     total_chunks = len(chunks)
-    await write_progress(tenant_id, source_id, generation, 0, total_chunks)
+    await write_progress(tenant_id, source_id, generation, "embed", 0, total_chunks)
 
     async def on_progress(done: int, total: int) -> None:
-        await write_progress(tenant_id, source_id, generation, done, total)
+        await write_progress(tenant_id, source_id, generation, "embed", done, total)
 
     try:
         embeddings = await embed_texts([c.text for c in chunks], progress=on_progress)
@@ -280,6 +294,7 @@ async def process_ingestion(
 
     # Activate — generation-fenced atomic switch (re-read the source in this txn).
     job.stage = "activate"
+    await write_progress(tenant_id, source_id, generation, "activate", total_chunks, total_chunks)
     fresh = await db.get(KnowledgeSource, (tenant_id, source_id))
     if fresh is None or fresh.tombstoned_at is not None or fresh.desired_generation != generation:
         version.status = "superseded"

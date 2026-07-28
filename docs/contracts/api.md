@@ -1655,10 +1655,14 @@ class KnowledgeSearchResult(StrictModel):
   named `failed[]` entry rather than losing the batch, so the whole call is `201` even
   when some files are skipped. Duplicate `file_ids` in one request collapse to one add.
 - `stage` / `progress_done` / `progress_total` are **best-effort telemetry**, present
-  only while an ingest is in flight. Live progress is published to Redis by the worker
-  (never Postgres — the ingest transaction already holds the job row, so an autonomous
-  write would deadlock); it accelerates the UI and is never correctness-critical
-  (ADR-016/017). When it is absent the UI falls back to the coarse `status`.
+  only while an ingest is in flight. They are published to **Redis** by the worker as it
+  moves through `snapshot → parse → chunk → embed → activate` (with per-batch embed
+  counts), *not* to Postgres: the durable `knowledge_ingestion_jobs.stage` only becomes
+  visible when the worker's transaction commits — i.e. after the whole run — so a reader
+  outside that transaction would see `queued` for the entire job, and an autonomous write
+  would deadlock against the job row it already holds. This is telemetry that accelerates
+  the UI and is never correctness-critical (ADR-016/017); when it is absent the API falls
+  back to the durable job row, and the UI to the coarse `status`.
 - `reindex` bumps `desired_generation` + enqueues a job; the previous `ready` version
   stays searchable until the new one activates (never a half-built index).
 - `DELETE` tombstones the source (immediate retrieval exclusion) then purges
