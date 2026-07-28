@@ -1746,7 +1746,10 @@ class ProjectContext(StrictModel):
 - Reservation/quota reuse ADR-030: a project's snapshot bytes are the same content-addressed,
   ref-counted `storage_blobs`; `507 insufficient_storage` when a reservation would exceed quota.
 - **Tool surface (W2a, ADR-023):** `project_list` / `project_create` / `project_tree` /
-  `project_read` are `allow` (read-only or own-data idempotent write). **Not given to the agent
+  `project_read` are `allow` (read-only or own-data idempotent write). Inside a **Project-bound
+  chat** `project_tree` / `project_read` may omit `project_id` — it defaults to `sessions.project_id`
+  (backlog B-3), and a general chat that omits it gets an observation naming `list_projects`.
+  **Not given to the agent
   in W2a:** any destructive purge, `project_run` (W3), `project_push` (W4). Project files remain
   **untrusted content** (ADR-009); source credentials (W2b+) never enter a project tree, prompt,
   log, or tool result.

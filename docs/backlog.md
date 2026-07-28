@@ -10,14 +10,15 @@
 | --- | --- | --- | --- |
 | B-1 | bug | [Chat header shows a stale hard-coded model](#b-1-chat-header-shows-a-stale-hard-coded-model) | ✅ done |
 | B-2 | design | [Built-in tool surface is too large (53 tools)](#b-2-built-in-tool-surface-is-too-large-53-tools) | open |
-| B-3 | bug | [The model cannot see the chat's bound project](#b-3-the-model-cannot-see-the-chats-bound-project) | open |
+| B-3 | bug | [The model cannot see the chat's bound project](#b-3-the-model-cannot-see-the-chats-bound-project) | ✅ done |
 | B-4 | bug/dx | [OTel tracing silently off after a stack restart](#b-4-otel-tracing-silently-off-after-a-stack-restart) | ✅ done |
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | open |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | open |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
 | B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open |
+| B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | open |
 
-Suggested order: ~~**B-4 → B-1 → B-7**~~ (done 2026-07-28) → **B-3** (root cause confirmed in a trace) → **B-5, B-6** (need a contract decision) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
+Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → **B-9** (it destroys dev data every full-suite run) → **B-5, B-6** (need a contract decision) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
 
 ---
 
@@ -65,15 +66,28 @@ model=gpt-4o-mini`. 390 px overflow = 0.
 
 ## B-3 The model cannot see the chat's bound project
 
-*Reported 2026-07-28 (manual test) · kind: bug · status: open · ~~blocked-by: B-4~~ (confirmed in a Phoenix trace 2026-07-28)*
+*Reported 2026-07-28 (manual test) · kind: bug · status: ✅ done 2026-07-28*
 
-**Observed.** In a project-bound chat (the UI chip showed `hello-world-py · project`), asking *"which project is this chat in?"* produced "I can't see an explicit binding" — the model only guessed from `list_projects`. **Confirmed** with tracing restored (B-4): the assembled prompt in the Phoenix trace carries **no project context at all**, so the model's answer was the honest consequence, not a formatting slip. A later project-bound chat repeated the pattern — the model answered "from the tool result it appears to be helloworld", i.e. inference from `list_projects`, never from its own context.
+**Observed.** In a project-bound chat (the UI chip showed `hello-world-py · project`), asking *"which project is this chat in?"* produced "I can't see an explicit binding" — the model only guessed from `list_projects`. **Confirmed** with tracing restored (B-4): the assembled prompt in the Phoenix trace carried **no project context at all**, so the model's answer was the honest consequence, not a formatting slip.
 
-**Evidence.** The binding is real server-side: `sessions.project_id` (`backend/app/models/core.py:124`), set by `services/projects.py` `open_in_chat` and relied on by `services/project_workcopy.py:118-130`; the frontend renders it as a chip. But the assembled prompt never carries it — `backend/app/core/loop.py:474` builds `system_content = SYSTEM_PROMPT [+ core_memory]` and nothing else.
+**Evidence.** The binding is real server-side: `sessions.project_id` (`backend/app/models/core.py:124`), set by `services/projects.py` `open_in_chat` and relied on by `services/project_workcopy.py:118-130`; the frontend renders it as a chip. But the assembled prompt never carried it — `backend/app/core/loop.py:474` built `system_content = SYSTEM_PROMPT [+ core_memory]` and nothing else.
 
-**Consequences.** The model cannot answer "where am I", and must be handed a `project_id` explicitly instead of defaulting to the bound project for `project_read` / `project_run`.
+**Fixed by** adding the missing **session-stable layer** that docs/04 already prescribed:
+`app/core/session_context.py` renders a bounded ambient block — today's date (**day granularity**, so a
+wall-clock stamp never churns the cacheable prefix; `get_time` still gives the exact time), a human surface
+label (`Web chat`, never a raw UMO key), and the bound project's name + id with a note that project tools
+default to it. The loop composes the system message as **global prefix → per-user core memory → per-session
+ambient**, i.e. most-shared layer first, so the prefix stays reusable across a user's sessions.
+`project_tree` / `project_read` now take `project_id` as **optional** and fall back to the binding; a
+general chat that omits it gets an actionable observation instead of a schema error, and `list_projects`
+marks which project the chat is on.
 
-**Direction (undecided).** Add a small ambient **session context** slot (bound project id + name + head snapshot, channel/UMO label, current time + timezone) to the layered prefix, placed so the byte-stable cached prefix is not broken (docs/04 invariant ⑤: dynamic data on the tail); and/or default the project tools' `project_id` to the session binding when omitted. Update the prompt/contract docs with whatever is chosen.
+**Verified.** 7 new tests (`tests/test_session_context.py`) cover the bound/unbound blocks, the date-only
+rule, the unknown-session case, tool defaulting, the unbound-chat observation, and an `execute_run`
+assertion that the provider really receives the binding. Full backend gate green. Live agent lane: in a
+bound chat, *"which project is this? don't use tools"* → **"当前 chat 绑定在项目 helloworld (id c0a48df2…)"**
+with `tool_calls: 0` in the worker log, and *"read main.py"* → `project_read` succeeded first try with no
+`list_projects` round-trip. Human lane: project chip unchanged, 390 px overflow = 0.
 
 ---
 
@@ -184,3 +198,29 @@ bind source path does not exist: /app/.sherpa/scratch/<run>
 - (b) Skip the bind entirely: `docker cp` the materialized tree into the container and copy the delta back.
 - (c) The ADR-039 production posture (gVisor/microVM runner), which removes the shared-socket assumption.
 - (d) Regardless of the above: keep `sandbox_start_failed` distinct from `sandbox_unavailable`, attach a redacted detail to the tool observation, and log one worker line — the model and the user should never have to guess which failure happened.
+
+---
+
+## B-9 The test suite deletes the owner tenant in the dev database
+
+*Found 2026-07-28 while verifying B-3 · kind: bug/dx · status: open*
+
+**Observed.** Running `uv run pytest` against the default dev configuration **destroyed the owner workspace**: after one full-suite run, `model_providers` = 0 (the configured litellm source gone), `projects` = 0 (the `helloworld` project gone), and the chat sessions were wiped. Verified directly in Postgres.
+
+**Evidence.** API tests get their clean slate by deleting the *real* owner tenant:
+
+```python
+async def _drop_owner() -> None:            # tests/test_connections_api.py:28-32
+    tid, _ = owner_ids()
+    await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
+```
+
+`owner_ids()` resolves the configured owner (the same identity the running stack logs in as), and the default `DATABASE_URL` is the same Postgres the dev stack uses — so the suite and the app share one database. ~19 test files use this pattern.
+
+**Second symptom.** With the dev worker running, that `DELETE` also **deadlocks** against the worker's cron (`project_workcopy_maintenance` holds locks on the same tenant's rows): `DeadlockDetectedError ... DELETE FROM tenants`, failing a *random* API test each run. The earlier "flaky" `test_gmail_oauth_round_trip_and_disconnect` failure is very likely the same cause. Stopping the worker makes the full suite green — a workaround, not a fix.
+
+**Direction (undecided).**
+- Point tests at a dedicated database (`TEST_DATABASE_URL`, or a per-run schema / template DB created and dropped by a session fixture) so app data is never in reach.
+- Or at minimum, have these tests seed a **synthetic** owner tenant instead of the configured one.
+- Add a guard: refuse to run destructive fixtures when `DATABASE_URL` is not a test database.
+- Until fixed, document in `AGENTS.md` that the suite is destructive to dev data and wants the worker stopped.

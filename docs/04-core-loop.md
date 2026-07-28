@@ -66,6 +66,8 @@ def call_model_resilient(ctx):                    # ═══ INNER: 可靠性 �
 
 > 铁律：动态数据走尾部；prefix 字节稳定（sorted JSON + 确定性 tool-call ID）→ 命中缓存省 ~75% 输入成本。记忆召回注入尾部当前消息，**绝不进 system prompt**。
 
+> 实现：SESSION-STABLE 层由 [`backend/app/core/session_context.py`](../backend/app/core/session_context.py) 渲染（日期到「天」粒度、surface 标签、绑定的 project），在 `core/loop.py` 里按「全局 prefix → 每用户 core memory → 每会话 ambient」拼进 system message——共享度越高的层越靠前，跨会话前缀才可复用（backlog B-3）。
+
 ## 流式事件词汇（emit → Redis → SSE，一套通吃 UI + 可观测）
 
 ```

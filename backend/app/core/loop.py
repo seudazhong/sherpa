@@ -26,6 +26,7 @@ from app.audit import ACTION, record_receipt
 from app.config import settings
 from app.core.compaction import compact, should_compact
 from app.core.history import assemble_provider_history
+from app.core.session_context import render_session_context
 from app.effects import begin_invocation, mark_running, settle_failed, settle_succeeded
 from app.events import append_event
 from app.models import Message, Part, Run, Session
@@ -471,7 +472,11 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
 
     transcript = await assemble_provider_history(session, tenant_id, session_id)
     core_memory = await _load_core_memory(session, tenant_id, decider_user_id)
-    system_content = f"{SYSTEM_PROMPT}\n\n{core_memory}" if core_memory else SYSTEM_PROMPT
+    # Layered system message (docs/04): global prefix → per-user memory → per-session
+    # ambient context. Ordering is by how widely each layer is shared, so the cacheable
+    # prefix stays byte-stable across a user's sessions and only the tail differs.
+    ambient = await render_session_context(session, tenant_id=tenant_id, session_id=session_id)
+    system_content = "\n\n".join(p for p in (SYSTEM_PROMPT, core_memory, ambient) if p)
     provider_messages: list[dict[str, object]] = [
         {"role": "system", "content": system_content},
         *transcript,
