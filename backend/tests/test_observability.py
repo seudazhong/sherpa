@@ -116,7 +116,10 @@ async def test_run_failure_journals_provider_error_detail(
             )
             yield  # pragma: no cover — makes this an async generator
 
-    monkeypatch.setattr(worker_mod, "build_provider", lambda: _FailingProvider())
+    async def _fail_resolve(_db: object, **_: object) -> _FailingProvider:
+        return _FailingProvider()
+
+    monkeypatch.setattr(worker_mod, "provider_for_session", _fail_resolve)
 
     async with SessionLocal() as s:
         tid, uid, sid = await _seed(s)
