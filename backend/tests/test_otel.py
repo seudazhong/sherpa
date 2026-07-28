@@ -111,6 +111,32 @@ def test_reset_returns_to_noop() -> None:
     assert type(get_tracer()).__name__ == "NoOpTracer"
 
 
+def test_disabled_bootstrap_says_so_once(caplog: pytest.LogCaptureFixture) -> None:
+    # Backlog B-4: a silently-off exporter is indistinguishable from a healthy
+    # stack, so the disabled path must announce itself (and how to turn it on).
+    with caplog.at_level(logging.INFO, logger="app.observability.otel"):
+        assert configure_tracing() is None
+    records = [r for r in caplog.records if r.name == "app.observability.otel"]
+    assert len(records) == 1
+    assert "tracing disabled" in records[0].getMessage()
+    assert "OTEL_ENABLED=true" in records[0].getMessage()
+    assert records[0].otel_enabled is False
+
+
+def test_enabled_bootstrap_logs_exporter_and_endpoint(caplog: pytest.LogCaptureFixture) -> None:
+    # The enabled path states where spans go, so "Phoenix stopped collecting"
+    # can be diagnosed from `docker compose logs` alone.
+    with caplog.at_level(logging.INFO, logger="app.observability.otel"):
+        configure_tracing(force=True, exporter=InMemorySpanExporter())
+    records = [r for r in caplog.records if r.name == "app.observability.otel"]
+    assert len(records) == 1
+    assert records[0].getMessage() == "tracing enabled"
+    assert records[0].otel_enabled is True
+    assert records[0].otel_exporter == "explicit"
+    assert records[0].otel_sampler == "always_on"
+    assert records[0].otel_capture_message_content is False
+
+
 def test_genai_attribute_names_are_stable() -> None:
     # Contract: the wrapper is the single source of truth for these names.
     assert genai.SYSTEM == "gen_ai.system"

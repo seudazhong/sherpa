@@ -93,9 +93,11 @@ services:
       AGENTMAIL_INBOX_ID: ${AGENTMAIL_INBOX_ID:-}
       AGENTMAIL_WEBHOOK_SECRET: ${AGENTMAIL_WEBHOOK_SECRET:-}
       AGENTMAIL_OWNER_EMAIL: ${AGENTMAIL_OWNER_EMAIL:-}
-      # Agent observability (ADR-033). Off by default (zero overhead). When true
-      # with no OTLP endpoint, spans dump to this container's stdout
-      # (docker compose logs); set OTEL_EXPORTER_OTLP_ENDPOINT for a backend (Phase B).
+      # Agent observability (ADR-033). Off by default (zero overhead). Put these in
+      # the `.env` you pass to `--env-file`, NOT just in your shell — a shell-only
+      # export is lost on the next `up`/rebuild and tracing stops silently (B-4).
+      # web+worker log one startup line stating whether tracing is on and where
+      # spans go. With no OTLP endpoint, spans dump to this container's stdout.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_CAPTURE_MESSAGE_CONTENT: ${OTEL_CAPTURE_MESSAGE_CONTENT:-false}
@@ -142,7 +144,9 @@ services:
       AGENTMAIL_WEBHOOK_SECRET: ${AGENTMAIL_WEBHOOK_SECRET:-}
       AGENTMAIL_OWNER_EMAIL: ${AGENTMAIL_OWNER_EMAIL:-}
       # Agent observability (ADR-033). The worker runs the loop, so its stdout
-      # carries the gen_ai span dumps when OTEL_ENABLED=true with no OTLP endpoint.
+      # carries the gen_ai span dumps when OTEL_ENABLED=true with no OTLP endpoint,
+      # and its startup line states whether tracing is on. Set these in `.env`
+      # (see the web service above) so they survive a rebuild.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_CAPTURE_MESSAGE_CONTENT: ${OTEL_CAPTURE_MESSAGE_CONTENT:-false}
@@ -186,9 +190,10 @@ services:
 
   # Optional agent-observability UI (ADR-033 Phase B). NOT started with the core
   # stack — enable with `--profile observability`. Reuses the existing Postgres
-  # (separate `phoenix` schema, no new datastore). Point the app at it with
-  # OTEL_ENABLED=true, OTEL_CAPTURE_MESSAGE_CONTENT=true (opt-in, PII), and
-  # OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317, then restart web+worker.
+  # (separate `phoenix` schema, no new datastore). Point the app at it by setting
+  # OTEL_ENABLED=true, OTEL_CAPTURE_MESSAGE_CONTENT=true (opt-in, PII) and
+  # OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317 **in `.env`**, then restart
+  # web+worker; their startup log line confirms the exporter/endpoint in use.
   # UI: http://localhost:6006.
   phoenix:
     image: arizephoenix/phoenix:latest

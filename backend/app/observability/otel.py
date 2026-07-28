@@ -16,6 +16,10 @@ sampler (`always_on` at single-user scale) and an exporter:
 * a `ConsoleSpanExporter`.
 
 Content (prompts / tool text) is never placed on spans here; see genai.py.
+
+Either way `configure_tracing` logs **one** startup line saying whether tracing is
+on and where spans go, so a stack that silently stopped exporting (e.g. a restart
+without `OTEL_ENABLED` in its env file) is visible in `docker compose logs`.
 """
 
 from __future__ import annotations
@@ -84,6 +88,14 @@ def configure_tracing(
         return _provider
 
     if not force and not settings.otel_enabled:
+        # Say so out loud: a silently-off exporter looks exactly like a healthy
+        # stack that simply never produced traces (backlog B-4).
+        logger.info(
+            "tracing disabled: no spans are exported "
+            "(set OTEL_ENABLED=true, and OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317 "
+            "for the bundled Phoenix, in the .env used by docker compose)",
+            extra={"otel_enabled": False},
+        )
         return None
 
     if force and _provider is not None:
@@ -98,14 +110,26 @@ def configure_tracing(
     if exporter is not None:
         # Explicit exporter (tests): export synchronously for determinism.
         provider.add_span_processor(SimpleSpanProcessor(exporter))
+        exporter_kind = "explicit"
     else:
         span_exporter, is_otlp = _build_exporter()
         processor = (
             BatchSpanProcessor(span_exporter) if is_otlp else SimpleSpanProcessor(span_exporter)
         )
         provider.add_span_processor(processor)
+        exporter_kind = "otlp" if is_otlp else "console"
 
     _provider = provider
+    logger.info(
+        "tracing enabled",
+        extra={
+            "otel_enabled": True,
+            "otel_exporter": exporter_kind,
+            "otel_endpoint": str(settings.otel_exporter_otlp_endpoint or ""),
+            "otel_sampler": settings.otel_traces_sampler,
+            "otel_capture_message_content": settings.otel_capture_message_content,
+        },
+    )
     return provider
 
 
