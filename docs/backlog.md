@@ -14,10 +14,10 @@
 | B-4 | bug/dx | [OTel tracing silently off after a stack restart](#b-4-otel-tracing-silently-off-after-a-stack-restart) | ✅ done |
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | open |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | open |
-| B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | open |
+| B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
 | B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open |
 
-Suggested order: ~~**B-4 → B-1**~~ (done 2026-07-28) → **B-7** (cheap, needs a naming decision) → **B-3** (root cause confirmed in a trace) → **B-5, B-6** (need a contract decision) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
+Suggested order: ~~**B-4 → B-1 → B-7**~~ (done 2026-07-28) → **B-3** (root cause confirmed in a trace) → **B-5, B-6** (need a contract decision) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
 
 ---
 
@@ -136,13 +136,27 @@ Order: ADR → `docs/contracts/api.md` + data-model contract → backend → UI 
 
 ## B-7 `Inbox` nav label collides with the email inbox
 
-*Reported 2026-07-28 (manual test) · kind: ux/naming · status: open*
+*Reported 2026-07-28 (manual test) · kind: ux/naming · status: ✅ done 2026-07-28*
 
-**Observed.** The sidebar item **Inbox** reads as "my email inbox", but the page is the agent triage surface — its own subtitle says *"Review suggestions, approvals, and follow-through in one place"* (candidates extracted from Gmail per ADR-009/ADR-010, not raw mail).
+**Observed.** The sidebar item **Inbox** read as "my email inbox", but the page is the agent triage surface — its own subtitle said *"Review suggestions, approvals, and follow-through in one place"* (candidates extracted from Gmail per ADR-009/ADR-010, not raw mail).
 
-**Why it is worse here.** Gmail is *the* v1 connector (ADR-022), and other views already show an **Inbox** chip meaning the mail folder (`frontend/src/views/ConnectorsView.tsx:332`, `views/MessagingView.tsx:185`) — one word, two meanings. Secondary IA problem: the subtitle claims approvals live here while **Approvals** is a separate nav item.
+**Why it was worse here.** Gmail is *the* v1 connector (ADR-022), and other views already show an **Inbox** chip meaning the mail folder (`frontend/src/views/ConnectorsView.tsx:332`, `views/MessagingView.tsx:185`) — one word, two meanings. Secondary IA problem: the subtitle claimed approvals live here while **Approvals** is a separate nav item.
 
-**Direction (undecided).** Pick a name that says *"things Sherpa surfaced for you to decide"* — candidates: Triage / For you / Suggestions / Today / Needs you — and fix the subtitle so it stops claiming approvals. Touch points: `frontend/src/components/Sidebar.tsx:34` (label), `frontend/src/App.tsx:42` (`/inbox` route), `frontend/src/views/InboxView.tsx:117,127` (heading + aria), plus the design-bright mockups, the §9 capability matrix, and contracts if the route changes. Per `AGENTS.md`, an SPA route name must not collide with an API proxy prefix.
+**Fixed by** renaming the surface to **Today** (the eyebrow already said "Today"): nav label + route
+`/inbox` → `/today` (free of any API proxy prefix), `InboxView.tsx` → `TodayView.tsx`, heading/aria updated,
+and the subtitle rewritten to *"What needs you today — suggestions, follow-through, and updates"* — it no
+longer claims approvals. `/inbox` now redirects to `/today` so old links keep working, the Approvals
+section is explicitly a read-only roll-up with an **Open Approvals** link to the page that owns the
+decision, and the `list_notifications` tool description says "shown on the Today page" instead of "the web
+inbox". Capability matrix (docs/11 §9) and the design-bright README note the rename. The mail-source
+"Inbox" chips stay — that is exactly the disambiguation.
+
+**Verified.** Frontend lint + build green; backend ruff/mypy + tool tests green. Human lane: `/inbox`
+redirects to `/today`, nav highlights **Today**, heading/subtitle correct, 390 px overflow = 0. Agent lane:
+the model called `list_notifications` and answered "可以在界面的 Today 页面查看".
+
+**Left open (deliberately).** Whether Approvals should merge into Today (the "Decisions" option) is an IA
+change, not a rename — not done here.
 
 ---
 

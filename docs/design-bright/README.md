@@ -3,6 +3,8 @@
 Offline, self-contained HTML prototypes sharing one `base.css`. Open [`index.html`](index.html) to browse. This is the **recommended default light theme** (the v1 "Alpine warmth" set in [`../design/`](../design/index.html) becomes the dark theme — see [`../reviews/ui-comparison.md`](../reviews/ui-comparison.md)).
 
 > ⚠️ **These screens depict the long-term product vision.** The confirmed **v1** ([ADR-022](../decisions.md)) is a narrower slice: **self-hosted, single-instance, single-user, Gmail → Action** (+ web chat as a secondary surface). This file maps what is **v1** vs **later**, so the mockups don't imply v1 ships everything shown.
+>
+> 📝 **Naming drift (2026-07-28, backlog B-7):** the shipped app renamed the triage surface **Inbox → Today** (`/today`), because "Inbox" collided with the Gmail inbox that v1 connects to. Where these mockups say "Inbox" they mean today's **Today** page; the mail-source chips still mean a real mail inbox.
 
 ## Screen → scope map
 

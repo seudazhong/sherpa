@@ -29,7 +29,7 @@ function confidenceLabel(confidence: number): string {
   return "Review details";
 }
 
-export default function InboxView() {
+export default function TodayView() {
   const { csrf } = useAuth();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -113,10 +113,10 @@ export default function InboxView() {
       <main className="main">
         <header className="topbar">
           <div className="page-heading">
-            <span className="page-eyebrow">Today</span>
-            <h2>Inbox</h2>
+            <span className="page-eyebrow">Workspace</span>
+            <h2>Today</h2>
             <p className="page-sub small">
-              Review suggestions, approvals, and follow-through in one place
+              What needs you today — suggestions, follow-through, and updates
             </p>
           </div>
         </header>
@@ -124,7 +124,7 @@ export default function InboxView() {
         <div className="inbox page-content">
           {error && <div className="auth-error">{error}</div>}
 
-          <section className="metric-grid" aria-label="Inbox overview">
+          <section className="metric-grid" aria-label="Today overview">
             <article className="metric-card">
               <span className="metric-label">Needs review</span>
               <strong>{candidates.length}</strong>
@@ -231,7 +231,13 @@ export default function InboxView() {
           <section className="content-section">
             <div className="section-head">
               <span>Approvals</span>
-              <span className="count">{approvals.length}</span>
+              <span className="section-head-right">
+                <span className="count">{approvals.length}</span>
+                {/* Read-only roll-up: the decision itself is made on /approvals. */}
+                <Link className="section-link" to="/approvals">
+                  Open Approvals
+                </Link>
+              </span>
             </div>
             {approvals.length === 0 && (
               <div className="empty-state compact">

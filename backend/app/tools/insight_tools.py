@@ -12,7 +12,9 @@ from app.tools.validate import validate_args
 
 class ListNotificationsTool:
     name = "list_notifications"
-    description = "List delivered/missed reminders and digests (the web inbox). Read-only."
+    description = (
+        "List delivered/missed reminders and digests (shown on the Today page). Read-only."
+    )
     input_schema: dict[str, object] = {"type": "object", "properties": {}}
     flags = ToolFlags(is_read_only=True)
 

@@ -5,7 +5,6 @@ import ActivityView from "./views/ActivityView";
 import ApprovalsView from "./views/ApprovalsView";
 import ChatView from "./views/ChatView";
 import ConnectorsView from "./views/ConnectorsView";
-import InboxView from "./views/InboxView";
 import LibraryView from "./views/LibraryView";
 import LoginView from "./views/LoginView";
 import MemoryView from "./views/MemoryView";
@@ -14,6 +13,7 @@ import ProjectsView from "./views/ProjectsView";
 import SchedulesView from "./views/SchedulesView";
 import SessionsView from "./views/SessionsView";
 import SettingsView from "./views/SettingsView";
+import TodayView from "./views/TodayView";
 import WorkspaceView from "./views/WorkspaceView";
 
 function Protected({ children }: { children: JSX.Element }) {
@@ -39,13 +39,15 @@ export default function App() {
         }
       />
       <Route
-        path="/inbox"
+        path="/today"
         element={
           <Protected>
-            <InboxView />
+            <TodayView />
           </Protected>
         }
       />
+      {/* Renamed from "Inbox" (backlog B-7): keep old links working. */}
+      <Route path="/inbox" element={<Navigate to="/today" replace />} />
       <Route
         path="/approvals"
         element={

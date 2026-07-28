@@ -172,19 +172,19 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 
 | 能力 | service | REST | Tool | **UI** | effect | 策略 |
 |---|---|---|---|---|---|---|
-| 列候选 | ✅ | GET /candidates ✅ | `list_candidates` ✅ | Inbox ✅ | read_only | allow |
-| 接受候选→todo | ✅ | POST …/accept ✅ | `accept_candidate` ✅ | Inbox(Accept)✅ | idempotent_write | allow |
+| 列候选 | ✅ | GET /candidates ✅ | `list_candidates` ✅ | Today ✅ | read_only | allow |
+| 接受候选→todo | ✅ | POST …/accept ✅ | `accept_candidate` ✅ | Today(Accept)✅ | idempotent_write | allow |
 | 编辑候选 | ✅ | POST …/edit ✅ | `edit_candidate` ✅ | ⬜(仅 chat/REST) | idempotent_write | allow |
-| 忽略候选 | ✅ | POST …/dismiss ✅ | `dismiss_candidate` ✅ | Inbox(Dismiss)✅ | idempotent_write | allow |
-| 列待办 | ✅ | GET /todos ✅ | `list_todos` ✅ | Inbox ✅ | read_only | allow |
-| 改待办(完成/改期/snooze) | ✅ | PATCH /todos/{id} ✅ | `update_todo`/`complete_todo` ✅ | ⬜(Inbox 只读,无完成按钮) | idempotent_write | allow |
+| 忽略候选 | ✅ | POST …/dismiss ✅ | `dismiss_candidate` ✅ | Today(Dismiss)✅ | idempotent_write | allow |
+| 列待办 | ✅ | GET /todos ✅ | `list_todos` ✅ | Today ✅ | read_only | allow |
+| 改待办(完成/改期/snooze) | ✅ | PATCH /todos/{id} ✅ | `update_todo`/`complete_todo` ✅ | ⬜(Today 只读,无完成按钮) | idempotent_write | allow |
 | 新建待办 | ✅ | POST /todos ✅ | `todo_write` ✅ | ⬜ | idempotent_write | allow |
 | 列连接器 | ✅ | GET /connectors ✅ | `list_connectors` ✅ | ⬜(侧栏占位) | read_only | allow |
 | 触发同步分析 | ✅ | POST …/sync ✅ | `sync_connector` ✅ | ⬜ | idempotent_write | allow |
 | 建提醒/日程 | ✅ | POST /schedules ✅ | `create_reminder`/`create_daily_digest` ✅ | Schedules(/reminders)✅ | idempotent_write | allow |
 | 通用定时任务 cron（agent_task，ADR-031） | ✅ schedules（cadence 引擎+护栏） | POST /schedules · /run-now · /status · GET …/firings ✅ | `create_scheduled_task` ✅ | Schedules 调度台（建/试跑/暂停/历史）✅ | idempotent_write（run 内外部动作仍 ask） | allow |
 | 列/取消日程 | ✅ | GET /schedules · /cancel ✅ | `list_schedules`/`cancel_schedule` ✅ | Schedules ✅ | idempotent_write | allow |
-| 列通知 | ✅ | GET /notifications ✅ | `list_notifications` ✅ | Inbox ✅ | read_only | allow |
+| 列通知 | ✅ | GET /notifications ✅ | `list_notifications` ✅ | Today ✅ | read_only | allow |
 | 读/改通知设置 | ✅ | GET·PATCH /settings ✅ | `get_settings`/`update_settings` ✅ | Settings(/preferences)✅ | idempotent_write | allow |
 | 活动台账 | ✅ | GET /activity ✅ | `list_activity` ✅ | Activity(/data)✅ | read_only | allow |
 | 会话:新建/切换 | (会话 API) | POST·GET /sessions ✅ | ❌ 不给 agent | Chat(new chat + 切换)✅ | — | — |
@@ -271,7 +271,7 @@ class CreateTodoTool:
 2. **Tool 单测**:注册表取工具,args 校验 + 成功/错误 → `ToolResult`/`ToolError`。
 3. **loop 集成**:mock provider 脚本 emit 该 `tool_call` → 断言 effect 落地 + 活动回执 + 策略(allow 直接执行 / ask 生成信封)。
 4. **REST 回归**:适配器薄化后原 REST 行为不变(复用现有 REST 测试)。
-5. **浏览器 E2E(遵守既定规则)**:重启服务 + Playwright 让 agent 在对话里真·自主操作(例:"接受 Q3 那条候选" → Inbox 里候选变 todo;"同步我的 Gmail" → Activity 冒出 read/inference 回执),截图留档。
+5. **浏览器 E2E(遵守既定规则)**:重启服务 + Playwright 让 agent 在对话里真·自主操作(例:"接受 Q3 那条候选" → Today 里候选变 todo;"同步我的 Gmail" → Activity 冒出 read/inference 回执),截图留档。
 
 ---
 
