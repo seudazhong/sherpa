@@ -19,11 +19,13 @@ from app.providers.base import (
     Message,
     ProviderError,
     ProviderEvent,
+    ReasoningDelta,
     StopReason,
     TextDelta,
     ToolCall,
     ToolSchema,
 )
+from app.providers.tools import to_openai_tools
 from app.security.redaction import redact
 
 _FINISH: dict[str, StopReason] = {
@@ -50,22 +52,6 @@ def _error_detail(resp: httpx.Response, *, limit: int = 1000) -> str:
     except (json.JSONDecodeError, ValueError):
         pass
     return text[:limit]
-
-
-def _to_openai_tools(tools: list[ToolSchema] | None) -> list[dict[str, object]] | None:
-    if not tools:
-        return None
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": t["name"],
-                "description": t.get("description", ""),
-                "parameters": t.get("input_schema", {"type": "object"}),
-            },
-        }
-        for t in tools
-    ]
 
 
 class OpenAICompatibleProvider:
@@ -100,7 +86,7 @@ class OpenAICompatibleProvider:
             # Ask the endpoint for a final usage chunk (choices: [], usage: {...}).
             "stream_options": {"include_usage": True},
         }
-        oa_tools = _to_openai_tools(tools)
+        oa_tools = to_openai_tools(tools)
         if oa_tools is not None:
             payload["tools"] = oa_tools
         headers = {"Authorization": f"Bearer {self._api_key}"}
@@ -150,6 +136,21 @@ class OpenAICompatibleProvider:
                         continue
                     choice = choices[0]
                     delta = choice.get("delta") or {}
+
+                    # Some OpenAI-compatible providers (MoonshotAI) report usage per choice.
+                    ch_usage = choice.get("usage")
+                    if isinstance(ch_usage, dict):
+                        pt, ct = ch_usage.get("prompt_tokens"), ch_usage.get("completion_tokens")
+                        if isinstance(pt, int):
+                            input_tokens = pt
+                        if isinstance(ct, int):
+                            output_tokens = ct
+
+                    # Reasoning models expose chain-of-thought in a side field, named
+                    # `reasoning_content` (DeepSeek/QwQ) or `reasoning` (Groq/OpenRouter).
+                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                    if reasoning:
+                        yield ReasoningDelta(str(reasoning))
 
                     content = delta.get("content")
                     if content:
