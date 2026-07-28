@@ -315,3 +315,17 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 
 ## Open decisions that bind M2 (not M1) — see [reviews/README.md §5](reviews/README.md)
 Initial real provider/model · Gmail OAuth operating mode · data-retention window · notification defaults. **Safe v1 defaults are in `contracts/config-and-secrets.md`** so M1 (and M2 scaffolding) proceed unblocked; confirm before M2 ships to real users.
+
+## Phase MP — 多来源模型 provider（用户在设置里配置）(ADR-041) — ✅ **COMPLETE + two-lane verified (2026-07-28)**
+
+roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研究先行 `research/model-provider.md`（深读 AstrBot `AstrBotDevs/AstrBot`、hermes-agent `NousResearch/hermes-agent`、PI-agent `earendil-works/pi` + provider landscape）→ ADR-041 + 契约先行（data-model §Model providers · api §10.8 · config · 能力矩阵 · 静态 `design-settings-models/`）→ 生产实现。Schema `0031`。
+
+| # | Task | AC | Status |
+|---|---|---|---|
+| MP.1 | migration 0031 `model_providers`(AEAD 密钥) + `sessions.model_provider_id/model` · `security/model_provider_key.py`(KEK 直封) · `services/model_providers.py`(CRUD/默认/测试写回/会话选择/解析) | 密钥 seal/open roundtrip、首个设默认、改密钥重置、set_default 移旗、会话覆盖+解析 | ✅ `dad3b95` (pytest 7) |
+| MP.2 | `providers/tools.py`(3 序列化器+Gemini 收敛) · 增强 `openai_compatible`(reasoning/per-choice usage/base_url 规范化) · 原生 `anthropic`+`gemini` · `factory.build_from_config` | 序列化+SSE 归一(text/reasoning/toolcall/finish)；anthropic 翻译(system/tool_result/merge)；gemini functionResponse 名解析 | ✅ `2afedce` (pytest 7; 修 f"******" 密钥头 bug) |
+| MP.3 | `provider_for_session`(会话→默认→env) · `test_connection`(拉 /models) · worker chat loop 接线 · `api/model_providers.py` §10.8 + 注册 | 按 kind 建适配器；测试连接成功/失败；REST CRUD/默认/会话-model；密钥只入不出+CSRF+无 agent 工具 | ✅ `ba3d248` (pytest 10 + REST flow) |
+| MP.4 | `components/ModelsPanel.tsx`→Settings · `components/ModelSwitcher.tsx`→ChatView · api.ts 客户端 · Vite proxy · styles · 能力矩阵 §9 UI ✅ | build/lint green；密钥 password 永不回显 | ✅ `bf9c1ad` |
+| MP.V | full backend gate + 两栈 Playwright + UX pass；重启栈 | full pytest green；两栈验证；390px | ✅ `741ef7a` (真实 litellm 源测试连接拉 29 model；agent 用 DB 源 claude-sonnet-4.6→"Paris"；每会话切 gpt-4o-mini 生效) |
+
+**Deferred（各自后续 ADR）：** 跨-provider failover、MoA/ensemble、成本 ledger、Bedrock/Vertex/OpenAI-Responses、子 agent、多 key 轮换。
