@@ -31,6 +31,7 @@ from app.models.knowledge import (
     KnowledgeSourceVersion,
 )
 from app.models.memory import MemoryPassage, UserMemory
+from app.models.model_providers import ModelProvider
 from app.models.observability import Trace
 from app.models.projects import (
     Project,
@@ -102,4 +103,5 @@ __all__ = [
     "ProjectArtifact",
     "ProjectSandboxRun",
     "GithubConnection",
+    "ModelProvider",
 ]

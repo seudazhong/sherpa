@@ -122,6 +122,8 @@ class Session(Base):
     last_activity_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     title: Mapped[str | None] = mapped_column(Text)
     project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    model_provider_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    model: Mapped[str | None] = mapped_column(Text)
     created_at = _ts()
     updated_at = _ts()
 
