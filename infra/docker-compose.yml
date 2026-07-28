@@ -63,6 +63,19 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sherpa}:${POSTGRES_PASSWORD:-sherpa}@postgres:5432/${POSTGRES_DB:-sherpa}
       REDIS_URL: redis://redis:6379/0
+      # Owner login + secrets. Dev defaults keep `up` working out of the box;
+      # override them in the `.env` you pass to `--env-file` for a real deploy.
+      # web and worker MUST share the same KEK (the worker decrypts what the web sealed).
+      APP_SECRET: ${APP_SECRET:-dev-insecure-app-secret-change-me-32bytes+}
+      KEK: ${KEK:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      KEK_ID: ${KEK_ID:-env-dev}
+      OWNER_EMAIL: ${OWNER_EMAIL:-owner@localhost}
+      OWNER_PASSWORD: ${OWNER_PASSWORD:-sherpa-dev-password}
+      # Gmail connector OAuth (v1 main line). Without real client credentials the
+      # connector page can be opened but the OAuth round-trip will not complete.
+      GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID:-dev-gmail-client-id}
+      GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET:-dev-gmail-client-secret}
+      GMAIL_REDIRECT: ${GMAIL_REDIRECT:-http://localhost:8000/connectors/gmail/oauth/callback}
       # Provider config so /meta and any sync path reflect the real model (the
       # worker runs the loop; the web only reports provider kind/model).
       PROVIDER_KIND: ${PROVIDER_KIND:-mock}
@@ -117,6 +130,16 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sherpa}:${POSTGRES_PASSWORD:-sherpa}@postgres:5432/${POSTGRES_DB:-sherpa}
       REDIS_URL: redis://redis:6379/0
+      # Same owner/secret block as web — the worker decrypts vault rows the web
+      # sealed, so KEK/KEK_ID must match exactly.
+      APP_SECRET: ${APP_SECRET:-dev-insecure-app-secret-change-me-32bytes+}
+      KEK: ${KEK:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      KEK_ID: ${KEK_ID:-env-dev}
+      OWNER_EMAIL: ${OWNER_EMAIL:-owner@localhost}
+      OWNER_PASSWORD: ${OWNER_PASSWORD:-sherpa-dev-password}
+      GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID:-dev-gmail-client-id}
+      GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET:-dev-gmail-client-secret}
+      GMAIL_REDIRECT: ${GMAIL_REDIRECT:-http://localhost:8000/connectors/gmail/oauth/callback}
       # Model provider. Defaults to mock (offline). To use a real model, set
       # PROVIDER_KIND=openai_compatible and PROVIDER_API_KEY in .env (gitignored).
       # host.docker.internal reaches a proxy (e.g. litellm) on the host.
