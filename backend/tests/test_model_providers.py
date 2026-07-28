@@ -234,3 +234,104 @@ async def test_delete_and_not_found() -> None:
                 await svc.get_provider(s, ctx, provider_id=p.id)
         finally:
             await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_provider_for_session_builds_adapter_by_kind() -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    from app.providers import (
+        AnthropicProvider,
+        MockProvider,
+        OpenAICompatibleProvider,
+    )
+
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            oai = await svc.create_provider(
+                s,
+                ctx,
+                kind="openai_compatible",
+                display_name="OpenAI",
+                api_key="k",
+                base_url="https://api.openai.com/v1",
+                default_model="gpt-5.1",
+            )
+            anth = await svc.create_provider(
+                s,
+                ctx,
+                kind="anthropic",
+                display_name="Anthropic",
+                api_key="k",
+                default_model="claude-opus-4-8",
+            )
+            sid = await _session(s, ctx)
+
+            # No override → global default (openai_compatible).
+            prov = await svc.provider_for_session(s, tenant_id=ctx.tenant_id, session_id=sid)
+            assert isinstance(prov, OpenAICompatibleProvider)
+            assert prov._model == "gpt-5.1"  # type: ignore[attr-defined]
+
+            # Per-chat override → native Anthropic adapter.
+            await svc.set_session_model(
+                s, ctx, session_id=sid, model_provider_id=anth.id, model="claude-sonnet-4-6"
+            )
+            prov2 = await svc.provider_for_session(s, tenant_id=ctx.tenant_id, session_id=sid)
+            assert isinstance(prov2, AnthropicProvider)
+            assert prov2._model == "claude-sonnet-4-6"  # type: ignore[attr-defined]
+
+            # A session with no configured providers → env fallback (mock in tests).
+            async with SessionLocal() as s2:
+                try:
+                    ctx2 = await _seed(s2)
+                    sid2 = await _session(s2, ctx2)
+                    prov3 = await svc.provider_for_session(
+                        s2, tenant_id=ctx2.tenant_id, session_id=sid2
+                    )
+                    assert isinstance(prov3, MockProvider)
+                finally:
+                    await s2.rollback()
+            _ = oai
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_test_connection_success_and_failure() -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    import httpx
+
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            p = await svc.create_provider(
+                s,
+                ctx,
+                kind="openai_compatible",
+                display_name="X",
+                api_key="k",
+                base_url="https://api.openai.com/v1",
+            )
+
+            def ok_handler(_r: httpx.Request) -> httpx.Response:
+                return httpx.Response(200, json={"data": [{"id": "gpt-5.1"}, {"id": "o4"}]})
+
+            p = await svc.test_connection(
+                s, ctx, provider_id=p.id, transport=httpx.MockTransport(ok_handler)
+            )
+            assert p.status == "active"
+            assert p.models == ["gpt-5.1", "o4"]
+            assert p.default_model == "gpt-5.1"
+
+            def fail_handler(_r: httpx.Request) -> httpx.Response:
+                return httpx.Response(401, json={"error": {"message": "bad key"}})
+
+            p = await svc.test_connection(
+                s, ctx, provider_id=p.id, transport=httpx.MockTransport(fail_handler)
+            )
+            assert p.status == "error"
+            assert p.last_error_redacted and "401" in p.last_error_redacted
+        finally:
+            await s.rollback()

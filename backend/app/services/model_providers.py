@@ -19,11 +19,17 @@ import dataclasses
 import datetime
 import uuid
 
+import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models import ModelProvider
 from app.models import Session as SessionModel
+from app.providers import Provider, build_from_config, build_provider
+from app.providers.anthropic import _DEFAULT_BASE as _ANTHROPIC_BASE
+from app.providers.gemini import _DEFAULT_BASE as _GEMINI_BASE
+from app.providers.openai_compatible import openai_endpoint
 from app.security.keyring import load_keyring
 from app.security.model_provider_key import (
     ModelProviderKeyIdentity,
@@ -31,6 +37,7 @@ from app.security.model_provider_key import (
     open_model_provider_key,
     seal_model_provider_key,
 )
+from app.security.redaction import redact
 from app.security.vault import connector_vault_capability
 from app.services.context import CallerContext
 from app.services.errors import Conflict, Invalid, NotFound
@@ -173,6 +180,7 @@ async def create_provider(
     _apply_seal(p, api_key.strip())
     db.add(p)
     await db.flush()
+    await db.refresh(p, ["created_at", "updated_at"])
     return p
 
 
@@ -209,6 +217,7 @@ async def update_provider(
         p.status = "pending"  # re-test after a key change
         p.last_error_redacted = None
     await db.flush()
+    await db.refresh(p, ["updated_at"])
     return p
 
 
@@ -238,6 +247,7 @@ async def set_default(
     await db.flush()
     p.is_default = True
     await db.flush()
+    await db.refresh(p, ["updated_at"])
     return p
 
 
@@ -348,3 +358,113 @@ async def resolve_for_session(
         if p is not None:
             return p, p.default_model
     return None
+
+
+async def provider_for_session(
+    db: AsyncSession, *, tenant_id: uuid.UUID, session_id: uuid.UUID | None
+) -> Provider:
+    """Build the streaming provider for a run from the owner's DB config (session override
+    → global default), falling back to the env ``PROVIDER_*`` provider (offline/mock) when
+    no source is configured or its key cannot be opened. The key is decrypted at this
+    boundary only and never logged."""
+    sel = await resolve_for_session(db, tenant_id=tenant_id, session_id=session_id)
+    if sel is None:
+        return build_provider()
+    p, model = sel
+    mdl = model or p.default_model
+    if not mdl:
+        return build_provider()
+    try:
+        key = open_key(p)
+    except Exception:  # noqa: BLE001 - a broken key falls back to env, never crashes a run
+        return build_provider()
+    if key is None:
+        return build_provider()
+    return build_from_config(kind=p.kind, api_key=key, model=mdl, base_url=p.base_url)
+
+
+# --- test connection (fetch the model catalog) ------------------------------
+
+
+def _models_endpoint(kind: str, base_url: str | None) -> tuple[str, dict[str, str]]:
+    """(url, headers) for listing models. The key header is filled by the caller."""
+    if kind == "anthropic":
+        base = (base_url or _ANTHROPIC_BASE).rstrip("/")
+        return f"{base}/v1/models", {"anthropic-version": "2023-06-01"}
+    if kind == "gemini":
+        base = (base_url or _GEMINI_BASE).rstrip("/")
+        return f"{base}/v1beta/models", {}
+    base = (base_url or settings.provider_base_url).rstrip("/")
+    return openai_endpoint(base, "models"), {}
+
+
+def _parse_models(kind: str, data: object) -> list[str]:
+    ids: list[str] = []
+    if kind == "gemini":
+        items = data.get("models") if isinstance(data, dict) else None
+        for m in items or []:
+            name = m.get("name") if isinstance(m, dict) else None
+            if isinstance(name, str):
+                ids.append(name.split("/")[-1])  # "models/gemini-x" → "gemini-x"
+    else:
+        items = data.get("data") if isinstance(data, dict) else None
+        for m in items or []:
+            mid = m.get("id") if isinstance(m, dict) else None
+            if isinstance(mid, str):
+                ids.append(mid)
+    return ids[:200]
+
+
+async def test_connection(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    provider_id: uuid.UUID,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> ModelProvider:
+    """Decrypt the key server-side, fetch the source's model catalog, and persist the
+    outcome (active + models / error + redacted reason). The key never leaves this boundary.
+    Caller commits."""
+    p = await get_provider(db, ctx, provider_id=provider_id)
+    key = open_key(p)
+    if key is None:
+        return await record_test_result(
+            db, ctx, provider_id=p.id, ok=False, error_redacted="no key set"
+        )
+    url, extra = _models_endpoint(p.kind, p.base_url)
+    headers = dict(extra)
+    if p.kind == "anthropic":
+        headers["x-api-key"] = key
+    elif p.kind == "gemini":
+        headers["x-goog-api-key"] = key
+    else:
+        headers["Authorization"] = f"Bearer {key}"
+    try:
+        async with httpx.AsyncClient(
+            timeout=float(settings.provider_timeout_seconds), transport=transport
+        ) as client:
+            resp = await client.get(url, headers=headers)
+        if resp.status_code >= 400:
+            detail = _redacted_body(resp)
+            return await record_test_result(
+                db,
+                ctx,
+                provider_id=p.id,
+                ok=False,
+                error_redacted=f"status={resp.status_code} {detail}",
+            )
+        models = _parse_models(p.kind, resp.json())
+    except (httpx.HTTPError, ValueError) as exc:
+        return await record_test_result(
+            db, ctx, provider_id=p.id, ok=False, error_redacted=type(exc).__name__
+        )
+    return await record_test_result(db, ctx, provider_id=p.id, ok=True, models=models)
+
+
+def _redacted_body(resp: httpx.Response, *, limit: int = 300) -> str:
+    import json
+
+    try:
+        return json.dumps(redact(resp.json()), separators=(",", ":"), ensure_ascii=False)[:limit]
+    except Exception:  # noqa: BLE001
+        return (resp.text or "")[:limit]

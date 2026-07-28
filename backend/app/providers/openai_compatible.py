@@ -10,6 +10,7 @@ in the Authorization header and never placed in events or logs.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 
 import httpx
@@ -33,6 +34,17 @@ _FINISH: dict[str, StopReason] = {
     "tool_calls": "tool_use",
     "length": "length",
 }
+
+
+def openai_endpoint(base_url: str, suffix: str) -> str:
+    """Join an OpenAI-compatible ``base_url`` with an API ``suffix`` (e.g.
+    ``chat/completions`` / ``models``), tolerating both conventions: a root without a
+    version (``http://proxy:4000`` → ``…/v1/<suffix>``) and a base that already includes the
+    version segment (``https://api.openai.com/v1`` / ``…/openai/v1`` → ``…/<suffix>``)."""
+    b = base_url.rstrip("/")
+    if re.search(r"/v\d+$", b) or "/v1/" in b or b.endswith("/openai"):
+        return f"{b}/{suffix}"
+    return f"{b}/v1/{suffix}"
 
 
 def _error_detail(resp: httpx.Response, *, limit: int = 1000) -> str:
@@ -99,7 +111,7 @@ class OpenAICompatibleProvider:
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             async with client.stream(
                 "POST",
-                f"{self._base_url}/v1/chat/completions",
+                openai_endpoint(self._base_url, "chat/completions"),
                 json=payload,
                 headers=headers,
             ) as resp:

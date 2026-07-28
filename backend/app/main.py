@@ -24,6 +24,7 @@ from app.api.files import router as files_router
 from app.api.grants import router as grants_router
 from app.api.knowledge import router as knowledge_router
 from app.api.memory import router as memory_router
+from app.api.model_providers import router as model_providers_router
 from app.api.notifications import router as notifications_router
 from app.api.permissions import router as permissions_router
 from app.api.projects import router as projects_router
@@ -62,6 +63,7 @@ app.include_router(knowledge_router)
 app.include_router(files_router)
 app.include_router(drive_router)
 app.include_router(projects_router)
+app.include_router(model_providers_router)
 app.include_router(grants_router)
 app.include_router(channels_router)
 app.include_router(sse_router)

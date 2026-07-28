@@ -45,6 +45,7 @@ from app.redis_client import client as redis_client
 from app.scheduler import dispatch_due_agent_tasks, fire_due_schedules, try_acquire_leader
 from app.scheduler.pipeline import sync_and_analyze
 from app.services import channels as chan_svc
+from app.services.model_providers import provider_for_session
 from app.tools import build_default_registry
 
 logger = logging.getLogger("app.worker")
@@ -289,7 +290,9 @@ async def run_job(ctx: dict[str, Any], run_id: str) -> str:
                 reason = await execute_run(
                     session,
                     run=run,
-                    provider=build_provider(),
+                    provider=await provider_for_session(
+                        session, tenant_id=tenant_id, session_id=run.session_id
+                    ),
                     registry=build_default_registry(),
                 )
                 await project_run_trace(session, tenant_id=tenant_id, run_id=rid)
