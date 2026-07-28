@@ -36,7 +36,60 @@ from app.services.context import CallerContext
 logger = logging.getLogger("app.knowledge.ingest")
 
 _LEASE_SECONDS = 600
+_PROGRESS_TTL_SECONDS = 3600
 _TS_CONFIG_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def _progress_key(tenant_id: uuid.UUID, source_id: uuid.UUID, generation: int) -> str:
+    return f"kb:progress:{tenant_id}:{source_id}:{generation}"
+
+
+async def write_progress(
+    tenant_id: uuid.UUID, source_id: uuid.UUID, generation: int, done: int, total: int
+) -> None:
+    """Publish embed progress to Redis. Deliberately NOT Postgres: the ingest
+    transaction already holds a row lock on this job, so an autonomous write would
+    deadlock. Progress is pure telemetry — Redis accelerates, it is never
+    correctness-critical (ADR-016/017); losing it just falls back to the stage pill."""
+    from app.redis_client import client as redis
+
+    try:
+        await redis.set(
+            _progress_key(tenant_id, source_id, generation),
+            f"{done}/{total}",
+            ex=_PROGRESS_TTL_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001 - progress is best-effort
+        logger.debug("knowledge ingest progress write skipped: %s", exc)
+
+
+async def read_progress(
+    tenant_id: uuid.UUID, source_id: uuid.UUID, generation: int
+) -> tuple[int, int] | None:
+    """Live `(done, total)` for an in-flight ingest, or None when unknown."""
+    from app.redis_client import client as redis
+
+    try:
+        raw = await redis.get(_progress_key(tenant_id, source_id, generation))
+    except Exception as exc:  # noqa: BLE001 - progress is best-effort
+        logger.debug("knowledge ingest progress read skipped: %s", exc)
+        return None
+    if not raw:
+        return None
+    done, _, total = str(raw).partition("/")
+    try:
+        return int(done), int(total)
+    except ValueError:
+        return None
+
+
+async def _clear_progress(tenant_id: uuid.UUID, source_id: uuid.UUID, generation: int) -> None:
+    from app.redis_client import client as redis
+
+    try:
+        await redis.delete(_progress_key(tenant_id, source_id, generation))
+    except Exception as exc:  # noqa: BLE001 - progress is best-effort
+        logger.debug("knowledge ingest progress clear skipped: %s", exc)
 
 
 def _ts_config() -> str:
@@ -91,6 +144,7 @@ async def _fail(
     job.termination_reason = code
     if fail_source:
         source.status = "failed"
+    await _clear_progress(source.tenant_id, source.id, job.generation)
     logger.warning(
         "knowledge ingest failed",
         extra={"source_id": str(source.id), "generation": job.generation, "reason": code},
@@ -185,7 +239,21 @@ async def process_ingestion(
             KnowledgeChunk.tenant_id == tenant_id, KnowledgeChunk.version_id == version.id
         )
     )
-    embeddings = await embed_texts([c.text for c in chunks])
+    total_chunks = len(chunks)
+    await write_progress(tenant_id, source_id, generation, 0, total_chunks)
+
+    async def on_progress(done: int, total: int) -> None:
+        await write_progress(tenant_id, source_id, generation, done, total)
+
+    try:
+        embeddings = await embed_texts([c.text for c in chunks], progress=on_progress)
+    except Exception as exc:  # noqa: BLE001 - a dead/slow embedding backend is a named exit
+        logger.warning(
+            "knowledge embed failed",
+            extra={"source_id": str(source_id), "generation": generation, "error": str(exc)},
+        )
+        return await _fail(source, version, job, code="embedding_failed", fail_source=True)
+
     for chunk, emb in zip(chunks, embeddings, strict=True):
         db.add(
             KnowledgeChunk(
@@ -217,12 +285,14 @@ async def process_ingestion(
         version.status = "superseded"
         job.stage = "done"
         job.termination_reason = "superseded"
+        await _clear_progress(tenant_id, source_id, generation)
         return "superseded"
     fresh.active_version_id = version.id
     fresh.status = "ready"
     version.activated_at = _now()
     job.stage = "done"
     job.termination_reason = "done"
+    await _clear_progress(tenant_id, source_id, generation)
     logger.info(
         "knowledge ingest done",
         extra={

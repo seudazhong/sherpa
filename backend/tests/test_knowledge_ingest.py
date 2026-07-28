@@ -160,3 +160,86 @@ async def test_ingest_superseded_generation_no_activate() -> None:
             assert src.active_version_id is None
         finally:
             await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_ingest_embedding_failure_is_a_named_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dead or too-slow embedding backend must terminate the job with a named
+    reason — not bubble an exception into arq and retry into the same timeout."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+
+    async def boom(texts: list[str], *, progress: object = None) -> list[list[float]]:
+        raise RuntimeError("embedding backend unreachable")
+
+    monkeypatch.setattr(ki, "embed_texts", boom)
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            node = await drive_svc.upload(
+                s, ctx, parent_id=None, name="doc.md", data=_MD, content_type="text/markdown"
+            )
+            src = await ksvc.create_source(s, ctx, file_id=node.id)
+
+            reason = await ki.process_ingestion(
+                s, tenant_id=ctx.tenant_id, source_id=src.id, generation=1, lease_owner="w1"
+            )
+
+            assert reason == "embedding_failed"
+            src = await ksvc.get_source(s, ctx, source_id=src.id)
+            assert src.status == "failed"
+            assert src.active_version_id is None
+            ver = await s.scalar(
+                select(KnowledgeSourceVersion).where(
+                    KnowledgeSourceVersion.source_id == src.id,
+                    KnowledgeSourceVersion.generation == 1,
+                )
+            )
+            assert ver is not None
+            assert ver.status == "failed" and ver.failure_code == "embedding_failed"
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_failed_rebuild_keeps_the_previous_version_searchable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail-safe: a broken re-index must not take the live index down with it."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            node = await drive_svc.upload(
+                s, ctx, parent_id=None, name="doc.md", data=_MD, content_type="text/markdown"
+            )
+            src = await ksvc.create_source(s, ctx, file_id=node.id)
+            assert (
+                await ki.process_ingestion(
+                    s, tenant_id=ctx.tenant_id, source_id=src.id, generation=1, lease_owner="w1"
+                )
+                == "done"
+            )
+            src = await ksvc.get_source(s, ctx, source_id=src.id)
+            active_v1 = src.active_version_id
+            assert active_v1 is not None
+
+            await ksvc.reindex_source(s, ctx, source_id=src.id)
+            await s.flush()
+
+            async def boom(texts: list[str], *, progress: object = None) -> list[list[float]]:
+                raise RuntimeError("embedding backend unreachable")
+
+            monkeypatch.setattr(ki, "embed_texts", boom)
+            reason = await ki.process_ingestion(
+                s, tenant_id=ctx.tenant_id, source_id=src.id, generation=2, lease_owner="w1"
+            )
+
+            assert reason == "embedding_failed"
+            src = await ksvc.get_source(s, ctx, source_id=src.id)
+            assert src.active_version_id == active_v1  # v1 still serves searches
+        finally:
+            await s.rollback()

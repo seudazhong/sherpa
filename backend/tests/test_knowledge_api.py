@@ -78,3 +78,62 @@ async def test_knowledge_rest_crud() -> None:
 
         gone = await client.get(f"/knowledge/sources/{sid}")
         assert gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_knowledge_batch_add() -> None:
+    """Many Drive files enqueue in ONE round-trip; a bad file is a named per-file
+    failure instead of losing the whole batch."""
+    if not await ping_db() or not await ping_redis():
+        pytest.skip("database or redis not reachable")
+    await _drop_owner()
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        login = await client.post(
+            "/auth/login",
+            json={"email": settings.owner_email, "password": settings.owner_password},
+        )
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
+
+        file_ids = []
+        for name in ("a.md", "b.md", "c.md"):
+            up = await client.post(
+                "/drive/files",
+                data={"name": name},
+                files={"upload": (name, f"# {name}\n\nbody".encode(), "text/markdown")},
+                headers=headers,
+            )
+            assert up.status_code == 201, up.text
+            file_ids.append(up.json()["id"])
+
+        unknown = "00000000-0000-0000-0000-0000000000ff"
+        res = await client.post(
+            "/knowledge/sources/batch",
+            json={"file_ids": [*file_ids, unknown]},
+            headers=headers,
+        )
+        assert res.status_code == 201, res.text
+        body = res.json()
+        assert len(body["added"]) == 3
+        assert [f["file_id"] for f in body["failed"]] == [unknown]
+        assert all(s["status"] == "queued" for s in body["added"])
+        # New honest-progress fields are part of the shape.
+        assert "stage" in body["added"][0] and "progress_total" in body["added"][0]
+
+        # Idempotent: re-adding the same files creates no duplicates.
+        again = await client.post(
+            "/knowledge/sources/batch", json={"file_ids": file_ids}, headers=headers
+        )
+        assert again.status_code == 201
+        listing = await client.get("/knowledge/sources")
+        assert (
+            len([s for s in listing.json() if s["display_name"] in ("a.md", "b.md", "c.md")]) == 3
+        )
+
+        no_csrf = await client.post("/knowledge/sources/batch", json={"file_ids": file_ids})
+        assert no_csrf.status_code == 403
+
+        # Clean up: leaving queued jobs behind lets a live worker keep transacting on
+        # these rows after the test ends (mirrors test_knowledge_rest_crud).
+        for source in body["added"]:
+            await client.delete(f"/knowledge/sources/{source['id']}", headers=headers)

@@ -3400,6 +3400,46 @@ div.run-log {
 .kb-picker-row:last-child {
   border-bottom: none;
 }
+.kb-picker-row.selectable {
+  cursor: pointer;
+}
+.kb-picker-row.selectable:hover {
+  background: var(--surface-2, rgba(0, 0, 0, 0.03));
+}
+.kb-picker-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+.kb-drop {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.kb-drop.over {
+  border-color: var(--accent, #4a7dff);
+  background: var(--surface-2, rgba(74, 125, 255, 0.06));
+}
+.kb-drop-icon {
+  font-size: 22px;
+  line-height: 1;
+  color: var(--muted);
+}
+.kb-drop-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
 .kb-picker-row.folder {
   cursor: pointer;
 }

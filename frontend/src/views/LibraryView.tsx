@@ -41,6 +41,26 @@ const STATUS_LABEL: Record<KnowledgeStatus, string> = {
   deleting: "removing",
 };
 
+// Durable job stages (ADR-036 KB2b) rendered as the honest in-flight label, so a
+// long ingest no longer sits on "queued" for its whole run.
+const STAGE_LABEL: Record<string, string> = {
+  queued: "queued",
+  snapshot: "snapshotting",
+  parse: "parsing",
+  chunk: "chunking",
+  embed: "embedding",
+  activate: "activating",
+};
+
+function progressLabel(s: KnowledgeSource): string {
+  if (!IN_PROGRESS.includes(s.status)) return STATUS_LABEL[s.status];
+  if (s.status === "deleting") return STATUS_LABEL.deleting;
+  const stage = s.stage ? (STAGE_LABEL[s.stage] ?? s.stage) : STATUS_LABEL[s.status];
+  if (s.stage === "embed" && s.progress_total)
+    return `embedding ${s.progress_done ?? 0}/${s.progress_total}`;
+  return stage;
+}
+
 function extLabel(name: string): { label: string; cls: string } {
   const ext = name.includes(".")
     ? (name.split(".").pop() ?? "").toLowerCase()
@@ -102,12 +122,18 @@ export default function LibraryView() {
 
   // Drive picker
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [picked, setPicked] = useState<Record<string, DriveNode>>({});
   const [driveTrail, setDriveTrail] = useState<Crumb[]>([
     { id: null, name: "Drive" },
   ]);
   const [driveQuery, setDriveQuery] = useState("");
   const [driveNodes, setDriveNodes] = useState<DriveNode[]>([]);
   const pickerParent = driveTrail[driveTrail.length - 1];
+
+  // Direct upload (drop files on Knowledge)
+  const [dragging, setDragging] = useState(false);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
+  const pickedNodes = useMemo(() => Object.values(picked), [picked]);
 
   const anyInProgress = useMemo(
     () => sources.some((s) => IN_PROGRESS.includes(s.status)),
@@ -150,22 +176,65 @@ export default function LibraryView() {
     return { processing, stale, failed };
   }, [sources]);
 
-  const addFromDrive = async (node: DriveNode) => {
-    if (!csrf) return;
+  const addFromDrive = async (nodes: DriveNode[]) => {
+    if (!csrf || nodes.length === 0) return;
     setBusy("add");
     try {
-      await api.addKnowledgeSource(csrf, node.id, node.name);
-      setPickerOpen(false);
-      await load();
-    } catch (e) {
-      const status = (e as { status?: number }).status;
-      setError(
-        status === 409
-          ? "That file is already a Knowledge source."
-          : "Could not add that file to Knowledge.",
+      const result = await api.addKnowledgeSources(
+        csrf,
+        nodes.map((n) => n.id),
       );
+      setPickerOpen(false);
+      setPicked({});
+      setError(
+        result.failed.length
+          ? `Added ${result.added.length}; skipped ${result.failed.length} (${[
+              ...new Set(result.failed.map((f) => f.code)),
+            ].join(", ")}).`
+          : null,
+      );
+      await load();
+    } catch {
+      setError("Could not add those files to Knowledge.");
     } finally {
       setBusy(null);
+    }
+  };
+
+  /** Drop files straight onto Knowledge: they are saved to your Drive first (a
+   *  source is always backed by a real Drive file, ADR-036) and then indexed. */
+  const uploadAndIndex = async (files: File[]) => {
+    if (!csrf || files.length === 0) return;
+    setBusy("upload");
+    setError(null);
+    const uploaded: string[] = [];
+    const rejected: string[] = [];
+    try {
+      for (const [i, file] of files.entries()) {
+        setUploadNote(`Uploading ${i + 1}/${files.length} — ${file.name}`);
+        try {
+          const node = await api.driveUpload(csrf, null, file);
+          uploaded.push(node.id);
+        } catch {
+          rejected.push(file.name);
+        }
+      }
+      let skipped = 0;
+      if (uploaded.length) {
+        setUploadNote(`Indexing ${uploaded.length} file(s)…`);
+        const result = await api.addKnowledgeSources(csrf, uploaded);
+        skipped = result.failed.length;
+      }
+      if (rejected.length || skipped)
+        setError(
+          `Uploaded ${uploaded.length}/${files.length}.` +
+            (rejected.length ? ` Failed: ${rejected.join(", ")}.` : "") +
+            (skipped ? ` ${skipped} could not be indexed.` : ""),
+        );
+      await load();
+    } finally {
+      setBusy(null);
+      setUploadNote(null);
     }
   };
 
@@ -255,6 +324,7 @@ export default function LibraryView() {
     setDriveTrail([{ id: null, name: "Drive" }]);
     setDriveQuery("");
     setDriveNodes([]);
+    setPicked({});
     setPickerOpen(true);
   };
 
@@ -360,6 +430,52 @@ export default function LibraryView() {
                 </button>
               </div>
 
+              <section
+                className={"kb-drop" + (dragging ? " over" : "")}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragging(false);
+                  void uploadAndIndex(Array.from(e.dataTransfer.files));
+                }}
+              >
+                <input
+                  id="kb-file-input"
+                  type="file"
+                  multiple
+                  accept=".pdf,.md,.markdown,.txt,.docx"
+                  hidden
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    e.target.value = "";
+                    void uploadAndIndex(files);
+                  }}
+                />
+                <span className="kb-drop-icon" aria-hidden="true">
+                  ⇪
+                </span>
+                <div className="kb-drop-main">
+                  <strong>
+                    {uploadNote ?? "Drop documents here to index them"}
+                  </strong>
+                  <span className="muted small">
+                    PDF · Markdown · DOCX · TXT — saved to your Drive first, then
+                    indexed. Or{" "}
+                    <label htmlFor="kb-file-input" className="kb-linkbtn">
+                      choose files
+                    </label>{" "}
+                    ·{" "}
+                    <button className="kb-linkbtn" onClick={openPicker}>
+                      add from Drive
+                    </button>
+                  </span>
+                </div>
+              </section>
+
               <section className="content-section kb-list">
                 {sources.length === 0 && (
                   <div className="empty-state">
@@ -418,7 +534,7 @@ export default function LibraryView() {
                       </div>
                       <div className="kb-row-actions">
                         <span className={`pill ${STATUS_PILL[s.status]}`}>
-                          {STATUS_LABEL[s.status]}
+                          {progressLabel(s)}
                         </span>
                         <button
                           className="btn btn-quiet todo-action"
@@ -631,7 +747,19 @@ export default function LibraryView() {
                     </span>
                   </button>
                 ) : (
-                  <div className="kb-picker-row" key={node.id}>
+                  <label className="kb-picker-row selectable" key={node.id}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(picked[node.id])}
+                      onChange={() =>
+                        setPicked((p) => {
+                          const next = { ...p };
+                          if (next[node.id]) delete next[node.id];
+                          else next[node.id] = node;
+                          return next;
+                        })
+                      }
+                    />
                     <span
                       className={`kb-ficon ${extLabel(node.name).cls}`}
                       aria-hidden="true"
@@ -639,16 +767,28 @@ export default function LibraryView() {
                       {extLabel(node.name).label}
                     </span>
                     <span className="kb-picker-name">{node.name}</span>
-                    <button
-                      className="btn btn-quiet todo-action"
-                      disabled={busy === "add"}
-                      onClick={() => void addFromDrive(node)}
-                    >
-                      Add
-                    </button>
-                  </div>
+                  </label>
                 ),
               )}
+            </div>
+
+            <div className="kb-picker-foot">
+              <span className="muted small">
+                {pickedNodes.length
+                  ? `${pickedNodes.length} selected`
+                  : "Select one or more files"}
+              </span>
+              <button
+                className="btn btn-primary"
+                disabled={busy === "add" || pickedNodes.length === 0}
+                onClick={() => void addFromDrive(pickedNodes)}
+              >
+                {busy === "add"
+                  ? "Adding…"
+                  : `Add ${pickedNodes.length || ""} source${
+                      pickedNodes.length === 1 ? "" : "s"
+                    }`}
+              </button>
             </div>
           </div>
         </div>
@@ -721,12 +861,12 @@ function SourceDetail({
           <div className="section-head">
             <span>Index status</span>
             <span className={`pill ${STATUS_PILL[source.status]}`}>
-              {STATUS_LABEL[source.status]}
+              {progressLabel(source)}
             </span>
           </div>
           <dl className="kb-kv">
             <dt>Status</dt>
-            <dd>{STATUS_LABEL[source.status]}</dd>
+            <dd>{progressLabel(source)}</dd>
             <dt>Active version</dt>
             <dd>
               {source.active_version

@@ -61,9 +61,7 @@ async def test_knowledge_tools_add_ingest_search() -> None:
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
             cc = CallerContext(tenant_id=tid, user_id=uid, actor="agent")
 
-            await reg.get("drive_write").execute(
-                tctx, {"path": "docs/fin.md", "content": _FIN_MD}
-            )
+            await reg.get("drive_write").execute(tctx, {"path": "docs/fin.md", "content": _FIN_MD})
             added = await reg.get("add_knowledge_source").execute(tctx, {"path": "docs/fin.md"})
             assert "Knowledge" in added.llm_content
 

@@ -1595,6 +1595,9 @@ class KnowledgeSource(StrictModel):
     file_id: UUID | None
     display_name: str
     status: Literal["queued","parsing","chunking","embedding","ready","stale","failed","deleting"]
+    stage: str | None              # live durable job stage while an ingest is in flight
+    progress_done: int | None      # chunks embedded so far (best-effort, Redis-backed)
+    progress_total: int | None     # chunks in this version
     active_version: int | None
     language: str | None
     chunk_count: int
@@ -1604,6 +1607,13 @@ class KnowledgeSource(StrictModel):
 class KnowledgeSourceCreate(StrictModel):
     file_id: UUID                  # an owned Drive file
     display_name: str | None = None
+
+class KnowledgeSourceBatchCreate(StrictModel):
+    file_ids: list[UUID]           # 1..50 owned Drive files
+
+class KnowledgeBatchResult(StrictModel):
+    added: list[KnowledgeSource]
+    failed: list[dict]             # [{"file_id": UUID, "code": str}] — named, per file
 
 class KnowledgeSearchQuery(StrictModel):
     query: str
@@ -1631,6 +1641,7 @@ class KnowledgeSearchResult(StrictModel):
 |---|---|---|---|
 | `GET /knowledge/sources` | none → `list[KnowledgeSource]` | Session | `200`, `401` |
 | `POST /knowledge/sources` | `KnowledgeSourceCreate` → `KnowledgeSource` | Session + CSRF | `201`, `401`, `404`, `409`, `422` |
+| `POST /knowledge/sources/batch` | `KnowledgeSourceBatchCreate` → `KnowledgeBatchResult` | Session + CSRF | `201`, `401`, `422` |
 | `GET /knowledge/sources/{id}` | none → `KnowledgeSource` | Session | `200`, `401`, `404` |
 | `POST /knowledge/sources/{id}/reindex` | none → `KnowledgeSource` | Session + CSRF | `202`, `401`, `404`, `409` |
 | `DELETE /knowledge/sources/{id}` | none → `204` | Session + CSRF | `204`, `401`, `404` |
@@ -1639,6 +1650,15 @@ class KnowledgeSearchResult(StrictModel):
 - `POST /knowledge/sources` requires an **owned** `file_id`; it enqueues a durable
   ingestion job (async — `status` starts `queued`). A duplicate add for the same file
   version is idempotent (`409`/returns the existing source).
+- `POST /knowledge/sources/batch` adds up to 50 owned files in **one** round-trip. Each
+  file is added idempotently and **independently**: an unowned/unknown file yields a
+  named `failed[]` entry rather than losing the batch, so the whole call is `201` even
+  when some files are skipped. Duplicate `file_ids` in one request collapse to one add.
+- `stage` / `progress_done` / `progress_total` are **best-effort telemetry**, present
+  only while an ingest is in flight. Live progress is published to Redis by the worker
+  (never Postgres — the ingest transaction already holds the job row, so an autonomous
+  write would deadlock); it accelerates the UI and is never correctness-critical
+  (ADR-016/017). When it is absent the UI falls back to the coarse `status`.
 - `reindex` bumps `desired_generation` + enqueues a job; the previous `ready` version
   stays searchable until the new one activates (never a half-built index).
 - `DELETE` tombstones the source (immediate retrieval exclusion) then purges

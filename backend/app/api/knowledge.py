@@ -21,13 +21,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import queue
 from app.auth import RequestContext, require_context, require_csrf
 from app.db import get_session
-from app.models import KnowledgeSource, KnowledgeSourceVersion
+from app.models import KnowledgeIngestionJob, KnowledgeSource, KnowledgeSourceVersion
 from app.services import CallerContext, ServiceError
 from app.services import knowledge as svc
+from app.services.knowledge_ingest import read_progress
 from app.services.knowledge_search import search_knowledge
 
 logger = logging.getLogger("app.api.knowledge")
 router = APIRouter(tags=["knowledge"])
+
+# Source statuses that mean "an ingest is in flight" (mirrors the UI's pills).
+_IN_PROGRESS = ("queued", "parsing", "chunking", "embedding", "deleting")
 
 
 def _caller(rc: RequestContext) -> CallerContext:
@@ -43,6 +47,9 @@ class KnowledgeSourceOut(BaseModel):
     file_id: uuid.UUID | None
     display_name: str
     status: str
+    stage: str | None
+    progress_done: int | None
+    progress_total: int | None
     active_version: int | None
     language: str | None
     chunk_count: int
@@ -53,6 +60,22 @@ class KnowledgeSourceOut(BaseModel):
 class KnowledgeSourceCreate(BaseModel):
     file_id: uuid.UUID
     display_name: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+
+
+class KnowledgeSourceBatchCreate(BaseModel):
+    """Add several Drive files in one round-trip (each one is still idempotent)."""
+
+    file_ids: Annotated[list[uuid.UUID], Field(min_length=1, max_length=50)]
+
+
+class KnowledgeBatchFailureOut(BaseModel):
+    file_id: uuid.UUID
+    code: str
+
+
+class KnowledgeBatchResultOut(BaseModel):
+    added: list[KnowledgeSourceOut]
+    failed: list[KnowledgeBatchFailureOut]
 
 
 class KnowledgeSearchQuery(BaseModel):
@@ -92,11 +115,32 @@ async def _source_out(db: AsyncSession, source: KnowledgeSource) -> KnowledgeSou
     active = None
     if source.active_version_id is not None:
         active = await db.get(KnowledgeSourceVersion, (source.tenant_id, source.active_version_id))
+
+    # Honest in-flight detail: the durable job stage plus (while embedding) live counts.
+    stage: str | None = None
+    done: int | None = None
+    total: int | None = None
+    if source.status in _IN_PROGRESS:
+        job = await db.scalar(
+            select(KnowledgeIngestionJob).where(
+                KnowledgeIngestionJob.tenant_id == source.tenant_id,
+                KnowledgeIngestionJob.source_id == source.id,
+                KnowledgeIngestionJob.generation == source.desired_generation,
+            )
+        )
+        stage = job.stage if job else None
+        progress = await read_progress(source.tenant_id, source.id, source.desired_generation)
+        if progress is not None:
+            done, total = progress
+
     return KnowledgeSourceOut(
         id=source.id,
         file_id=source.file_id,
         display_name=source.display_name,
         status=source.status,
+        stage=stage,
+        progress_done=done,
+        progress_total=total,
         active_version=active.generation if active else None,
         language=(active.language if active else (latest.language if latest else None)),
         chunk_count=active.chunk_count if active else 0,
@@ -137,6 +181,27 @@ async def add_source(
         raise _http(e) from None
     await _enqueue(ctx, source)
     return await _source_out(db, source)
+
+
+@router.post("/knowledge/sources/batch", status_code=201)
+async def add_sources_batch(
+    body: KnowledgeSourceBatchCreate,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> KnowledgeBatchResultOut:
+    """Add many Drive files at once. Each file is added idempotently and independently:
+    one unreadable/unowned file yields a named failure instead of losing the batch."""
+    created: list[KnowledgeSource] = []
+    failed: list[KnowledgeBatchFailureOut] = []
+    for file_id in dict.fromkeys(body.file_ids):
+        try:
+            created.append(await svc.create_source(db, _caller(ctx), file_id=file_id))
+        except ServiceError as e:
+            failed.append(KnowledgeBatchFailureOut(file_id=file_id, code=e.code))
+    await db.commit()
+    for source in created:
+        await _enqueue(ctx, source)
+    return KnowledgeBatchResultOut(added=[await _source_out(db, s) for s in created], failed=failed)
 
 
 @router.get("/knowledge/sources/{source_id}")

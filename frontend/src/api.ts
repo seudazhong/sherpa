@@ -406,11 +406,19 @@ export interface KnowledgeSource {
   file_id: string | null;
   display_name: string;
   status: KnowledgeStatus;
+  stage: string | null;
+  progress_done: number | null;
+  progress_total: number | null;
   active_version: number | null;
   language: string | null;
   chunk_count: number;
   failure_code: string | null;
   updated_at: string;
+}
+
+export interface KnowledgeBatchResult {
+  added: KnowledgeSource[];
+  failed: { file_id: string; code: string }[];
 }
 
 export interface KnowledgeHit {
@@ -1113,6 +1121,11 @@ export const api = {
         file_id: fileId,
         ...(displayName ? { display_name: displayName } : {}),
       }),
+    ),
+  addKnowledgeSources: (csrf: string, fileIds: string[]) =>
+    req<KnowledgeBatchResult>(
+      "/knowledge/sources/batch",
+      jsonInit("POST", csrf, { file_ids: fileIds }),
     ),
   reindexKnowledgeSource: (csrf: string, id: string) =>
     req<KnowledgeSource>(

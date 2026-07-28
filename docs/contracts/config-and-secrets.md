@@ -362,6 +362,10 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Embeddings | `EMBEDDING_MODEL` | `str` | `bge-m3` | No | No | Persisted per passage; a change requires re-embedding all passages. |
 | Embeddings | `EMBEDDING_DIM` | `int`, 1–4096 | `1024` | No | No | MUST equal the `memory_passages.embedding` column width. |
 | Embeddings | `EMBEDDING_API_KEY` | `SecretStr` | None | when `openai_compatible` | **Yes** | Only for the external-provider embedding override. |
+| Embeddings | `EMBEDDING_BATCH_SIZE` | `int` ≥ 1 | `32` | No | No | Texts per outbound embedding request. A whole document used to ride on one request. |
+| Embeddings | `EMBEDDING_CONCURRENCY` | `int` ≥ 1 | `3` | No | No | Batches in flight at once (shared connection pool). Raise only if the backend can take it. |
+| Embeddings | `EMBEDDING_MAX_RETRIES` | `int` ≥ 1 | `3` | No | No | Bounded exponential-backoff attempts **per batch**; exhaustion is a named ingest exit (`embedding_failed`). |
+| Embeddings | `EMBEDDING_TIMEOUT_SECONDS` | `int`, 1–600 | `120` | No | No | Per-**batch** timeout, deliberately decoupled from `PROVIDER_TIMEOUT_SECONDS` (a slow CPU embedder is not a slow chat model). |
 | Memory | `MEMORY_AUTOFORM_ENABLED` | `bool` | `false` | No | No | Background memory-formation kill-switch (ADR-032). |
 | Memory | `MEMORY_AUTOFORM_EVERY_TURNS` | `int` ≥ 0 | `0` | No | No | `0` = form on run settle; `N` = every N user turns. |
 | Knowledge | `KNOWLEDGE_TEXT_SEARCH_CONFIG` | `str` | `sherpa_text` | No | No | Postgres TS config name for CJK lexical (ADR-036); query- and index-side tokenizer versions must match. |
@@ -518,6 +522,11 @@ PROVIDER_TIMEOUT_SECONDS=60
 EMBEDDING_KIND=mock
 EMBEDDING_MODEL=bge-m3
 EMBEDDING_DIM=1024
+# Throughput (ADR-032): batches of N, C in flight, bounded retry, per-batch timeout.
+EMBEDDING_BATCH_SIZE=32
+EMBEDDING_CONCURRENCY=3
+EMBEDDING_MAX_RETRIES=3
+EMBEDDING_TIMEOUT_SECONDS=120
 # For EMBEDDING_KIND=ollama (bundled) set the service URL:
 # EMBEDDING_BASE_URL=http://ollama:11434
 # For EMBEDDING_KIND=openai_compatible (external override) also set:

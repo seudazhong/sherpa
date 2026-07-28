@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     embedding_model: str = "bge-m3"
     embedding_dim: int = 1024
     embedding_api_key: str = ""  # only for the openai_compatible external override
+    # Throughput: texts are embedded in batches of `embedding_batch_size`, with
+    # `embedding_concurrency` batches in flight at once and a bounded retry per batch.
+    # The timeout is per batch and deliberately decoupled from the chat provider's
+    # (a whole document used to ride on one request under provider_timeout_seconds).
+    embedding_batch_size: int = 32
+    embedding_concurrency: int = 3
+    embedding_max_retries: int = 3
+    embedding_timeout_seconds: int = 120
 
     # Knowledge base (ADR-036): source-backed document KB (reuses the EMBEDDING_*
     # profile above). CJK lexical search resolves a stable Postgres text-search config
