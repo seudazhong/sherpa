@@ -87,7 +87,16 @@ docker compose -f infra/docker-compose.yml --env-file .env up --build -d
 可选组件：
 
 ```bash
-# 本地嵌入模型（知识库 / 语义记忆需要），并在 .env 设 EMBEDDING_KIND=ollama
+# 本地嵌入模型（知识库 / 语义记忆需要）—— 两种摆法，二选一：
+#
+# (a) 宿主机 ollama（有显卡就用这个）：容器里的 ollama 默认吃不到宿主 GPU，
+#     宿主直装能直接用显卡。宿主上执行 `ollama pull bge-m3`，并让它监听所有网卡
+#     （`OLLAMA_HOST=0.0.0.0` 后重启 ollama —— 默认只绑 127.0.0.1，容器连不上），
+#     然后 .env 里设 EMBEDDING_KIND=ollama、EMBEDDING_BASE_URL=http://host.docker.internal:11434，
+#     不需要起 embeddings profile。
+#
+# (b) 自带 ollama 容器（零配置，纯 CPU）：.env 设 EMBEDDING_KIND=ollama、
+#     EMBEDDING_BASE_URL=http://ollama:11434，首次启动拉 bge-m3 约 1.2 GB。
 docker compose -f infra/docker-compose.yml --env-file .env --profile embeddings up -d
 
 # 可观测：自带 Phoenix，看每次 LLM 调用的完整 prompt（UI http://localhost:6006）

@@ -1,8 +1,10 @@
 """Text embeddings for archival/RAG memory (ADR-032).
 
 Decoupled from the chat provider via the `EMBEDDING_*` config. The default is a
-Sherpa-bundled local model served by an `ollama` container (`bge-m3`, 1024-d),
-keeping personal memory on-box (self-hosted ethos + ADR-019). `EMBEDDING_KIND=mock`
+Sherpa-bundled local model served by an `ollama` container (`bge-m3`, 1024-d) — or,
+with a GPU, the same model served by a host-installed ollama reached over
+`host.docker.internal` — keeping personal memory on-box (self-hosted ethos +
+ADR-019). `EMBEDDING_KIND=mock`
 — the default for offline dev / tests — returns a deterministic hash-based
 pseudo-vector so the pipeline runs without a network call (铁律: no real model
 calls in tests) and identical text always maps to the same vector.

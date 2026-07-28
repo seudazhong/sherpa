@@ -196,6 +196,12 @@ services:
   # memory with `docker compose --profile embeddings up` and set
   # EMBEDDING_KIND=ollama. Pulls bge-m3 (~1.2 GB, 1024-d, multilingual incl. CJK)
   # on first boot; personal memory is embedded on-box and never leaves the machine.
+  # GPU: this container runs bge-m3 on the CPU — reaching the host GPU needs
+  # platform-specific passthrough and is awkward on Docker Desktop. With a GPU,
+  # prefer a host-installed ollama instead: leave this profile off, run the host
+  # daemon with OLLAMA_HOST=0.0.0.0 (the default 127.0.0.1 bind is unreachable from
+  # containers) and set EMBEDDING_BASE_URL=http://host.docker.internal:11434 —
+  # web+worker already carry the host-gateway `extra_hosts` entry.
   ollama:
     image: ollama/ollama:latest
     profiles: ["embeddings"]

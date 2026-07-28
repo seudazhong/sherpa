@@ -358,7 +358,7 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Provider | `PROVIDER_MODEL` | `str` | `mock-v1` | Explicit when real | No | Persisted with generation telemetry. |
 | Provider | `PROVIDER_TIMEOUT_SECONDS` | `int`, 1–600 | `60` | No | No | Whole outbound provider request timeout (applies to all provider kinds). |
 | Embeddings | `EMBEDDING_KIND` | `mock \| ollama \| openai_compatible` | `mock` | `worker` when real | No | Embedding backend; **decoupled** from `PROVIDER_KIND` (ADR-032). |
-| Embeddings | `EMBEDDING_BASE_URL` | `AnyHttpUrl` | None | `worker` when ollama/openai | No | e.g. `http://ollama:11434` (bundled) or an external `/v1` root. |
+| Embeddings | `EMBEDDING_BASE_URL` | `AnyHttpUrl` | None | `worker` when ollama/openai | No | `http://ollama:11434` (bundled CPU container) · `http://host.docker.internal:11434` (host-installed ollama, uses the host GPU; the host daemon must bind `0.0.0.0`) · or an external `/v1` root. |
 | Embeddings | `EMBEDDING_MODEL` | `str` | `bge-m3` | No | No | Persisted per passage; a change requires re-embedding all passages. |
 | Embeddings | `EMBEDDING_DIM` | `int`, 1–4096 | `1024` | No | No | MUST equal the `memory_passages.embedding` column width. |
 | Embeddings | `EMBEDDING_API_KEY` | `SecretStr` | None | when `openai_compatible` | **Yes** | Only for the external-provider embedding override. |
