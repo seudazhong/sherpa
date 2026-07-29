@@ -114,7 +114,12 @@ async def _embed_batch_with_retry(
                 break
             logger.warning(
                 "embedding batch failed, retrying",
-                extra={"attempt": attempt, "attempts": attempts, "error": str(exc)},
+                extra={
+                    "attempt": attempt,
+                    "attempts": attempts,
+                    # str(ReadTimeout) is empty — without the type this logs as "".
+                    "error": f"{type(exc).__name__}: {exc}".rstrip(": "),
+                },
             )
             await asyncio.sleep(delay)
             delay *= 2
@@ -142,24 +147,42 @@ async def embed_texts(
     semaphore = asyncio.Semaphore(concurrency)
     done = 0
     lock = asyncio.Lock()
+    failure: Exception | None = None
 
     async def run(index: int, batch: list[str], client: httpx.AsyncClient) -> None:
-        nonlocal done
+        nonlocal done, failure
         async with semaphore:
-            results[index] = await _embed_batch_with_retry(
-                client, batch, attempts=settings.embedding_max_retries
-            )
+            if failure is not None:
+                return  # another batch already gave up — do not start new work
+            try:
+                results[index] = await _embed_batch_with_retry(
+                    client, batch, attempts=settings.embedding_max_retries
+                )
+            except Exception as exc:  # noqa: BLE001 - recorded, re-raised after gather
+                if failure is None:
+                    failure = exc
+                return
         async with lock:
             done += len(batch)
             embedded = done
         if progress is not None:
             await progress(embedded, total)
 
+    # `return_exceptions=True` is load-bearing: a bare gather propagates the first
+    # failure immediately, which exits the `async with` and closes the client out from
+    # under the batches still in flight — they then fail with "client has been closed"
+    # and burn their retries on a corpse. Let every task settle first, then re-raise the
+    # original error so the caller sees the real cause.
     async with httpx.AsyncClient(
         timeout=settings.embedding_timeout_seconds,
         limits=httpx.Limits(max_connections=concurrency),
     ) as client:
-        await asyncio.gather(*(run(i, batch, client) for i, batch in enumerate(batches)))
+        await asyncio.gather(
+            *(run(i, batch, client) for i, batch in enumerate(batches)),
+            return_exceptions=True,
+        )
+    if failure is not None:
+        raise failure
     return [vector for batch in results for vector in batch]
 
 

@@ -45,6 +45,7 @@ const STATUS_LABEL: Record<KnowledgeStatus, string> = {
 // long ingest no longer sits on "queued" for its whole run.
 const STAGE_LABEL: Record<string, string> = {
   queued: "queued",
+  claiming: "starting",
   snapshot: "snapshotting",
   parse: "parsing",
   chunk: "chunking",

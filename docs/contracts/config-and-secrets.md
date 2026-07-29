@@ -362,10 +362,14 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Embeddings | `EMBEDDING_MODEL` | `str` | `bge-m3` | No | No | Persisted per passage; a change requires re-embedding all passages. |
 | Embeddings | `EMBEDDING_DIM` | `int`, 1–4096 | `1024` | No | No | MUST equal the `memory_passages.embedding` column width. |
 | Embeddings | `EMBEDDING_API_KEY` | `SecretStr` | None | when `openai_compatible` | **Yes** | Only for the external-provider embedding override. |
-| Embeddings | `EMBEDDING_BATCH_SIZE` | `int` ≥ 1 | `32` | No | No | Texts per outbound embedding request. A whole document used to ride on one request. |
+| Embeddings | `EMBEDDING_BATCH_SIZE` | `int` ≥ 1 | `16` | No | No | Texts per outbound embedding request. Parallelism comes from concurrent *requests*, not batch size, so on the default local CPU ollama a smaller batch costs ~nothing and buys much finer progress + cheaper retries. Raise it for a GPU/cloud endpoint. |
 | Embeddings | `EMBEDDING_CONCURRENCY` | `int` ≥ 1 | `3` | No | No | Batches in flight at once (shared connection pool). Raise only if the backend can take it. |
 | Embeddings | `EMBEDDING_MAX_RETRIES` | `int` ≥ 1 | `3` | No | No | Bounded exponential-backoff attempts **per batch**; exhaustion is a named ingest exit (`embedding_failed`). |
-| Embeddings | `EMBEDDING_TIMEOUT_SECONDS` | `int`, 1–600 | `120` | No | No | Per-**batch** timeout, deliberately decoupled from `PROVIDER_TIMEOUT_SECONDS` (a slow CPU embedder is not a slow chat model). |
+| Embeddings | `EMBEDDING_TIMEOUT_SECONDS` | `int`, 1–600 | `300` | No | No | Per-**batch** timeout, deliberately decoupled from `PROVIDER_TIMEOUT_SECONDS` (a slow CPU embedder is not a slow chat model). |
+| Knowledge | `KNOWLEDGE_INGEST_JOB_TIMEOUT_SECONDS` | `int` ≥ 60 | `3600` | No | No | arq job timeout for one ingest. **Must be set explicitly** — arq's 300 s default silently killed book-length sources mid-embed. |
+| Knowledge | `KNOWLEDGE_INGEST_LEASE_MARGIN_SECONDS` | `int` ≥ 0 | `300` | No | No | Lease = job timeout + this. The lease MUST outlive the timeout so a killed job is not instantly re-dispatched on top of itself. |
+| Knowledge | `KNOWLEDGE_INGEST_MAX_ATTEMPTS` | `int` ≥ 1 | `3` | No | No | Durable attempt bound; exhaustion is the named exit `too_many_attempts`. |
+| Knowledge | `KNOWLEDGE_MAX_CHUNKS` | `int` ≥ 1 | `8000` | No | No | Per-version chunk cap; over it the source fails as `document_too_large` instead of re-burning the job timeout. |
 | Memory | `MEMORY_AUTOFORM_ENABLED` | `bool` | `false` | No | No | Background memory-formation kill-switch (ADR-032). |
 | Memory | `MEMORY_AUTOFORM_EVERY_TURNS` | `int` ≥ 0 | `0` | No | No | `0` = form on run settle; `N` = every N user turns. |
 | Knowledge | `KNOWLEDGE_TEXT_SEARCH_CONFIG` | `str` | `sherpa_text` | No | No | Postgres TS config name for CJK lexical (ADR-036); query- and index-side tokenizer versions must match. |

@@ -11,7 +11,7 @@ import logging
 import uuid
 from typing import Any
 
-from arq import cron
+from arq import cron, func
 from arq.connections import RedisSettings
 from sqlalchemy import select
 
@@ -598,15 +598,33 @@ async def knowledge_ingest_job(
 ) -> str:
     """Process one durable knowledge ingestion job (ADR-036 KB2b): snapshot → parse →
     chunk → embed + fts → generation-fenced activate. Re-entrant; the job/version rows
-    are the recovery source of truth."""
+    are the recovery source of truth.
+
+    The claim is a SEPARATE, committed transaction: the processing transaction commits
+    only at the end, so if this job is killed (arq timeout on a book-length source) its
+    `attempt`/lease would roll back and the recovery tick would re-dispatch it forever.
+    """
     from app.services import knowledge_ingest as ki
+
+    tid, sid, gen = uuid.UUID(tenant_id), uuid.UUID(source_id), int(generation)
+    async with SessionLocal() as session:
+        claim = await ki.claim_job(
+            session, tenant_id=tid, source_id=sid, generation=gen, lease_owner=worker_identity()
+        )
+        await session.commit()
+    if claim != "claimed":
+        logger.info(
+            "knowledge ingest job not claimed",
+            extra={"source_id": source_id, "generation": generation, "reason": claim},
+        )
+        return claim
 
     async with SessionLocal() as session:
         reason = await ki.process_ingestion(
             session,
-            tenant_id=uuid.UUID(tenant_id),
-            source_id=uuid.UUID(source_id),
-            generation=int(generation),
+            tenant_id=tid,
+            source_id=sid,
+            generation=gen,
             lease_owner=worker_identity(),
         )
         await session.commit()
@@ -697,7 +715,16 @@ class WorkerSettings:
         sync_and_analyze_job,
         approval_resume_job,
         agent_task_dispatch_job,
-        knowledge_ingest_job,
+        # A book-length source legitimately runs for minutes; arq's 300s default
+        # killed it mid-embed. `max_tries=1` because retries are OUR job: the durable
+        # attempt counter + recovery tick bound them and name the give-up reason
+        # (arq retrying on top would multiply the work).
+        func(
+            knowledge_ingest_job,
+            name="knowledge_ingest_job",
+            timeout=settings.knowledge_ingest_job_timeout_seconds,
+            max_tries=1,
+        ),
         project_import_job,
     ]
     cron_jobs = [

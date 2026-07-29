@@ -36,9 +36,18 @@ from app.services.context import CallerContext
 
 logger = logging.getLogger("app.knowledge.ingest")
 
-_LEASE_SECONDS = 600
 _PROGRESS_TTL_SECONDS = 3600
 _TS_CONFIG_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def _lease_seconds() -> int:
+    """The lease MUST outlive the arq job timeout: if a job is killed at the timeout,
+    its (already committed) lease should still be held for a moment so the recovery
+    tick does not immediately pile a second attempt on top of the first."""
+    return (
+        settings.knowledge_ingest_job_timeout_seconds
+        + settings.knowledge_ingest_lease_margin_seconds
+    )
 
 
 def _progress_key(tenant_id: uuid.UUID, source_id: uuid.UUID, generation: int) -> str:
@@ -182,6 +191,46 @@ async def _populate_fts(db: AsyncSession, tenant_id: uuid.UUID, version_id: uuid
         logger.warning("knowledge fts skipped (sherpa_text unavailable): %s", exc)
 
 
+async def claim_job(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    source_id: uuid.UUID,
+    generation: int,
+    lease_owner: str,
+) -> str:
+    """Durably claim one ingestion job. The caller MUST commit this before starting the
+    long work.
+
+    This exists because `process_ingestion` runs as a single transaction that only
+    commits at the very end: when the job is killed part-way (e.g. the arq job timeout
+    on a book-length source) that transaction rolls back, taking `attempt` and
+    `lease_expires_at` with it. The job then looks pristine (`stage='queued'`,
+    `lease_expires_at IS NULL`) to `recover_stuck_jobs`, which re-dispatches it every
+    tick — an unbounded retry loop with no attempt accounting, violating "bound every
+    loop; every exit has a named reason". Committing the claim separately makes the
+    attempt count monotonic and the lease real.
+    """
+    loaded = await _load(db, tenant_id, source_id, generation)
+    if loaded is None:
+        return "missing"
+    source, version, job = loaded
+    if job.stage in ("done", "failed"):
+        return f"already_{job.stage}"
+    if source.tombstoned_at is not None or source.desired_generation != generation:
+        version.status = "superseded"
+        job.stage = "done"
+        job.termination_reason = "superseded"
+        return "superseded"
+    if job.attempt >= settings.knowledge_ingest_max_attempts:
+        return await _fail(source, version, job, code="too_many_attempts", fail_source=True)
+    job.attempt += 1
+    job.lease_owner = lease_owner
+    job.lease_expires_at = _now() + datetime.timedelta(seconds=_lease_seconds())
+    job.stage = "claiming"
+    return "claimed"
+
+
 async def process_ingestion(
     db: AsyncSession,
     *,
@@ -190,7 +239,11 @@ async def process_ingestion(
     generation: int,
     lease_owner: str,
 ) -> str:
-    """Run one ingestion job to a named terminal reason. Caller commits."""
+    """Run one ingestion job to a named terminal reason. Caller commits.
+
+    `claim_job` must already have run and been committed (the worker does this); the
+    attempt counter lives there so it survives this transaction being rolled back.
+    """
     loaded = await _load(db, tenant_id, source_id, generation)
     if loaded is None:
         return "missing"
@@ -198,10 +251,9 @@ async def process_ingestion(
     if job.stage in ("done", "failed"):
         return f"already_{job.stage}"
 
-    # Claim + early generation fence.
+    # Re-take the lease and re-check the fence inside this transaction.
     job.lease_owner = lease_owner
-    job.lease_expires_at = _now() + datetime.timedelta(seconds=_LEASE_SECONDS)
-    job.attempt += 1
+    job.lease_expires_at = _now() + datetime.timedelta(seconds=_lease_seconds())
     if source.tombstoned_at is not None or source.desired_generation != generation:
         version.status = "superseded"
         job.stage = "done"
@@ -245,6 +297,18 @@ async def process_ingestion(
     )
     if not chunks:
         return await _fail(source, version, job, code="empty_document", fail_source=True)
+    if len(chunks) > settings.knowledge_max_chunks:
+        # Bound the work a single job may take on. Without this a pathologically large
+        # source can only ever exhaust the job timeout, attempt after attempt.
+        logger.warning(
+            "knowledge document exceeds the chunk cap",
+            extra={
+                "source_id": str(source_id),
+                "chunks": len(chunks),
+                "cap": settings.knowledge_max_chunks,
+            },
+        )
+        return await _fail(source, version, job, code="document_too_large", fail_source=True)
 
     # Embed + write chunks (idempotent rebuild for this version).
     job.stage = "embed"

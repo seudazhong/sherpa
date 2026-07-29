@@ -41,10 +41,15 @@ class Settings(BaseSettings):
     # `embedding_concurrency` batches in flight at once and a bounded retry per batch.
     # The timeout is per batch and deliberately decoupled from the chat provider's
     # (a whole document used to ride on one request under provider_timeout_seconds).
-    embedding_batch_size: int = 32
+    # Batch size trades granularity for request efficiency: parallelism comes from
+    # concurrent *requests*, not from batch size, so on the default local CPU ollama a
+    # smaller batch costs almost nothing (HTTP overhead is microseconds against seconds
+    # of inference) and buys far more frequent progress plus cheaper retries. Raise it
+    # for a GPU or a cloud endpoint, which do benefit from bigger batches.
+    embedding_batch_size: int = 16
     embedding_concurrency: int = 3
     embedding_max_retries: int = 3
-    embedding_timeout_seconds: int = 120
+    embedding_timeout_seconds: int = 300
 
     # Knowledge base (ADR-036): source-backed document KB (reuses the EMBEDDING_*
     # profile above). CJK lexical search resolves a stable Postgres text-search config
@@ -58,6 +63,15 @@ class Settings(BaseSettings):
     knowledge_retrieval_k: int = 6
     knowledge_retrieval_min_score: float = 0.35  # vector cosine-similarity floor (0..1)
     knowledge_evidence_retention_days: int = 30
+    # A book-length source is legitimate but long-running. The arq job timeout must
+    # bound it explicitly (arq's 300s default silently killed mid-embed), the lease
+    # must outlive that timeout so a killed job is not instantly re-dispatched, and
+    # attempts must be bounded so a permanently-too-slow source fails by name instead
+    # of looping forever.
+    knowledge_ingest_job_timeout_seconds: int = 3600
+    knowledge_ingest_lease_margin_seconds: int = 300
+    knowledge_ingest_max_attempts: int = 3
+    knowledge_max_chunks: int = 8000
 
     # Object storage for personal files (ADR-012). "memory" keeps dev/tests
     # offline; "minio" targets an S3-compatible MinIO service.

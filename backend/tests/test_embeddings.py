@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import httpx
 import pytest
 
 from app.memory import embeddings
@@ -149,3 +150,60 @@ async def test_mock_kind_stays_offline_and_deterministic() -> None:
 
 async def _no_sleep(_seconds: float) -> None:
     return None
+
+
+@pytest.mark.asyncio
+async def test_one_failing_batch_does_not_poison_the_others(
+    remote: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare `gather` propagates the first failure immediately, which exits the
+    `async with` and closes the HTTP client while sibling batches are still in flight;
+    those then die with "client has been closed" and burn their retries on a corpse.
+    Every task must settle, and the caller must see the ORIGINAL error."""
+    monkeypatch.setattr(embeddings.asyncio, "sleep", _no_sleep)
+    started = 0
+    closed_client_errors = 0
+
+    async def batch(client: Any, texts: list[str]) -> list[list[float]]:
+        nonlocal started, closed_client_errors
+        started += 1
+        if client is not None and client.is_closed:
+            closed_client_errors += 1
+            raise RuntimeError("Cannot send a request, as the client has been closed.")
+        if texts[0] == "doomed":
+            raise TimeoutError("the real cause")
+        await asyncio.sleep(0)
+        return [[1.0] for _ in texts]
+
+    monkeypatch.setattr(embeddings, "_embed_batch", batch)
+    monkeypatch.setattr(embeddings.settings, "embedding_batch_size", 1)
+    monkeypatch.setattr(embeddings.settings, "embedding_concurrency", 2)
+
+    with pytest.raises(TimeoutError, match="the real cause"):
+        await embeddings.embed_texts(["ok1", "doomed", "ok2", "ok3", "ok4"])
+
+    assert closed_client_errors == 0, "the client was closed while batches were running"
+    # After a hard failure no NEW batch work is started (fail fast, don't grind on).
+    assert started < 5 + 1
+
+
+@pytest.mark.asyncio
+async def test_retry_log_names_the_exception_type(
+    remote: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`str(httpx.ReadTimeout())` is empty, so logging only the message produced
+    `error: ""` — useless when diagnosing a slow embedding backend."""
+    import logging
+
+    monkeypatch.setattr(embeddings.asyncio, "sleep", _no_sleep)
+
+    async def timing_out(client: Any, texts: list[str]) -> list[list[float]]:
+        raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr(embeddings, "_embed_batch", timing_out)
+
+    with caplog.at_level(logging.WARNING, logger="app.memory.embeddings"):
+        with pytest.raises(httpx.ReadTimeout):
+            await embeddings.embed_texts(["a"])
+
+    assert any("ReadTimeout" in getattr(r, "error", "") for r in caplog.records)

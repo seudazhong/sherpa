@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import SessionLocal, ping_db
 from app.models import (
     KnowledgeChunk,
@@ -266,3 +267,112 @@ async def test_progress_is_published_and_cleared() -> None:
 
     await ki._clear_progress(tenant_id, source_id, 1)
     assert await ki.read_progress(tenant_id, source_id, 1) is None
+
+
+@pytest.mark.asyncio
+async def test_claim_is_durable_and_bounds_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The claim must be committable on its own: `process_ingestion` only commits at the
+    very end, so a job killed mid-run (arq timeout on a book-length source) would roll
+    its attempt/lease back and be re-dispatched forever."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    from app.models import KnowledgeIngestionJob
+
+    monkeypatch.setattr(settings, "knowledge_ingest_max_attempts", 2)
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            node = await drive_svc.upload(
+                s, ctx, parent_id=None, name="doc.md", data=_MD, content_type="text/markdown"
+            )
+            src = await ksvc.create_source(s, ctx, file_id=node.id)
+
+            assert (
+                await ki.claim_job(
+                    s, tenant_id=ctx.tenant_id, source_id=src.id, generation=1, lease_owner="w1"
+                )
+                == "claimed"
+            )
+            job = await s.scalar(
+                select(KnowledgeIngestionJob).where(KnowledgeIngestionJob.source_id == src.id)
+            )
+            assert job is not None
+            assert job.attempt == 1
+            assert job.lease_expires_at is not None  # a real lease, not NULL
+            assert job.stage == "claiming"
+
+            # A second attempt is allowed, a third is not.
+            assert (
+                await ki.claim_job(
+                    s, tenant_id=ctx.tenant_id, source_id=src.id, generation=1, lease_owner="w1"
+                )
+                == "claimed"
+            )
+            assert job.attempt == 2
+            reason = await ki.claim_job(
+                s, tenant_id=ctx.tenant_id, source_id=src.id, generation=1, lease_owner="w1"
+            )
+
+            assert reason == "too_many_attempts"
+            assert job.stage == "failed" and job.termination_reason == "too_many_attempts"
+            src = await ksvc.get_source(s, ctx, source_id=src.id)
+            assert src.status == "failed"
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_a_leased_job_is_not_redispatched() -> None:
+    """The dogpile guard: recovery must skip a job whose lease is still held, or every
+    tick piles another concurrent run onto the same slow source."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            node = await drive_svc.upload(
+                s, ctx, parent_id=None, name="doc.md", data=_MD, content_type="text/markdown"
+            )
+            src = await ksvc.create_source(s, ctx, file_id=node.id)
+            await s.flush()
+
+            # Unclaimed (lease NULL) => recoverable.
+            assert any(sid == src.id for _, sid, _ in await ki.recover_stuck_jobs(s))
+
+            await ki.claim_job(
+                s, tenant_id=ctx.tenant_id, source_id=src.id, generation=1, lease_owner="w1"
+            )
+            await s.flush()
+
+            # Claimed with a live lease => NOT recoverable.
+            assert not any(sid == src.id for _, sid, _ in await ki.recover_stuck_jobs(s))
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_oversized_document_fails_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A source too big to ever finish must fail with a named reason, not burn the job
+    timeout on every attempt."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    monkeypatch.setattr(settings, "knowledge_max_chunks", 1)
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            node = await drive_svc.upload(
+                s, ctx, parent_id=None, name="big.md", data=_MD, content_type="text/markdown"
+            )
+            src = await ksvc.create_source(s, ctx, file_id=node.id)
+
+            reason = await ki.process_ingestion(
+                s, tenant_id=ctx.tenant_id, source_id=src.id, generation=1, lease_owner="w1"
+            )
+
+            assert reason == "document_too_large"
+            src = await ksvc.get_source(s, ctx, source_id=src.id)
+            assert src.status == "failed" and src.active_version_id is None
+        finally:
+            await s.rollback()
