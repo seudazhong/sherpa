@@ -149,6 +149,7 @@ async def create_provider(
     api_key: str,
     base_url: str | None = None,
     default_model: str | None = None,
+    supports_vision: bool = True,
 ) -> ModelProvider:
     """Create + AEAD-seal a model source. The first source an owner adds becomes the
     global default. Duplicate ``display_name`` ⇒ 409. Caller commits."""
@@ -176,6 +177,7 @@ async def create_provider(
         enabled=True,
         is_default=existing_any is None,  # first source is the default
         status="pending",
+        supports_vision=supports_vision,
     )
     _apply_seal(p, api_key.strip())
     db.add(p)
@@ -194,6 +196,7 @@ async def update_provider(
     api_key: str | None = None,
     default_model: str | None = None,
     enabled: bool | None = None,
+    supports_vision: bool | None = None,
 ) -> ModelProvider:
     """Patch a source (re-seal the key when ``api_key`` is present). Caller commits."""
     uid = _require_user(ctx)
@@ -210,6 +213,8 @@ async def update_provider(
         p.default_model = default_model.strip() or None
     if enabled is not None:
         p.enabled = enabled
+    if supports_vision is not None:
+        p.supports_vision = supports_vision
     if api_key is not None:
         if not api_key.strip():
             raise Invalid("api_key cannot be empty")
@@ -312,6 +317,9 @@ class SessionModelState:
     effective_provider_name: str | None
     effective_kind: str
     effective_model: str
+    # ADR-043: may the effective source be sent image content? The env fallback is
+    # treated as capable; a configured source is whatever the owner declared.
+    supports_vision: bool = True
 
 
 async def get_session_model(
@@ -345,6 +353,7 @@ async def get_session_model_state(
                 effective_provider_name=provider.display_name,
                 effective_kind=provider.kind,
                 effective_model=effective_model,
+                supports_vision=provider.supports_vision,
             )
     # No usable configured source ⇒ the env provider, exactly like provider_for_session().
     env_mock = settings.provider_kind == "mock"
@@ -417,6 +426,20 @@ async def resolve_for_session(
         if p is not None:
             return p, p.default_model
     return None
+
+
+async def session_supports_vision(
+    db: AsyncSession, *, tenant_id: uuid.UUID, session_id: uuid.UUID | None
+) -> bool:
+    """May the source that will serve this run be sent image content (ADR-043)?
+
+    Same precedence as :func:`provider_for_session`; the env fallback (no configured
+    source, or one whose key cannot be opened) is treated as capable — the owner can
+    only declare the flag on sources they configured."""
+    sel = await resolve_for_session(db, tenant_id=tenant_id, session_id=session_id)
+    if sel is None:
+        return True
+    return bool(sel[0].supports_vision)
 
 
 async def provider_for_session(

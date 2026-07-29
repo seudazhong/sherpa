@@ -19,8 +19,10 @@ from app import queue
 from app.api.schemas import PromptAdmission, PromptRequest
 from app.auth import RequestContext, require_csrf
 from app.core.admission import PromptConflict, admit_prompt
+from app.core.attachments import AttachmentRef
 from app.db import get_session
 from app.models import Session as SessionModel
+from app.services import ServiceError
 
 router = APIRouter()
 
@@ -49,7 +51,14 @@ async def post_prompt(
             user_id=ctx.user_id,
             client_message_id=body.client_message_id,
             text=body.text,
+            attachments=[
+                AttachmentRef(drive_node_id=a.drive_node_id, version=a.version)
+                for a in body.attachments
+            ],
         )
+    except ServiceError as e:
+        await db.rollback()
+        raise HTTPException(status_code=e.http_status, detail=e.code) from None
     except PromptConflict:
         await db.rollback()
         raise HTTPException(

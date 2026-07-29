@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import (
+    MessageAttachment,
     MessagePage,
     PublicMessage,
     PublicMessagePart,
@@ -34,6 +35,7 @@ from app.api.schemas import (
     SessionTitleUpdate,
 )
 from app.auth import RequestContext, require_context, require_csrf
+from app.core.attachments import ATTACHMENT_KINDS, from_payload
 from app.db import get_session
 from app.models import EventJournal, Message, Part
 from app.models import Session as SessionModel
@@ -252,6 +254,22 @@ async def _hydrate(
             .all()
         )
         for p in parts:
+            if p.kind in ATTACHMENT_KINDS:
+                att = from_payload(p.kind, p.content_redacted)
+                parts_by_msg.setdefault(p.message_id, []).append(
+                    PublicMessagePart(
+                        kind=p.kind,  # type: ignore[arg-type]
+                        text=att.name,
+                        attachment=MessageAttachment(
+                            drive_node_id=att.drive_node_id,
+                            version=att.version,
+                            name=att.name,
+                            content_type=att.content_type,
+                            size_bytes=att.size_bytes,
+                        ),
+                    )
+                )
+                continue
             parts_by_msg.setdefault(p.message_id, []).append(
                 PublicMessagePart(kind=p.kind, text=str(p.content_redacted.get("text", "")))  # type: ignore[arg-type]
             )

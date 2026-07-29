@@ -37,6 +37,7 @@ from app.permissions.grants import find_matching_grant
 from app.providers import Finish, Provider, TextDelta, ToolCall
 from app.services import CallerContext
 from app.services import memory as memory_service
+from app.services.model_providers import session_supports_vision
 from app.tools import FULL, ToolContext, ToolError, ToolRegistry, bound_text, spill_output
 
 logger = logging.getLogger("app.core.loop")
@@ -470,7 +471,14 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
     )
     await _touch_session_activity(session, tenant_id, session_id)
 
-    transcript = await assemble_provider_history(session, tenant_id, session_id)
+    transcript = await assemble_provider_history(
+        session,
+        tenant_id,
+        session_id,
+        supports_vision=await session_supports_vision(
+            session, tenant_id=tenant_id, session_id=session_id
+        ),
+    )
     core_memory = await _load_core_memory(session, tenant_id, decider_user_id)
     # Layered system message (docs/04): global prefix → per-user memory → per-session
     # ambient context. Ordering is by how widely each layer is shared, so the cacheable

@@ -40,6 +40,7 @@ class ModelProvider(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, server_default="false")
     status: Mapped[str] = mapped_column(Text, server_default="pending")
     last_error_redacted: Mapped[str | None] = mapped_column(Text)
+    supports_vision: Mapped[bool] = mapped_column(Boolean, server_default="true")
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

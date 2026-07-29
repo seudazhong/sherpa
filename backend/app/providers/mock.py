@@ -9,11 +9,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 
 from app.providers.base import Finish, Message, ProviderEvent, TextDelta, ToolSchema
+from app.providers.content import flatten_text
 
 
 def _default_turn(messages: list[Message]) -> list[ProviderEvent]:
     last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
-    text = f"echo: {last_user['content']}" if last_user is not None else "ready"
+    # Multimodal turns arrive as a content array (ADR-043); echo their text rendering.
+    text = f"echo: {flatten_text(last_user['content'])}" if last_user is not None else "ready"
     return [TextDelta(str(text)), Finish("stop")]
 
 

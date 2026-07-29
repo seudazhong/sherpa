@@ -121,3 +121,43 @@ async def test_drive_files_migrated_visible() -> None:
         dl = await client.get(f"/files/{fid}/content")
         assert dl.status_code == 200
         assert dl.content == b"legacy bytes"
+
+
+@pytest.mark.asyncio
+async def test_upload_filename_with_path_is_stored_as_base_name() -> None:
+    """A directory-picked upload sends its RELATIVE PATH as the multipart filename.
+
+    ADR-042 expands folders client-side, so the browser posts
+    `filename="demo/notes/deep.txt"`; the server must store the base name instead of
+    rejecting the name for containing a separator (the 422 found in the B-5 human lane).
+    """
+    if not await ping_db() or not await ping_redis():
+        pytest.skip("database or redis not reachable")
+    await _drop_owner()
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        login = await client.post(
+            "/auth/login",
+            json={"email": settings.owner_email, "password": settings.owner_password},
+        )
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
+        folder = await client.post("/drive/folders", json={"name": "demo"}, headers=headers)
+        folder_id = folder.json()["id"]
+
+        posix = await client.post(
+            "/drive/files",
+            data={"parent_id": folder_id},
+            files={"upload": ("demo/notes/deep.txt", b"nested", "text/plain")},
+            headers=headers,
+        )
+        assert posix.status_code == 201, posix.text
+        assert posix.json()["name"] == "deep.txt"
+
+        windows = await client.post(
+            "/drive/files",
+            data={"parent_id": folder_id},
+            files={"upload": (r"demo\notes\win.txt", b"nested", "text/plain")},
+            headers=headers,
+        )
+        assert windows.status_code == 201, windows.text
+        assert windows.json()["name"] == "win.txt"

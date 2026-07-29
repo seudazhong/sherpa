@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type FormEvent,
 } from "react";
 import ReactMarkdown from "react-markdown";
@@ -11,8 +12,10 @@ import remarkGfm from "remark-gfm";
 
 import {
   api,
+  driveDownloadUrl,
   eventsUrl,
   type AppMeta,
+  type DriveNode,
   type PendingApproval,
   type ProjectContext,
   type SessionSummary,
@@ -22,12 +25,22 @@ import { useAuth } from "../auth";
 import { ChangeReview } from "../components/ChangeReview";
 import { ModelSwitcher } from "../components/ModelSwitcher";
 import Sidebar from "../components/Sidebar";
+import {
+  MAX_ATTACHMENTS,
+  attachmentErrorText,
+  fmtBytes,
+  isImage,
+  toAttachment,
+  uploadToChatFolder,
+  type Attachment,
+} from "../lib/chatAttachments";
 
 interface Bubble {
   key: string;
   role: "user" | "assistant";
   text: string;
   noEvidence?: boolean;
+  attachments?: Attachment[];
 }
 
 interface Citation {
@@ -306,6 +319,13 @@ export default function ChatView() {
   const [error, setError] = useState<string | null>(null);
   const [meta, setMeta] = useState<AppMeta | null>(null);
   const [cites, setCites] = useState<Record<string, Citation>>({});
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attaching, setAttaching] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerNodes, setPickerNodes] = useState<DriveNode[]>([]);
+  const [pickerQuery, setPickerQuery] = useState("");
+  const [visionOk, setVisionOk] = useState(true);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const insufficientRef = useRef(false);
   const esRef = useRef<EventSource | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -514,11 +534,21 @@ export default function ChatView() {
         mp.items.map((m) => ({
           key: m.id,
           role: m.role,
-          text: m.parts.map((p) => p.text).join(" "),
+          text: m.parts
+            .filter((p) => !p.attachment)
+            .map((p) => p.text)
+            .join(" "),
+          attachments: m.parts
+            .map((p) => p.attachment)
+            .filter((a): a is Attachment => !!a),
         })),
       );
       openStream(sid, mp.event_cursor);
       void backfillCitations(sid);
+      void api
+        .getSessionModel(sid)
+        .then((s) => setVisionOk(s.supports_vision))
+        .catch(() => setVisionOk(true));
       void api
         .projectContext(sid)
         .then((pc) => {
@@ -631,14 +661,79 @@ export default function ChatView() {
     }
   };
 
+  const addAttachments = async (files: File[]) => {
+    if (!csrf || files.length === 0) return;
+    const room = MAX_ATTACHMENTS - attachments.length;
+    if (room <= 0) {
+      setError(`You can attach at most ${MAX_ATTACHMENTS} files per message.`);
+      return;
+    }
+    setAttaching(true);
+    setError(null);
+    try {
+      for (const file of files.slice(0, room)) {
+        const att = await uploadToChatFolder(csrf, file);
+        setAttachments((a) => [...a, att]);
+      }
+    } catch (e) {
+      setError(attachmentErrorText(e));
+    } finally {
+      setAttaching(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const onPaste = (e: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addAttachments(files);
+  };
+
+  const openPicker = async () => {
+    setPickerOpen(true);
+    try {
+      const page = await api.driveList({ limit: 200 });
+      setPickerNodes(page.items.filter((n) => n.node_type === "file"));
+    } catch {
+      setError("Could not load your Drive.");
+    }
+  };
+
+  const pickFromDrive = async (query: string) => {
+    try {
+      const page = query.trim()
+        ? await api.driveList({ query: query.trim(), limit: 100 })
+        : await api.driveList({ limit: 200 });
+      setPickerNodes(page.items.filter((n) => n.node_type === "file"));
+    } catch {
+      setError("Could not search your Drive.");
+    }
+  };
+
   const send = async (e: FormEvent) => {
     e.preventDefault();
     const text = draft.trim();
     if (!text || !sessionId || !csrf) return;
+    const sent = attachments;
     setDraft("");
-    setBubbles((b) => [...b, { key: crypto.randomUUID(), role: "user", text }]);
+    setAttachments([]);
+    setBubbles((b) => [
+      ...b,
+      {
+        key: crypto.randomUUID(),
+        role: "user",
+        text,
+        attachments: sent,
+      },
+    ]);
     try {
-      await api.prompt(csrf, sessionId, text);
+      await api.prompt(
+        csrf,
+        sessionId,
+        text,
+        sent.map((a) => ({ drive_node_id: a.drive_node_id, version: a.version })),
+      );
     } catch {
       setError("Failed to send message.");
     }
@@ -789,7 +884,43 @@ export default function ChatView() {
           {bubbles.map((m) =>
             m.role === "user" ? (
               <article className="msg me" key={m.key}>
-                <div className="bubble-user">{m.text}</div>
+                <div className="bubble-user">
+                  {m.attachments && m.attachments.length > 0 && (
+                    <div className="msg-attachments">
+                      {m.attachments.map((a) =>
+                        isImage(a.content_type) ? (
+                          <a
+                            key={a.drive_node_id + a.version}
+                            href={driveDownloadUrl(a.drive_node_id)}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <img
+                              className="msg-attachment-thumb"
+                              src={driveDownloadUrl(a.drive_node_id)}
+                              alt={a.name}
+                            />
+                          </a>
+                        ) : (
+                          <a
+                            className="attachment-chip static"
+                            key={a.drive_node_id + a.version}
+                            href={driveDownloadUrl(a.drive_node_id)}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <span aria-hidden="true">▤</span>
+                            {a.name}
+                            <span className="muted">
+                              {fmtBytes(a.size_bytes)}
+                            </span>
+                          </a>
+                        ),
+                      )}
+                    </div>
+                  )}
+                  {m.text}
+                </div>
                 <div className="who" aria-hidden="true">
                   {(email ?? "?").slice(0, 1).toUpperCase()}
                 </div>
@@ -893,11 +1024,53 @@ export default function ChatView() {
 
         <form className="composer" onSubmit={send}>
           <div className="composer-shell">
+            {attachments.length > 0 && (
+              <div className="composer-attachments">
+                {attachments.map((a) => (
+                  <span className="attachment-chip" key={a.drive_node_id}>
+                    {isImage(a.content_type) ? (
+                      <img
+                        className="attachment-chip-thumb"
+                        src={driveDownloadUrl(a.drive_node_id)}
+                        alt=""
+                      />
+                    ) : (
+                      <span aria-hidden="true">▤</span>
+                    )}
+                    <span className="attachment-chip-name" title={a.name}>
+                      {a.name}
+                    </span>
+                    <span className="muted">{fmtBytes(a.size_bytes)}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${a.name}`}
+                      onClick={() =>
+                        setAttachments((list) =>
+                          list.filter(
+                            (x) => x.drive_node_id !== a.drive_node_id,
+                          ),
+                        )
+                      }
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {!visionOk && attachments.some((a) => isImage(a.content_type)) && (
+              <div className="composer-warning small">
+                This chat’s model source is marked as not supporting images —
+                attached images will be described as unavailable. Switch the
+                model above, or enable vision for that source in Settings.
+              </div>
+            )}
             <textarea
               value={draft}
               placeholder="Ask Sherpa anything…"
               rows={2}
               onChange={(e) => setDraft(e.target.value)}
+              onPaste={onPaste}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -906,9 +1079,31 @@ export default function ChatView() {
               }}
             />
             <div className="composer-footer">
-              <span className="composer-hint">
-                Enter to send · Shift + Enter for a new line
-              </span>
+              <div className="composer-tools">
+                <label className="btn btn-quiet composer-attach">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    hidden
+                    multiple
+                    aria-label="Attach files"
+                    onChange={(e) =>
+                      void addAttachments(Array.from(e.target.files ?? []))
+                    }
+                  />
+                  {attaching ? "Attaching…" : "＋ Attach"}
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-quiet"
+                  onClick={() => void openPicker()}
+                >
+                  From Drive
+                </button>
+                <span className="composer-hint">
+                  Enter to send · paste an image to attach
+                </span>
+              </div>
               <button
                 className="send-button"
                 type="submit"
@@ -920,6 +1115,68 @@ export default function ChatView() {
             </div>
           </div>
         </form>
+
+        {pickerOpen && (
+          <div
+            className="drive-picker-backdrop"
+            role="dialog"
+            aria-label="Attach from Drive"
+            onClick={() => setPickerOpen(false)}
+          >
+            <div
+              className="drive-picker"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="section-head">
+                <span>Attach from Drive</span>
+                <button
+                  className="btn btn-quiet todo-action"
+                  onClick={() => setPickerOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+              <label className="session-search-box">
+                <span aria-hidden="true">⌕</span>
+                <input
+                  type="search"
+                  value={pickerQuery}
+                  placeholder="Search your Drive…"
+                  aria-label="Search Drive"
+                  onChange={(e) => {
+                    setPickerQuery(e.target.value);
+                    void pickFromDrive(e.target.value);
+                  }}
+                />
+              </label>
+              <div className="drive-picker-list">
+                {pickerNodes.length === 0 && (
+                  <span className="small muted">No files found.</span>
+                )}
+                {pickerNodes.map((n) => (
+                  <button
+                    className="drive-picker-row"
+                    key={n.id}
+                    onClick={() => {
+                      setAttachments((a) =>
+                        a.length >= MAX_ATTACHMENTS ||
+                        a.some((x) => x.drive_node_id === n.id)
+                          ? a
+                          : [...a, toAttachment(n)],
+                      );
+                      setPickerOpen(false);
+                    }}
+                  >
+                    <span>{n.name}</span>
+                    <span className="muted small">
+                      {fmtBytes(n.size_bytes)} · v{n.version}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

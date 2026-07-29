@@ -91,6 +91,17 @@ class StorageSummary:
     available_bytes: int
 
 
+@dataclasses.dataclass(frozen=True)
+class VersionedContent:
+    """The bytes of one pinned version of a Drive file (ADR-043 attachments)."""
+
+    name: str
+    content_type: str
+    size_bytes: int
+    version: int
+    data: bytes
+
+
 def _encode_cursor(is_file: int, name: str, nid: uuid.UUID) -> str:
     return base64.urlsafe_b64encode(f"{is_file}\x00{name}\x00{nid}".encode()).decode()
 
@@ -590,6 +601,43 @@ async def read_node(
         raise NotFound("blob missing")
     data = await build_object_store().get(blob.object_key)
     return node, data
+
+
+async def read_node_version(
+    db: AsyncSession, ctx: CallerContext, node_id: uuid.UUID, version: int
+) -> VersionedContent:
+    """Read the bytes of a **specific** version of a file (ADR-043 attachments).
+
+    Attachments pin the version at admission, so a later edit of the Drive file never
+    silently rewrites what the model was shown. The current version reads from the node
+    itself; older ones from the retained ``drive_versions`` row.
+    """
+    uid = _require_user(ctx)
+    node = await _get_node(db, ctx, uid, node_id)
+    if node.node_type != "file":
+        raise Invalid("not a file")
+    if version == node.version:
+        if node.content_hash is None:
+            raise NotFound("blob missing")
+        content_hash, size, ctype = node.content_hash, node.size_bytes, node.content_type
+    else:
+        row = await db.scalar(
+            select(DriveVersion).where(
+                DriveVersion.tenant_id == ctx.tenant_id,
+                DriveVersion.node_id == node_id,
+                DriveVersion.version == version,
+            )
+        )
+        if row is None:
+            raise NotFound("version not found")
+        content_hash, size, ctype = row.content_hash, row.size_bytes, row.content_type
+    blob = await db.get(StorageBlob, (ctx.tenant_id, uid, content_hash))
+    if blob is None:
+        raise NotFound("blob missing")
+    data = await build_object_store().get(blob.object_key)
+    return VersionedContent(
+        name=node.name, content_type=ctype, size_bytes=size, version=version, data=data
+    )
 
 
 # --- rename / move ----------------------------------------------------------

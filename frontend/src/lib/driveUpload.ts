@@ -17,6 +17,12 @@ export interface PickedFile {
   file: File;
   /** Folder segments relative to the upload target (empty = target folder). */
   dirs: string[];
+  /**
+   * Base name to store under. A directory-picked file carries its **relative path**
+   * as the multipart filename, which the server rejects (names may not contain "/"),
+   * so we always send the base name explicitly.
+   */
+  name: string;
 }
 
 export type UploadStatus =
@@ -55,6 +61,12 @@ export class BatchTooLargeError extends Error {
   }
 }
 
+/** The base name of a file whose `name` may be a relative path. */
+export function baseName(name: string): string {
+  const parts = name.split(/[\\/]/);
+  return parts[parts.length - 1] || name;
+}
+
 /** Files chosen through <input multiple> / <input webkitdirectory>. */
 export function pickedFromInput(files: FileList | null): PickedFile[] {
   const out: PickedFile[] = [];
@@ -62,7 +74,7 @@ export function pickedFromInput(files: FileList | null): PickedFile[] {
     const rel = (file as File & { webkitRelativePath?: string })
       .webkitRelativePath;
     const dirs = rel ? rel.split("/").slice(0, -1) : [];
-    out.push({ file, dirs });
+    out.push({ file, dirs, name: baseName(rel || file.name) });
   }
   return out;
 }
@@ -86,7 +98,8 @@ async function walkEntry(
 ): Promise<void> {
   if (out.length > UPLOAD_MAX_FILES) return; // bounded: stop early, caller rejects
   if (entry.isFile) {
-    out.push({ file: await entryFile(entry as FileSystemFileEntry), dirs });
+    const file = await entryFile(entry as FileSystemFileEntry);
+    out.push({ file, dirs, name: baseName(file.name) });
     return;
   }
   const reader = (entry as FileSystemDirectoryEntry).createReader();
@@ -116,10 +129,8 @@ export async function pickedFromDataTransfer(
   const out: PickedFile[] = [];
   for (const entry of entries) {
     if (entry.isFile) {
-      out.push({
-        file: await entryFile(entry as FileSystemFileEntry),
-        dirs: [],
-      });
+      const file = await entryFile(entry as FileSystemFileEntry);
+      out.push({ file, dirs: [], name: baseName(file.name) });
     } else {
       const reader = (entry as FileSystemDirectoryEntry).createReader();
       for (;;) {
@@ -143,9 +154,9 @@ export function assertWithinBounds(picked: PickedFile[]): void {
 
 export function toItems(picked: PickedFile[]): UploadItem[] {
   return picked.map((p, i) => ({
-    id: `${i}-${p.dirs.join("/")}/${p.file.name}`,
-    name: p.file.name,
-    path: [...p.dirs, p.file.name].join("/"),
+    id: `${i}-${p.dirs.join("/")}/${p.name}`,
+    name: p.name,
+    path: [...p.dirs, p.name].join("/"),
     size: p.file.size,
     status: "queued" as const,
   }));
@@ -262,7 +273,12 @@ export async function uploadBatch({
       emit();
       try {
         const folderId = await ensureDirs(picked[index].dirs);
-        await api.driveUpload(csrf, folderId, picked[index].file);
+        await api.driveUpload(
+          csrf,
+          folderId,
+          picked[index].file,
+          picked[index].name,
+        );
         item.status = "done";
       } catch (e) {
         item.status = "failed";

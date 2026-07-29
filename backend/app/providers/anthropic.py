@@ -30,6 +30,7 @@ from app.providers.base import (
     ToolCall,
     ToolSchema,
 )
+from app.providers.content import ImageBlock, normalize_content
 from app.providers.tools import to_anthropic_tools
 from app.security.redaction import redact
 
@@ -60,6 +61,26 @@ def _error_detail(resp: httpx.Response, *, limit: int = 1000) -> str:
 def _tool_calls(m: Message) -> list[dict[str, Any]]:
     tcs = m.get("tool_calls")
     return [tc for tc in tcs if isinstance(tc, dict)] if isinstance(tcs, list) else []
+
+
+def _anthropic_user_blocks(content: object) -> list[dict[str, Any]]:
+    """User content → Anthropic blocks (`text` / base64 `image`; ADR-043)."""
+    blocks: list[dict[str, Any]] = []
+    for block in normalize_content(content):
+        if isinstance(block, ImageBlock):
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": block.media_type,
+                        "data": block.data_b64,
+                    },
+                }
+            )
+        else:
+            blocks.append({"type": "text", "text": block.text})
+    return blocks or [{"type": "text", "text": ""}]
 
 
 def _translate(messages: list[Message]) -> tuple[str, list[dict[str, Any]]]:
@@ -108,7 +129,7 @@ def _translate(messages: list[Message]) -> tuple[str, list[dict[str, Any]]]:
                 )
             out.append({"role": "assistant", "content": blocks or [{"type": "text", "text": " "}]})
             continue
-        out.append({"role": "user", "content": [{"type": "text", "text": str(content or "")}]})
+        out.append({"role": "user", "content": _anthropic_user_blocks(content)})
 
     merged: list[dict[str, Any]] = []
     for msg in out:

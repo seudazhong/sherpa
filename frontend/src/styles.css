@@ -4163,3 +4163,119 @@ div.run-log {
   .mp-form-grid { grid-template-columns: 1fr; }
   .model-switcher select { max-width: 160px; }
 }
+
+/* Chat attachments (ADR-043) */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px 0;
+}
+.composer-warning {
+  padding: 6px 10px 0;
+  color: var(--warn, #8a6100);
+}
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.composer-attach {
+  cursor: pointer;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.attachment-chip.static {
+  text-decoration: none;
+  color: inherit;
+}
+.attachment-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-chip button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--faint);
+  padding: 0 2px;
+}
+.attachment-chip-thumb {
+  width: 18px;
+  height: 18px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.msg-attachment-thumb {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: 10px;
+  display: block;
+}
+.drive-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+}
+.drive-picker {
+  width: min(520px, 100%);
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.drive-picker-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+}
+.drive-picker-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 4px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.drive-picker-row:hover {
+  background: var(--canvas-strong);
+}
+.mp-vision {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+}
+.mp-vision input {
+  margin-top: 3px;
+}

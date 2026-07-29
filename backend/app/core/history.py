@@ -20,6 +20,7 @@ unresolved by a crash), so the provider never sees an orphaned call or result.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import uuid
 from collections import defaultdict
@@ -27,7 +28,15 @@ from collections import defaultdict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.attachments import (
+    ATTACHMENT_KINDS,
+    AssemblyBudget,
+    ResolvedAttachment,
+    from_payload,
+    render_attachment_content,
+)
 from app.models import EventJournal, Message, Part, Run
+from app.models import Session as SessionModel
 
 # Journal event types that carry conversation content we replay to the provider.
 _TEXT = "text-delta"
@@ -44,10 +53,18 @@ _PENDING_APPROVAL_OBSERVATION = (
 _UNRESOLVED_PLACEHOLDER = "[no result recorded — the run was interrupted]"
 
 
-async def _user_texts_by_run(
+@dataclasses.dataclass(frozen=True)
+class _UserTurn:
+    """One admitted user message: its text plus any Drive-backed attachments (ADR-043)."""
+
+    text: str
+    attachments: list[ResolvedAttachment]
+
+
+async def _user_turns_by_run(
     session: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
-) -> dict[uuid.UUID, list[str]]:
-    """Map each run to its user-prompt text(s), ordered by message seq."""
+) -> dict[uuid.UUID, list[_UserTurn]]:
+    """Map each run to its user turn(s), ordered by message seq."""
     rows = (
         await session.execute(
             select(Message.id, Message.run_id)
@@ -64,18 +81,27 @@ async def _user_texts_by_run(
     ids = [r.id for r in rows]
     parts = (
         await session.execute(
-            select(Part.message_id, Part.content_redacted)
+            select(Part.message_id, Part.kind, Part.content_redacted)
             .where(Part.tenant_id == tenant_id, Part.message_id.in_(ids))
             .order_by(Part.ordinal)
         )
     ).all()
     text_by_msg: dict[uuid.UUID, list[str]] = defaultdict(list)
-    for message_id, content in parts:
-        text_by_msg[message_id].append(str((content or {}).get("text", "")))
-    out: dict[uuid.UUID, list[str]] = defaultdict(list)
+    atts_by_msg: dict[uuid.UUID, list[ResolvedAttachment]] = defaultdict(list)
+    for message_id, kind, content in parts:
+        if kind in ATTACHMENT_KINDS:
+            atts_by_msg[message_id].append(from_payload(kind, content or {}))
+        else:
+            text_by_msg[message_id].append(str((content or {}).get("text", "")))
+    out: dict[uuid.UUID, list[_UserTurn]] = defaultdict(list)
     for message_id, run_id in rows:
         if run_id is not None:
-            out[run_id].append(" ".join(text_by_msg.get(message_id, [])))
+            out[run_id].append(
+                _UserTurn(
+                    text=" ".join(text_by_msg.get(message_id, [])),
+                    attachments=atts_by_msg.get(message_id, []),
+                )
+            )
     return out
 
 
@@ -161,10 +187,20 @@ def _backfill_orphan_tool_calls(messages: list[dict[str, object]]) -> list[dict[
 
 
 async def assemble_provider_history(
-    session: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    supports_vision: bool = True,
 ) -> list[dict[str, object]]:
-    """Rebuild the full provider message window for a session (tool history intact)."""
-    users_by_run = await _user_texts_by_run(session, tenant_id, session_id)
+    """Rebuild the full provider message window for a session (tool history intact).
+
+    A user turn with attachments becomes an OpenAI-shape content array (text block +
+    one block per attachment, expanded from Drive under a shared byte budget); a turn
+    **without** attachments keeps the plain-string `content`, so an existing session's
+    cached prefix stays byte-stable (docs/04 invariant ⑤).
+    """
+    turns_by_run = await _user_turns_by_run(session, tenant_id, session_id)
 
     events = (
         (
@@ -196,10 +232,35 @@ async def assemble_provider_history(
         .all()
     )
 
+    has_attachments = any(t.attachments for turns in turns_by_run.values() for t in turns)
+    owner_id: uuid.UUID | None = None
+    budget = AssemblyBudget()
+    if has_attachments:
+        owner_id = await session.scalar(
+            select(SessionModel.user_id).where(
+                SessionModel.tenant_id == tenant_id, SessionModel.id == session_id
+            )
+        )
+
     messages: list[dict[str, object]] = []
     for run_id in run_ids:
-        for text in users_by_run.get(run_id, []):
-            messages.append({"role": "user", "content": text})
+        for turn in turns_by_run.get(run_id, []):
+            if not turn.attachments or owner_id is None:
+                messages.append({"role": "user", "content": turn.text})
+                continue
+            blocks: list[dict[str, object]] = [{"type": "text", "text": turn.text}]
+            for att in turn.attachments:
+                blocks.append(
+                    await render_attachment_content(
+                        session,
+                        tenant_id=tenant_id,
+                        user_id=owner_id,
+                        attachment=att,
+                        budget=budget,
+                        supports_vision=supports_vision,
+                    )
+                )
+            messages.append({"role": "user", "content": blocks})
         _replay_run_events(events_by_run.get(run_id, []), messages)
 
     return _backfill_orphan_tool_calls(messages)

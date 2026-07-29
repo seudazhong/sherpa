@@ -89,6 +89,14 @@ class Settings(BaseSettings):
     drive_trash_retention_days: int = 30
     drive_blob_gc_retention_hours: int = 24
 
+    # Chat attachments (ADR-043). Attachments are references to Drive nodes; these
+    # bound how much of them is replayed to the model, NOT what may be stored
+    # (storage is bounded by DRIVE_* above).
+    chat_max_attachments: int = 8
+    chat_attachment_max_image_bytes: int = 5 * 1024 * 1024
+    chat_attachment_assembly_max_bytes: int = 15 * 1024 * 1024
+    chat_attachment_text_extract_bytes: int = 32 * 1024
+
     # Projects — Workspace W2a (ADR-037): blank/template/archive projects. GitHub
     # import is W2b; working-copy/sandbox is W3. These bound the archive-import +
     # snapshot paths only. Project snapshots reuse the ADR-030 immutable, deduped,

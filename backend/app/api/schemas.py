@@ -96,9 +96,17 @@ class SessionPage(StrictModel):
     next_cursor: str | None
 
 
+class PromptAttachment(StrictModel):
+    """A Drive node referenced by a prompt (ADR-043); bytes stay in Drive."""
+
+    drive_node_id: uuid.UUID
+    version: int | None = None
+
+
 class PromptRequest(StrictModel):
     client_message_id: uuid.UUID
     text: Annotated[str, Field(min_length=1, max_length=32_000)]
+    attachments: Annotated[list[PromptAttachment], Field(max_length=8)] = []
 
 
 class PromptAdmission(StrictModel):
@@ -111,9 +119,20 @@ class PromptAdmission(StrictModel):
     events_url: str
 
 
+class MessageAttachment(StrictModel):
+    """Attachment metadata carried by an `image`/`file_ref` part (ADR-043)."""
+
+    drive_node_id: uuid.UUID
+    version: int
+    name: str
+    content_type: str
+    size_bytes: int
+
+
 class PublicMessagePart(StrictModel):
-    kind: Literal["text", "status", "tool_summary"]
+    kind: Literal["text", "status", "tool_summary", "image", "file_ref"]
     text: str
+    attachment: MessageAttachment | None = None
 
 
 class PublicMessage(StrictModel):

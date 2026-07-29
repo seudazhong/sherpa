@@ -99,6 +99,16 @@ export function ModelsPanel() {
     }
   };
 
+  const setVision = async (p: ModelProvider, supports: boolean) => {
+    if (!csrf) return;
+    try {
+      await api.updateModelProvider(csrf, p.id, { supports_vision: supports });
+      await load();
+    } catch {
+      setError("Could not update the image capability.");
+    }
+  };
+
   const remove = async (p: ModelProvider) => {
     if (!csrf) return;
     setBusy(p.id);
@@ -179,6 +189,22 @@ export function ModelsPanel() {
                 </select>
               </label>
             )}
+            <label className="mp-vision small">
+              <input
+                type="checkbox"
+                checked={p.supports_vision}
+                disabled={busy === p.id}
+                onChange={(e) => void setVision(p, e.target.checked)}
+              />
+              <span>
+                This source can see images
+                <span className="muted">
+                  {" "}
+                  — when off, chat image attachments are described as unavailable
+                  instead of being sent
+                </span>
+              </span>
+            </label>
           </article>
         ))}
       </div>

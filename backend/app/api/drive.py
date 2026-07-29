@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
@@ -170,7 +171,10 @@ async def upload_file(
 ) -> DriveNode:
     data = await upload.read()
     pid = uuid.UUID(parent_id) if parent_id else None
-    fname = name or upload.filename or "upload"
+    # A directory-picked upload carries its RELATIVE PATH as the multipart filename
+    # (ADR-042 client expansion); the client name always wins, and any client-supplied
+    # path is reduced to its base name — names may not contain a separator.
+    fname = name or PurePosixPath((upload.filename or "upload").replace("\\", "/")).name
     try:
         node = await svc.upload(
             db,

@@ -28,6 +28,7 @@ from app.providers.base import (
     ToolCall,
     ToolSchema,
 )
+from app.providers.content import ImageBlock, normalize_content
 from app.providers.tools import to_gemini_tools
 from app.security.redaction import redact
 
@@ -54,6 +55,17 @@ def _error_detail(resp: httpx.Response, *, limit: int = 1000) -> str:
 def _tool_calls(m: Message) -> list[dict[str, Any]]:
     tcs = m.get("tool_calls")
     return [tc for tc in tcs if isinstance(tc, dict)] if isinstance(tcs, list) else []
+
+
+def _gemini_user_parts(content: object) -> list[dict[str, Any]]:
+    """User content → Gemini parts (`text` / `inlineData` image; ADR-043)."""
+    parts: list[dict[str, Any]] = []
+    for block in normalize_content(content):
+        if isinstance(block, ImageBlock):
+            parts.append({"inlineData": {"mimeType": block.media_type, "data": block.data_b64}})
+        else:
+            parts.append({"text": block.text})
+    return parts or [{"text": ""}]
 
 
 def _translate(messages: list[Message]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -113,7 +125,7 @@ def _translate(messages: list[Message]) -> tuple[dict[str, Any] | None, list[dic
                 )
             contents.append({"role": "model", "parts": parts or [{"text": " "}]})
             continue
-        contents.append({"role": "user", "parts": [{"text": str(content or "")}]})
+        contents.append({"role": "user", "parts": _gemini_user_parts(content)})
 
     system = {"parts": [{"text": "\n".join(system_parts)}]} if system_parts else None
     return system, contents

@@ -24,6 +24,12 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.attachments import (
+    ATTACHMENT_KINDS,
+    AttachmentRef,
+    ResolvedAttachment,
+    resolve_attachments,
+)
 from app.models import EventJournal, Message, Part, Run
 from app.models import Session as SessionModel
 
@@ -83,6 +89,28 @@ async def _first_text(session: AsyncSession, tenant_id: uuid.UUID, message_id: u
     return str((content or {}).get("text", ""))
 
 
+async def _attachment_signature(
+    session: AsyncSession, tenant_id: uuid.UUID, message_id: uuid.UUID
+) -> list[tuple[str, int]]:
+    """The persisted attachment set of a message, for idempotency comparison."""
+    rows = (
+        await session.execute(
+            select(Part.content_redacted)
+            .where(
+                Part.tenant_id == tenant_id,
+                Part.message_id == message_id,
+                Part.kind.in_(ATTACHMENT_KINDS),
+            )
+            .order_by(Part.ordinal)
+        )
+    ).all()
+    return [(str(c.get("drive_node_id")), int(str(c.get("version", 1)))) for (c,) in rows if c]
+
+
+def _ref_signature(resolved: list[ResolvedAttachment]) -> list[tuple[str, int]]:
+    return [(str(a.drive_node_id), a.version) for a in resolved]
+
+
 async def admit_prompt(
     session: AsyncSession,
     *,
@@ -92,8 +120,12 @@ async def admit_prompt(
     client_message_id: uuid.UUID,
     text: str,
     run_kind: str = "web_chat",
+    attachments: list[AttachmentRef] | None = None,
 ) -> Admission:
     """Persist the prompt + a queued run. Caller owns the transaction (commit)."""
+    resolved = await resolve_attachments(
+        session, tenant_id=tenant_id, user_id=user_id, refs=attachments or []
+    )
     existing = (
         await session.execute(
             select(Message).where(
@@ -104,7 +136,11 @@ async def admit_prompt(
         )
     ).scalar_one_or_none()
     if existing is not None:
-        if await _first_text(session, tenant_id, existing.id) != text:
+        same_text = await _first_text(session, tenant_id, existing.id) == text
+        same_attachments = await _attachment_signature(
+            session, tenant_id, existing.id
+        ) == _ref_signature(resolved)
+        if not (same_text and same_attachments):
             raise PromptConflict(str(client_message_id))
         assert existing.run_id is not None
         cursor = await _session_tail(session, tenant_id, session_id)
@@ -159,6 +195,17 @@ async def admit_prompt(
             content_redacted={"text": text},
         )
     )
+    for ordinal, att in enumerate(resolved, start=1):
+        session.add(
+            Part(
+                tenant_id=tenant_id,
+                id=uuid.uuid4(),
+                message_id=message_id,
+                ordinal=ordinal,
+                kind=att.kind,
+                content_redacted=att.payload(),
+            )
+        )
     await session.flush()
 
     sess = await session.get(SessionModel, (tenant_id, session_id))

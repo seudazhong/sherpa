@@ -76,9 +76,18 @@ export interface PromptAdmission {
   events_url: string;
 }
 
+export interface MessageAttachment {
+  drive_node_id: string;
+  version: number;
+  name: string;
+  content_type: string;
+  size_bytes: number;
+}
+
 export interface MessagePart {
   kind: string;
   text: string;
+  attachment?: MessageAttachment | null;
 }
 
 export interface ChatMessage {
@@ -708,6 +717,7 @@ export interface ModelProvider {
   status: "pending" | "active" | "error";
   last_error: string | null;
   has_key: boolean;
+  supports_vision: boolean;
   updated_at: string;
 }
 
@@ -731,6 +741,8 @@ export interface SessionModelState extends SessionModelSelection {
   effective_provider_name: string | null;
   effective_kind: string;
   effective_model: string;
+  /** ADR-043: may this source be sent images? */
+  supports_vision: boolean;
 }
 
 export class ApiError extends Error {
@@ -832,10 +844,19 @@ export const api = {
       jsonInit("POST", csrf, { title: title ?? null }),
     ),
   listMessages: (sid: string) => req<MessagePage>(`/sessions/${sid}/messages`),
-  prompt: (csrf: string, sid: string, text: string) =>
+  prompt: (
+    csrf: string,
+    sid: string,
+    text: string,
+    attachments: { drive_node_id: string; version?: number }[] = [],
+  ) =>
     req<PromptAdmission>(
       `/sessions/${sid}/prompt`,
-      jsonInit("POST", csrf, { client_message_id: crypto.randomUUID(), text }),
+      jsonInit("POST", csrf, {
+        client_message_id: crypto.randomUUID(),
+        text,
+        attachments,
+      }),
     ),
   listCandidates: (status = "pending") =>
     req<CandidatePage>(`/candidates?status=${encodeURIComponent(status)}`),
@@ -1238,6 +1259,7 @@ export const api = {
       api_key: string;
       base_url?: string | null;
       default_model?: string | null;
+      supports_vision?: boolean;
     },
   ) => req<ModelProvider>("/providers", jsonInit("POST", csrf, body)),
   updateModelProvider: (
@@ -1249,6 +1271,7 @@ export const api = {
       api_key?: string;
       default_model?: string | null;
       enabled?: boolean;
+      supports_vision?: boolean;
     },
   ) => req<ModelProvider>(`/providers/${id}`, jsonInit("PATCH", csrf, body)),
   deleteModelProvider: (csrf: string, id: string) =>

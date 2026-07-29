@@ -46,6 +46,7 @@ class ModelProviderSummary(BaseModel):
     status: Literal["pending", "active", "error"]
     last_error: str | None
     has_key: bool
+    supports_vision: bool
     updated_at: datetime.datetime
 
 
@@ -55,6 +56,7 @@ class ModelProviderCreate(BaseModel):
     base_url: str | None = None
     api_key: Annotated[str, Field(min_length=1, max_length=8000)]
     default_model: str | None = None
+    supports_vision: bool = True
 
 
 class ModelProviderUpdate(BaseModel):
@@ -63,6 +65,7 @@ class ModelProviderUpdate(BaseModel):
     api_key: str | None = None
     default_model: str | None = None
     enabled: bool | None = None
+    supports_vision: bool | None = None
 
 
 class ModelProviderTest(BaseModel):
@@ -88,6 +91,7 @@ class SessionModelState(SessionModelSelection):
     effective_provider_name: str | None
     effective_kind: str
     effective_model: str
+    supports_vision: bool
 
 
 def _summary(p: ModelProvider) -> ModelProviderSummary:
@@ -103,6 +107,7 @@ def _summary(p: ModelProvider) -> ModelProviderSummary:
         status=p.status,  # type: ignore[arg-type]
         last_error=p.last_error_redacted,
         has_key=p.token_enc is not None,
+        supports_vision=p.supports_vision,
         updated_at=p.updated_at,
     )
 
@@ -116,6 +121,7 @@ def _state(s: svc.SessionModelState) -> SessionModelState:
         effective_provider_name=s.effective_provider_name,
         effective_kind=s.effective_kind,
         effective_model=s.effective_model,
+        supports_vision=s.supports_vision,
     )
 
 
@@ -143,6 +149,7 @@ async def create_provider(
             api_key=body.api_key,
             base_url=body.base_url,
             default_model=body.default_model,
+            supports_vision=body.supports_vision,
         )
         out = _summary(p)
         await db.commit()
@@ -182,6 +189,7 @@ async def update_provider(
             api_key=body.api_key,
             default_model=body.default_model,
             enabled=body.enabled,
+            supports_vision=body.supports_vision,
         )
         out = _summary(p)
         await db.commit()
