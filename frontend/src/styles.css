@@ -250,7 +250,10 @@ code {
   color: var(--ink);
 }
 
-input,
+/* Text-like controls only: a checkbox/radio must keep its native box, or it
+   stretches to 100% and squeezes the label out of the row (Knowledge "Add from
+   Drive" picker, Settings toggles). */
+input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
   width: 100%;
@@ -263,6 +266,14 @@ textarea {
   transition:
     border-color 120ms ease,
     box-shadow 120ms ease;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  flex: none;
+  margin: 0;
+  accent-color: var(--brand);
 }
 
 input:hover,

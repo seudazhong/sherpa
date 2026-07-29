@@ -45,3 +45,9 @@
 | UX-14 | **Every page had the same flat title + oversized empty-card rhythm**, so hierarchy and next actions were weak. | Introduced page eyebrows, compact section cards, metrics, task-specific creation cards, and actionable empty states. | ✅ |
 | UX-15 | **Messaging and Connectors led with AppIDs, webhook paths, environment variables, and simulation controls.** | Moved technical detail and development-only test consoles behind progressive disclosures; connection health now leads. | ✅ |
 | UX-16 | **Destructive data deletion was promoted beside routine export in the page header.** | Moved both into a dedicated trust/data card and gave deletion a distinct danger treatment. | ✅ |
+
+## Owner-reported findings
+
+| # | Finding | Resolution | Status |
+|---|---|---|---|
+| UX-17 | **Checkboxes were stretched to full row width by a global input rule**, so their label was squeezed to 0 px: Knowledge → *Add from Drive* showed only a tick box and a type badge with **no file name** (owner screenshot, 2026-07-29). The same latent bug affected Change Review's file rows and the new Settings → Models vision toggle. | Root cause was `styles.css` `input, select, textarea { width: 100%; padding: 9px 10px; border… }` also matching `input[type=checkbox]`. Scoped that rule to text-like controls (`input:not([type=checkbox]):not([type=radio])`) and gave checkboxes/radios their native box (`width: auto; flex: none; accent-color: var(--brand)`). Verified live: picker rows now render `DIR/TXT` badge + name (checkbox 13 px, name 434 px), Settings + Models toggles unaffected. | ✅ |
