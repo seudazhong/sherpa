@@ -300,7 +300,7 @@ The architecture is proven bootable. M1 makes the durable spine real end-to-end.
 | W3.4 | Frontend on `/work/projects`: Project-bound Chat execution state + Change Review (diff/artifacts) + Save selected/checkpoint/Discard + stale/conflict; 390px. Capability-matrix UI cells → ✅. | design-workspace/w3-change-review.html; matrix §9 | build/lint green; two-lane Playwright; matrix UI ✅ | ✅ done (`fa5a3c0`; components/ChangeReview.tsx + ChatView + api.ts; matrix §9 UI ✅) |
 | W3.V | Verify: backend gate + two-lane Playwright (agent: `project_run` → change set; human: Change Review → Save selected/checkpoint/Discard + stale conflict) + UX pass. Restart the stack first. | AGENTS §2 | verified two lanes; UX notes | ✅ done (full pytest 297 green; stack rebuilt; two-lane Playwright with real claude-sonnet-4.6; `_wc_summary` discard bug fixed + regression test) |
 
-**W3 production exit (✅ 2026-07-27):** all of W3.1→W3.V shipped. Schema at alembic **0030** (6 `project_*` W3 tables + `projects.head_generation`). Backend gate green (full **pytest 297**, ruff + `ruff format` + `mypy app` clean); frontend `npm run lint` + `build` green. **Two-lane Playwright with the real model (claude-sonnet-4.6):** agent — the model drove `project_run` (edit main.py) → durable working copy + change set; human — Change Review panel rendered the real unified diff, **Save + checkpoint** advanced the head (`head_generation` 0→1 + pinned `checkpoint` snapshot), **Discard** left the head byte-identical (working copy `discarded`, no snapshot), 390px overflow=0. **Bug found + fixed during verification:** the discard route's `_wc_summary` hit `MissingGreenlet` reading the flush-expired `updated_at` column → `await db.refresh(wc)` + a REST discard regression test. **UX notes:** (a) stale W2a "read/discuss only" copy on the Projects page updated to reflect the W3 working-copy flow; (b) change-review entry-row spacing at 390px could be tightened (minor); (c) a run that fails mid-loop (observed via the storage-contaminated leftover project) surfaces no chat-side error banner — a pre-existing observability gap, not W3. **Dev-stack limitation (honest):** ~~the worker shares the host `docker.sock`, so a sibling sandbox container's bind-mount source resolves on the host, not inside the worker container — a `project_run` **shell command** in this Docker-Desktop dev stack sees an empty `/work`~~ **CORRECTED 2026-07-30 (backlog B-8 triage):** the container **never starts at all**. The worker passes its own in-container path (`/app/.sherpa/scratch/<run>`) as the bind-mount `source` to the **host** daemon, which cannot resolve it, and `infra/docker-compose.yml` declares no shared scratch volume — so `containers.run` raises before execution and `services/project_sandbox.py` collapses it to `sandbox_unavailable` with no log. `/work` is never mounted, let alone empty. Host-side **edits** (writes/deletes) + the whole change-review/save/discard loop are genuinely unaffected, which is why the W3 verification still passed. Also corrected: the **human Run lane never existed** — `frontend/src/api.ts::createSandboxRun` has no call site, and its route executed the sandbox synchronously inside the **web** process, where `SANDBOX_KIND` is unset. Fix = [ADR-047](decisions.md#adr-047) (tar transport, no host path at all) + [ADR-048](decisions.md#adr-048) (RuntimeSession + real Run control), planned as **Phase TR**. Per ADR-039 the shared-socket posture remains dev-single-user-only; a production runner (gVisor/microVM) is still required before multi-user. **Next: W4** = GitHub sync/push/PR (own ADR, ADR-020 approval).
+**W3 production exit (✅ 2026-07-27):** all of W3.1→W3.V shipped. Schema at alembic **0030** (6 `project_*` W3 tables + `projects.head_generation`). Backend gate green (full **pytest 297**, ruff + `ruff format` + `mypy app` clean); frontend `npm run lint` + `build` green. **Two-lane Playwright with the real model (claude-sonnet-4.6):** agent — the model drove `project_run` (edit main.py) → durable working copy + change set; human — Change Review panel rendered the real unified diff, **Save + checkpoint** advanced the head (`head_generation` 0→1 + pinned `checkpoint` snapshot), **Discard** left the head byte-identical (working copy `discarded`, no snapshot), 390px overflow=0. **Bug found + fixed during verification:** the discard route's `_wc_summary` hit `MissingGreenlet` reading the flush-expired `updated_at` column → `await db.refresh(wc)` + a REST discard regression test. **UX notes:** (a) stale W2a "read/discuss only" copy on the Projects page updated to reflect the W3 working-copy flow; (b) change-review entry-row spacing at 390px could be tightened (minor); (c) a run that fails mid-loop (observed via the storage-contaminated leftover project) surfaces no chat-side error banner — a pre-existing observability gap, not W3. **Dev-stack limitation (honest):** ~~the worker shares the host `docker.sock`, so a sibling sandbox container's bind-mount source resolves on the host, not inside the worker container — a `project_run` **shell command** in this Docker-Desktop dev stack sees an empty `/work`~~ **CORRECTED 2026-07-30 (backlog B-8 triage):** the container **never starts at all**. The worker passes its own in-container path (`/app/.sherpa/scratch/<run>`) as the bind-mount `source` to the **host** daemon, which cannot resolve it, and `infra/docker-compose.yml` declares no shared scratch volume — so `containers.run` raises before execution and `services/project_sandbox.py` collapsed it to `sandbox_unavailable` with no log (**that collapse was fixed in Phase TR P0, 2026-07-30** — the same failure now reports `runtime_start_failed` with one worker log line and one redacted observation; the mount is still broken). `/work` is never mounted, let alone empty. Host-side **edits** (writes/deletes) + the whole change-review/save/discard loop are genuinely unaffected, which is why the W3 verification still passed. Also corrected: the **human Run lane never existed** — `frontend/src/api.ts::createSandboxRun` has no call site, and its route executed the sandbox synchronously inside the **web** process, where `SANDBOX_KIND` is unset. Fix = [ADR-047](decisions.md#adr-047) (tar transport, no host path at all) + [ADR-048](decisions.md#adr-048) (RuntimeSession + real Run control), planned as **Phase TR**. Per ADR-039 the shared-socket posture remains dev-single-user-only; a production runner (gVisor/microVM) is still required before multi-user. **Next: W4** = GitHub sync/push/PR (own ADR, ADR-020 approval).
 
 **W3-DESIGN/SECURITY exit (✅ 2026-07-27):** independent security review done (ADR-039, primary-sourced); ADR-039 + ADR-040 accepted; **ADR-025 formally revised** ("only a one-time scratch, never the source of truth"); frozen contract deltas (data-model §Projects W3 / api §10.7 / events §2.11 / config §1.7 + `SANDBOX_*`/`WORKING_COPY_*`) + capability-matrix rows (UI ⬜); W3 static draft `design-workspace/w3-change-review.html` (desktop 1280 + 390px, no horizontal scroll, HTML well-formed). **No production code, no migration, no real sandbox mount, no exposed W3 navigation.** Design/contract-first review-only screenshots saved outside git (`.tmp-w3-design-screenshots`, not committed). **W3.1…W3.V production implementation awaits owner review.** **Non-goals (each later):** dependency installation; embedded coding-agent executors; `git init/commit/branch`, merge, push, PR (W4); long-running dev servers/previews; network-enabled environments.
 
@@ -332,13 +332,14 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研�
 
 ---
 
-## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 📋 **PLAN APPROVED, IMPLEMENTATION NOT STARTED**
+## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 🚧 **P0 SHIPPED · P1–P5 NOT STARTED**
 
 > Closes backlog **B-2** (52 flat tools) and **B-8** (`project_run` always fails) as one program.
 > Architecture approved by the owner 2026-07-30 ([ADR-045](decisions.md#adr-045) umbrella,
 > [ADR-046](decisions.md#adr-046) tool catalog, [ADR-047](decisions.md#adr-047) tar transport,
-> [ADR-048](decisions.md#adr-048) RuntimeSession). **Implementation code still requires a separate
-> owner approval of this execution plan.** Nothing in P0–P5 may start before that approval.
+> [ADR-048](decisions.md#adr-048) RuntimeSession). **Execution plan approved by the owner
+> 2026-07-30.** **P0 (TR.5, honesty pass) is shipped**; P1–P5 have not started, and the
+> destructive baseline reset of TR.3 has **not** been run.
 
 ### TR.0 Owner approval checklist — defaults already approved (2026-07-30)
 
@@ -388,10 +389,13 @@ print("tools:", len(s), "json_bytes:", len(json.dumps(s)))
 **The three facts that explain B-8** (do not re-derive them, but do re-confirm the first one after
 any change): (a) `backend/app/sandbox/project_sandbox.py` passes a **worker-container** path as a
 bind-mount `source` to the **host** daemon, and `infra/docker-compose.yml` declares no shared scratch
-volume, so container creation always fails; (b) `backend/app/services/project_sandbox.py` collapses
-every error into `sandbox_unavailable` with no log; (c) `backend/tests/test_project_sandbox.py` and
-`test_sandbox.py` monkeypatch the executor, so **no test ever starts a container** — which is why 297
-green tests did not catch it. P3 must fix (c) or it will happen again.
+volume, so container creation always fails; (b) ~~`backend/app/services/project_sandbox.py` collapses
+every error into `sandbox_unavailable` with no log~~ **✅ fixed in P0** — each failure now carries its
+own contract name plus one worker log line and one redacted observation; (c)
+`backend/tests/test_project_sandbox.py` and `test_sandbox.py` monkeypatch the executor, so **no test
+ever starts a container** — which is why 297 green tests did not catch it. P0 narrowed this with a
+fake-docker-client lane that exercises the real classification branches of `_run_docker`, but P3 must
+still add the real-container lane or (a) will happen again.
 
 ### TR.2 Canonical commands
 
@@ -463,19 +467,40 @@ The only shared file is `backend/app/config.py` (P2 adds `tool_catalog_core_max_
 them as two separate stanzas to keep the merge trivial. **Both must be merged before P4 starts** —
 P4 registers `fs.*`/`sh.*` through P2's descriptor API against P3's transport.
 
-### TR.5 P0 — Honesty pass (no architecture change)
+### TR.5 P0 — Honesty pass (no architecture change) — ✅ **SHIPPED 2026-07-30**
 
 Doable immediately after plan approval; unblocks everything by removing false statements.
 
 | # | Task | Paths | AC |
 |---|---|---|---|
-| P0.1 | Split the `sandbox_unavailable` collapse into the named-exit list (events §2.11); emit one structured worker log line and one redacted tool observation per failure | `backend/app/services/project_sandbox.py`, `backend/app/sandbox/project_sandbox.py` | A forced daemon-unreachable, a forced image-missing and a disabled sandbox produce **three different** `termination_reason`s and three log lines; regression test asserts each |
+| P0.1 | ✅ Split the `sandbox_unavailable` collapse into the named-exit list (events §2.11); emit one structured worker log line and one redacted tool observation per failure | `backend/app/sandbox/runner.py` (shared reason vocabulary), `backend/app/sandbox/project_sandbox.py`, `backend/app/services/project_sandbox.py`, `backend/app/tools/project_tools.py`, `backend/app/tools/sandbox_tools.py` | A forced daemon-unreachable, a forced image-missing and a disabled sandbox produce **three different** `termination_reason`s and three log lines; regression test asserts each |
 | P0.2 | ~~Correct the stale W3 exit note~~ **✅ already corrected in the design batch** ("a `project_run` shell command sees an empty `/work`" — the container never started) | this file, Phase W3 exit block | Note states the container never starts and points at ADR-047 |
 | P0.3 | ~~Correct the capability matrix~~ **✅ already corrected in the design batch**: the W3 human lane never existed (`api.ts::createSandboxRun` has no call site) | `docs/11-agent-tool-surface.md` §9 | The Run/UI cell is ⬜ with the blocker named, not ✅ |
-| P0.V | `uv run pytest tests/test_project_sandbox.py -q` + full gate | — | green; **commit P0 separately** |
+| P0.V | ✅ `uv run pytest tests/test_project_sandbox.py -q` + full gate | — | green; **commit P0 separately** |
 
 **P0 exit:** every sandbox failure is distinguishable in the log and in the model's observation; no
 document claims a capability that does not exist.
+
+**P0 exit result (2026-07-30 — met).** `sandbox_unavailable` no longer exists in any sandbox code
+path. The named reasons now live **once**, in `app/sandbox/runner.py`, and are shared by both
+entry points. `_run_docker` (both of them) classifies into `runtime_daemon_unreachable` (client
+construction fails) / `runtime_image_missing` (`ImageNotFound`) / `runtime_start_failed` (any other
+create-time `DockerException`/`APIError`) / `runtime_transport_failed` (container ran, output
+unreadable) / `error:<class>` (unmodelled); `run_in_scratch` and `run_code` keep `sandbox_disabled`
+distinct. The named reason travels on `RunResult.error` while the **raw** failure text travels
+separately on the new `RunResult.error_detail`, which reaches the **worker log only** — the model's
+observation is a static, reason-specific sentence (`runner.runtime_failure_note` /
+`services/project_sandbox.failure_note`) carrying no host path, image reference or exception text
+(ADR-019). This also closed a real leak: `run_code` previously returned
+`f"sandbox error: {result.error}"`, i.e. the **raw docker exception string**, straight to the model.
+`run_sandbox` emits exactly **one** `logger.warning("project sandbox run failed", …)` per failing
+exit — including the pre-existing `wall_timeout` / `environment_missing_dependencies` /
+`changeset_bounds` / `fence_lost` / scratch exits — and returns `SandboxOutcome.failure_note`, which
+`project_run` appends to its observation; `run_code` logs one line of its own. Error-is-observation
+is preserved: a runtime failure still persists the host-side edits. Gate: full `uv run pytest`
+**397 passed**, ruff + `ruff format --check` + `mypy app` clean; no frontend change.
+**Not done in P0 (by design):** the bind mount itself (P3), the async worker-executed REST lane and
+the human Run control (P4/P5). B-8 stays **open**.
 
 ### TR.6 P1 — Baseline squash + legacy deletion
 

@@ -863,7 +863,12 @@ done | cancelled | wall_timeout | mem_limit | pids_limit | output_limit
 Every failing exit MUST also emit **one structured worker log line** and **one redacted tool
 observation** naming the same reason. This is the direct fix for backlog B-8, where every
 distinct failure — an unreachable daemon, a failed container create, a disabled sandbox —
-collapsed into one indistinguishable `sandbox_unavailable` with no log at all. A missing
+collapsed into one indistinguishable `sandbox_unavailable` with no log at all. **This
+paragraph is `[shipped]` as of Phase TR P0 (2026-07-30)** on the existing `project_sandbox_runs`
+path — `runtime_daemon_unreachable` / `runtime_image_missing` / `runtime_start_failed` /
+`runtime_transport_failed` / `sandbox_disabled` / `error:<class>` each emit one structured
+worker log line (carrying the bounded raw detail) and one static redacted observation for the
+model; the tables and the tar transport around it remain `[target]`. A missing
 dependency is an **explicit** `environment_missing_dependencies` carrying the image's probed
 capability list — the offline sandbox **never** silently enables network to fetch packages.
 Change-set bounds (`WORKING_COPY_MAX_*`, config §1.7) overflow ⇒ `changeset_bounds` + a

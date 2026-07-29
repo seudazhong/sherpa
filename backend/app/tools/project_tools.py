@@ -288,6 +288,10 @@ class ProjectRunTool:
             raise as_tool_error(e) from None
         sr = outcome.sandbox_run
         lines = [f"Sandbox run {sr.termination_reason} (exit {sr.exit_code}, state {sr.state})."]
+        if outcome.failure_note is not None:
+            # The named, redacted observation: the model is told exactly WHICH failure
+            # happened instead of guessing behind one blanket "unavailable".
+            lines.append(outcome.failure_note)
         if command and (outcome.stdout or outcome.stderr):
             out = outcome.stdout + ("\n[stderr]\n" + outcome.stderr if outcome.stderr else "")
             lines.append(out.rstrip("\n")[:4000])

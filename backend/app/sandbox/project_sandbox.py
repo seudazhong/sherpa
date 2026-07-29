@@ -13,6 +13,9 @@ container runner:
 * **run a command** in the ADR-025 hardened, network-disabled container with ONLY the scratch
   bind-mounted read-write (``nosuid,nodev``); ``cap_drop=ALL``, non-root, read-only rootfs +
   tmpfs, mem/pids/cpu/wall caps, ``--rm``. Gated by ``SANDBOX_KIND`` (``disabled`` offline).
+  **Every failure exit is one of the contract-named reasons** (``sandbox_disabled``,
+  ``runtime_daemon_unreachable``, ``runtime_image_missing``, ``runtime_start_failed``,
+  ``runtime_transport_failed``, ``error:<class>``; events §2.11 ④) — never a blanket collapse.
 * **compute the delta** of scratch vs the materialized base (added/modified/deleted), bounded
   by ``WORKING_COPY_MAX_CHANGED_FILES``/``_BYTES``.
 * **cleanup / orphan sweep** — scratch trees are rebuildable caches, never recovery truth.
@@ -33,7 +36,16 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.config import settings
-from app.sandbox.runner import RunResult
+from app.sandbox.runner import (
+    RUNTIME_DAEMON_UNREACHABLE,
+    RUNTIME_IMAGE_MISSING,
+    RUNTIME_START_FAILED,
+    RUNTIME_TRANSPORT_FAILED,
+    SANDBOX_DISABLED,
+    RunResult,
+    named_failure,
+    unmodelled_failure,
+)
 
 BlobReader = Callable[[bytes], Awaitable[bytes]]
 
@@ -236,17 +248,23 @@ def compute_delta(run_id: str, base_manifest: dict[str, bytes]) -> DeltaResult:
 
 
 # --- hardened container run (ADR-025 + one-time scratch RW mount, ADR-039) ---
+#
+# The named termination reasons + the ``named_failure``/``unmodelled_failure`` helpers are
+# shared with :mod:`app.sandbox.runner` (imported above): one vocabulary for both sandbox
+# entry points, so no caller can reinvent a blanket collapse.
 
 
 def _run_docker(scratch_dir: str, command: str) -> RunResult:
     import docker
-    from docker.errors import DockerException
+    from docker.errors import APIError, DockerException, ImageNotFound
     from docker.types import Mount
 
     try:
         client = docker.from_env()
     except DockerException as exc:
-        return RunResult("", "", -1, False, error=f"sandbox_unavailable: {exc}")
+        return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
+    except Exception as exc:  # noqa: BLE001 - classify and observe, never crash the loop
+        return unmodelled_failure(exc)
 
     try:
         container = client.containers.run(
@@ -266,8 +284,14 @@ def _run_docker(scratch_dir: str, command: str) -> RunResult:
             user="nobody",
             detach=True,
         )
-    except DockerException as exc:
-        return RunResult("", "", -1, False, error=f"sandbox_start_failed: {exc}")
+    except ImageNotFound as exc:
+        # The offline sandbox never reaches the network to pull: a missing image is its own
+        # named, actionable outcome — not a generic "unavailable".
+        return named_failure(RUNTIME_IMAGE_MISSING, exc)
+    except (APIError, DockerException) as exc:
+        return named_failure(RUNTIME_START_FAILED, exc)
+    except Exception as exc:  # noqa: BLE001
+        return unmodelled_failure(exc)
 
     timed_out = False
     try:
@@ -281,8 +305,13 @@ def _run_docker(scratch_dir: str, command: str) -> RunResult:
                 container.kill()
             except Exception:
                 pass
-        stdout = container.logs(stdout=True, stderr=False).decode("utf-8", "replace")
-        stderr = container.logs(stdout=False, stderr=True).decode("utf-8", "replace")
+        try:
+            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", "replace")
+            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", "replace")
+        except Exception as exc:  # noqa: BLE001
+            # The container ran but its output could not be retrieved: distinct from a start
+            # failure, because work may already have landed in the scratch tree.
+            return named_failure(RUNTIME_TRANSPORT_FAILED, exc)
         return RunResult(stdout, stderr, exit_code, timed_out)
     finally:
         try:
@@ -298,9 +327,10 @@ async def _execute_in_scratch(scratch_dir: str, command: str) -> RunResult:
 async def run_in_scratch(run_id: str, command: str) -> RunResult:
     """Run ``command`` in the hardened container against ONLY the run's scratch tree.
     ``SANDBOX_KIND != docker`` (default) reports a clear disabled result for offline dev/tests;
-    the real docker path is exercised in the browser."""
+    the real docker path is exercised in the browser. Every failure exit is one of the
+    contract-named reasons above — never a blanket collapse."""
     if settings.sandbox_kind != "docker":
-        return RunResult("", "", -1, False, error="sandbox_disabled")
+        return RunResult("", "", -1, False, error=SANDBOX_DISABLED)
     scratch_dir = str(scratch_dir_for(run_id))
     return await _execute_in_scratch(scratch_dir, command)
 

@@ -4,9 +4,9 @@
 >
 > Unscheduled findings from manual testing live in [`backlog.md`](backlog.md) (B-1…B-9; **B-1 + B-3 + B-4 + B-7 fixed 2026-07-28**, **B-5 + B-6 shipped 2026-07-29**, **B-9 fixed 2026-07-29**; **B-2 / B-8 still open — architecture approved 2026-07-30, implementation not started**). ✅ **B-9 is fixed ([ADR-044](decisions.md))**: `uv run pytest` now provisions and uses a dedicated `<app_db>_test` database, Redis logical db 15 and a synthetic owner, so it is safe to run **with the stack and worker up** and can no longer touch dev data. The old "stop the worker / point `DATABASE_URL` at `sherpa_test` by hand" workaround is retired.
 >
-> 🏗 **B-2 + B-8 are one program now.** Triage on 2026-07-30 established that the oversized flat tool surface and the always-failing `project_run` are two faces of the same defect, and the owner approved a **clean-break** unified architecture: [ADR-045](decisions.md#adr-045) (umbrella) · [ADR-046](decisions.md#adr-046) (tool catalog + resolver + progressive disclosure) · [ADR-047](decisions.md#adr-047) (tar workspace transport) · [ADR-048](decisions.md#adr-048) (RuntimeSession + `fs`/`sh`/`run`). Contracts are updated and marked `[shipped]`/`[target]`/`[deleted]`; the execution plan is [`IMPLEMENTATION.md` **Phase TR**](IMPLEMENTATION.md) (P0–P5). **No production code, migration, frontend or infra change has been made**, and **neither backlog item is fixed**. See "▶ Next ready task" below for the one approval that unblocks it.
+> 🏗 **B-2 + B-8 are one program now.** Triage on 2026-07-30 established that the oversized flat tool surface and the always-failing `project_run` are two faces of the same defect, and the owner approved a **clean-break** unified architecture: [ADR-045](decisions.md#adr-045) (umbrella) · [ADR-046](decisions.md#adr-046) (tool catalog + resolver + progressive disclosure) · [ADR-047](decisions.md#adr-047) (tar workspace transport) · [ADR-048](decisions.md#adr-048) (RuntimeSession + `fs`/`sh`/`run`). Contracts are updated and marked `[shipped]`/`[target]`/`[deleted]`; the execution plan is [`IMPLEMENTATION.md` **Phase TR**](IMPLEMENTATION.md) (P0–P5), **approved by the owner 2026-07-30**. 🚧 **P0 (TR.5 honesty pass) is shipped** (named sandbox termination reasons + one worker log line + one redacted observation per failure). **P1–P5 have not started, the destructive baseline reset of TR.3 has not been run, and neither backlog item is fixed** — P0 made the sandbox failure legible, it did not make the sandbox work.
 >
-> Last updated: 2026-07-30 · Phase: **Milestones 1–5 complete**; **post-v1 P0–P2, Phase CRON (ADR-031), Phase APPROVALS (ADR-034), Phase SCHED-FIX (ADR-031 amendment), Phase OBS-A/OBS-LOG/OBS-B (ADR-033), the ADR-032 embedding→bundled-ollama switch (dim 1024), the ADR-036 source-backed Knowledge slice (KB0→KB5), the ADR-037 Workspace-Projects W2a contracts+design batch, the ADR-037 Workspace-Projects W2a production implementation (schema 0028 · blank/template/archive · durable import · REST/tools · `/work/projects` UI), the ADR-038 Workspace-Projects W2b (GitHub one-time import) contracts+design batch, and the ADR-038 Workspace-Projects W2b production implementation (schema 0029 · GitHub connection AEAD vault · resolve ref→OID → bounded tarball fetch → immutable snapshot + source OID provenance · durable import/retry/idempotent · REST §10.6 + `/connections/github` · production `/work/projects` GitHub UI), and the ADR-039/ADR-040 Workspace-Projects W3 (task working copy + one-time scratch-copy sandbox + change review) SECURITY-REVIEW + contracts+design-first batch (independent `docker.sock`/isolation threat model → ADR-039; W3 product/data/tool/lifecycle → ADR-040; **ADR-025 formally revised** to "mount only a one-time scratch, never the source of truth"; frozen data-model §Projects W3 / api §10.7 / events §2.11 / config §1.7; W3 static draft; **no production code/migration/mount/nav**), and the **ADR-039/ADR-040 Workspace-Projects W3 production implementation** (schema 0030 · 6 `project_*` W3 tables + `projects.head_generation` · durable task working copy w/ single-writer lease+fence + head_generation CAS · hardened offline sandbox mounting only a one-time scratch copy · change-set projection w/ bounded diffs + artifacts · REST §10.7 + `project_run`/`project_review_changes` tools · `/work/projects` Chat-embedded **Change Review** UI · Save/checkpoint/Discard human-only) all complete + verified**. Next: **Phase TR** (backlog B-2 + B-8 unified clean-break tool catalog + coding RuntimeSession; ADR-045/046/047/048) — **architecture approved 2026-07-30, execution plan written, implementation blocked on owner approval of the plan**. After that: **W4** (GitHub sync/push/PR — own ADR, ADR-020 approval), or another roadmap milestone (owner's choice). The earlier RAG is archival semantic notes; the Knowledge base (`/library`) is the source-backed document vertical; Projects (`/work/projects`) sits beside Drive under Workspace.
+> Last updated: 2026-07-30 · Phase: **Milestones 1–5 complete**; **post-v1 P0–P2, Phase CRON (ADR-031), Phase APPROVALS (ADR-034), Phase SCHED-FIX (ADR-031 amendment), Phase OBS-A/OBS-LOG/OBS-B (ADR-033), the ADR-032 embedding→bundled-ollama switch (dim 1024), the ADR-036 source-backed Knowledge slice (KB0→KB5), the ADR-037 Workspace-Projects W2a contracts+design batch, the ADR-037 Workspace-Projects W2a production implementation (schema 0028 · blank/template/archive · durable import · REST/tools · `/work/projects` UI), the ADR-038 Workspace-Projects W2b (GitHub one-time import) contracts+design batch, and the ADR-038 Workspace-Projects W2b production implementation (schema 0029 · GitHub connection AEAD vault · resolve ref→OID → bounded tarball fetch → immutable snapshot + source OID provenance · durable import/retry/idempotent · REST §10.6 + `/connections/github` · production `/work/projects` GitHub UI), and the ADR-039/ADR-040 Workspace-Projects W3 (task working copy + one-time scratch-copy sandbox + change review) SECURITY-REVIEW + contracts+design-first batch (independent `docker.sock`/isolation threat model → ADR-039; W3 product/data/tool/lifecycle → ADR-040; **ADR-025 formally revised** to "mount only a one-time scratch, never the source of truth"; frozen data-model §Projects W3 / api §10.7 / events §2.11 / config §1.7; W3 static draft; **no production code/migration/mount/nav**), and the **ADR-039/ADR-040 Workspace-Projects W3 production implementation** (schema 0030 · 6 `project_*` W3 tables + `projects.head_generation` · durable task working copy w/ single-writer lease+fence + head_generation CAS · hardened offline sandbox mounting only a one-time scratch copy · change-set projection w/ bounded diffs + artifacts · REST §10.7 + `project_run`/`project_review_changes` tools · `/work/projects` Chat-embedded **Change Review** UI · Save/checkpoint/Discard human-only) all complete + verified**. Next: **Phase TR** (backlog B-2 + B-8 unified clean-break tool catalog + coding RuntimeSession; ADR-045/046/047/048) — **architecture + execution plan approved 2026-07-30; P0 (honesty pass) shipped, P1–P5 not started**. After that: **W4** (GitHub sync/push/PR — own ADR, ADR-020 approval), or another roadmap milestone (owner's choice). The earlier RAG is archival semantic notes; the Knowledge base (`/library`) is the source-backed document vertical; Projects (`/work/projects`) sits beside Drive under Workspace.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -29,9 +29,9 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**⛔ BLOCKED ON ONE OWNER APPROVAL — Phase TR execution plan.**
+**Phase TR **P1** — baseline squash + legacy deletion ([`IMPLEMENTATION.md` TR.6](IMPLEMENTATION.md), procedure in TR.3). ⚠️ P1 is DESTRUCTIVE (`docker compose down -v` wipes `pgdata`/`redisdata`/`miniodata`) — approved in principle, but announce it in the commit body before running it.**
 
-The next piece of work is [`IMPLEMENTATION.md` **Phase TR**](IMPLEMENTATION.md): the unified,
+The program is [`IMPLEMENTATION.md` **Phase TR**](IMPLEMENTATION.md): the unified,
 clean-break fix for backlog **B-2** (the 52-tool flat surface) and **B-8** (`project_run` always
 fails). Triage on 2026-07-30 showed these are **one architecture problem** — fixing B-8 alone would
 grow the flat surface to ~66 tools, and fixing B-2 alone would block the tools B-8 needs.
@@ -40,21 +40,35 @@ grow the flat surface to ~66 tools, and fixing B-2 alone would block the tools B
 [ADR-046](decisions.md#adr-046) tool catalog / `ToolsetResolver` / `tools.search`+`tools.load` ·
 [ADR-047](decisions.md#adr-047) tar workspace transport (a **narrowing** of the ADR-025/039 mount
 wording, not a relaxation) · [ADR-048](decisions.md#adr-048) explicit `RuntimeSession` + host-side
-`fs.*` + sandbox-routed `sh.*`/`run.*`. Clean break: no compatibility layer, no aliases, **no data
-migration**; the 32 Alembic revisions squash into one `0001_baseline` and the dev database/volumes
-are rebuilt from empty (all current data is disposable test data).
+`fs.*` + sandbox-routed `sh.*`/`run.*` — **and the P0–P5 execution plan itself**. Clean break: no
+compatibility layer, no aliases, **no data migration**; the 32 Alembic revisions squash into one
+`0001_baseline` and the dev database/volumes are rebuilt from empty (all current data is disposable
+test data).
 
-**Done in this batch (documentation only):** ADR-045…048; contract updates in `api.md` (§7 rewritten,
+**Design batch (documentation only):** ADR-045…048; contract updates in `api.md` (§7 rewritten,
 §7.3 and §9 deleted/replaced, §10.7 replaced), `events-and-effects.md` (§2.2 `toolset.resolved`,
 §2.11 RuntimeSession + expanded named exits), `config-and-secrets.md` (§1.4 `WORKSPACE_ROOT` deleted,
 §1.7 tar boundary, §1.10 catalog byte budget), `data-model.md` (`project_runtime_sessions` +
 `project_exec_runs`, baseline-squash plan); `docs/11` capability-matrix corrections; Phase TR P0–P5.
-**No production code, migration, frontend or infra change. B-2 and B-8 are NOT fixed.**
 
-**What is needed from the owner:** approve the **Phase TR execution plan** (`IMPLEMENTATION.md`
-TR.0–TR.15) — specifically the P0→P5 sequencing, the destructive baseline-reset procedure in TR.3,
-and the deletion list in P1. Once approved, start at **P0** (the honesty pass: split the
-`sandbox_unavailable` collapse into named termination reasons with real logging). **P2** (tool
+**✅ Phase TR P0 shipped (2026-07-30) — the honesty pass, backend only, no schema/frontend/infra
+change.** `sandbox_unavailable` is gone from every sandbox code path. The named reasons now live
+once, in `app/sandbox/runner.py`, shared by both entry points: `_run_docker` classifies into
+`runtime_daemon_unreachable` / `runtime_image_missing` / `runtime_start_failed` /
+`runtime_transport_failed` / `error:<class>`, and `sandbox_disabled` stays distinct. The raw failure
+text rides on the new `RunResult.error_detail` into the **worker log only**, while the model gets one
+static, redacted, reason-specific observation (`runtime_failure_note` /
+`SandboxOutcome.failure_note`, surfaced by `project_run` and `run_code`). That also closed a real
+leak: `run_code` used to hand the **raw docker exception string** to the model. `run_sandbox` emits
+exactly **one** structured `logger.warning` per failing exit, including the pre-existing
+`wall_timeout` / `environment_missing_dependencies` / `changeset_bounds` / `fence_lost` / scratch
+exits. Error-is-observation preserved: a runtime failure still persists the host-side edits. Gate:
+full `uv run pytest` **397 passed**, ruff + `ruff format --check` + `mypy app` clean. **The bind
+mount is still structurally broken (P3) and no human Run control exists (P5) — B-8 remains open.**
+
+**What P1 does next:** run TR.3 (destructive dev rebuild), delete the legacy `/files` stack,
+`run_code`, `project_run`/`project_tree`/`project_read`, rename `app/files/` → `app/objectstore/`,
+and squash `0001`…`0032` into a single `0001_baseline` carrying the **target** schema. **P2** (tool
 catalog) and **P3** (tar transport) are deliberately disjoint by file ownership and may then be built
 in parallel; both must merge before **P4**.
 

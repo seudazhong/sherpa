@@ -2177,7 +2177,10 @@ done | cancelled | wall_timeout | mem_limit | pids_limit | output_limit
 ```
 
 Each failure MUST also produce one structured worker log line and one redacted tool
-observation — the model and the user never have to guess which failure happened.
+observation — the model and the user never have to guess which failure happened. *(The named
+reasons + log line + redacted observation are **`[shipped]`** as of Phase TR P0, 2026-07-30, on
+the current `project_sandbox_runs` path; the routes and payloads in this section remain
+`[target]`.)*
 
 | Route | Body → response | Auth | Status |
 |---|---|---|---|
