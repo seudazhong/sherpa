@@ -29,6 +29,10 @@
 | 2026-07-29 | Drive 能否上传文件夹（backlog B-5） | ✅ **客户端有界展开**：`multiple` + `webkitdirectory` + 拖拽目录遍历 → 先逐层建目录（`POST /drive/folders`）再逐个上传（`POST /drive/files`），**不新增 batch/zip 端点、服务端零改动**；有界（≤200 文件 / ≤200 MiB / 并发 3）+ 逐文件状态与诚实的部分失败；archive 上传方案留作后续 | 新增 ADR-042（落地 backlog B-5；复用 ADR-030 契约）|
 | 2026-07-29 | Chat 能否上传/粘贴图片 + 从 Drive 附加文件（backlog B-6） | ✅ **字节只存 Drive**（粘贴/上传先落 `Chat uploads/`，附件只存 `drive_node_id`+`version` 引用，绝不字节复制进 `parts`）；`parts.kind` 扩为 `text\|status\|image\|file_ref`；**装配期**读字节 → user turn 变 OpenAI 形状 content 数组（纯文本 turn 仍是字符串，缓存前缀不变）；三个 provider 各自翻译（Anthropic image block / Gemini inlineData / OpenAI 直通）；**每来源 `supports_vision` 标志**，为假时图片诚实降级为文本占位而非 400；非图片文本类做有界抽取、二进制只给指针 | 新增 ADR-043（落地 backlog B-6；扩展 ADR-005/008/030；延伸 ADR-041）|
 | 2026-07-29 | 测试套件清空开发库、并与 worker 死锁（backlog B-9） | ✅ **进程级数据面隔离**，不是「把 20 处 DELETE 写好看点」：测试进程在 `app.config` 建单例**之前**改写 `DATABASE_URL`→`<应用库>_test`、`REDIS_URL`→逻辑库 15、`OWNER_EMAIL`→合成 owner；专用库由会话钩子自动建库+`alembic upgrade head`+盖**标记表**；**标记表是允许破坏性写入的唯一凭据**（fail-closed，绝不降级到应用库）；全部清场收敛到唯一入口 `drop_tenant()`（`lock_timeout` + 单次重试）。**worker 无需停机**即可跑全量 | 新增 ADR-044（落地 backlog B-9；复用 ADR-015/019/022）|
+| 2026-07-30 | backlog B-2（52 个扁平工具）与 B-8（`project_run` 必失败）是分开修还是一起修 | ✅ **一起修，且按 clean break 做**：二者是同一缺陷的两面——工具面是静态全量注入的，而"在项目里改/跑/测代码"天然需要上下文相关、还会继续变大的工具集。**明确放弃向后兼容**：不做别名/弃用期、不保留历史工具名、不保留 `/files` 遗留栈、不保留 `project_run` 行为、**不做任何数据迁移**；32 条 alembic revision **squash 成单一 baseline**，开发库与卷**销毁重建**（现有数据全部是可抛弃的测试数据，负责人已确认）。本批次**只做 ADR + 契约与设计先行**（无生产代码/迁移/前端/基础设施改动） | 新增 ADR-045（伞；统领 046/047/048；**取代** ADR-023 的工具面落地口径、**取代** ADR-040 §决策8 的执行器口径）|
+| 2026-07-30 | 工具面如何在持续变大的同时保持可理解、省 token、权限安全、可发现 | ✅ **分层工具目录 + 上下文作用域可见集 + 渐进式披露**：全部工具统一 `domain.verb` 命名；旁挂 `ToolDescriptor`（namespace/toolset/version/requires/surfaces/summary）**不改窄腰 `Tool` Protocol**；`ToolsetResolver` 成为**真正的 VISIBLE 闸**（按 trust tier / surface / session kind / runtime 求解，turn 边界冻结，确定性排序，core 恒为缓存前缀真前缀）；core 常驻 ~15 个 + 一行式目录摘要 + `tools.search`/`tools.load` 两个元工具；**不做动词巨型工具**（`drive(op=…)` 会塌成 `oneOf`、削弱校验、破坏权限粒度与审批 scope）；策略引擎升级为 **args 感知** `evaluate(ctx, descriptor, args, scope)` | 新增 ADR-046（落地 backlog B-2；受 ADR-045 统领；具体化 ADR-009 的 VISIBLE 闸；扩展 ADR-008 权限代数） |
+| 2026-07-30 | 项目字节如何进出沙箱（B-8 的 bind mount 在 DooD 下结构性失败） | ✅ **改用 tar ingress/egress，彻底删除 bind mount**：`put_archive`/`get_archive` 完全不涉及任何文件系统路径语义 → 宿主守护进程无需解析 worker 容器内路径（B-8 整类问题消失）、`src=` 路径注入面消失、Windows/Linux/CI/DinD 同码同行为、可用 fake docker client 完整单测。这是对 **ADR-025/ADR-039 挂载口径的收窄性修订**（从"只挂一次性 scratch"收窄为"**只注入**一次性 scratch，**永不挂任何宿主路径**"），**不是放松**。同批交付**真自建 `sandbox-runner` 镜像**（python+pytest+ruff+`capabilities.json`），否则挂载修好也无产品价值 | 新增 ADR-047（落地 backlog B-8；受 ADR-045 统领；**收窄性修订** ADR-025/ADR-039） |
+| 2026-07-30 | file/shell 是宿主一等工具、沙箱路由工具、还是委派子 agent | ✅ **混合分层 + 显式 RuntimeSession**：`fs.*` 走**宿主侧**直接读写工作副本 overlay（无需容器、确定性、可完整单测、且严格强于旧 `project_tree`/`project_read`——后者只看 head，看不见 agent 刚写的内容）；`sh.*` **必经 RuntimeSession** 进沙箱。产品后果：**沙箱不可用只损失「跑」，不损失「改」**。`RuntimeSession` 从 v1 起就是**显式一等对象**（`runtime.open/close` + `scope=project|ephemeral`），未来「沙箱内专用 coding agent」只是加一个 sub-agent provider（`delegate.code_task(runtime_session_id, …)`），**不需重写编排**。`project_run`/`project_tree`/`project_read`/`run_code` **全部删除**；`project_sandbox_runs`（含从未实现的 `warm_until`/在 tar 下无意义的 `scratch_ref`）拆为 `project_runtime_sessions` + `project_exec_runs` | 新增 ADR-048（落地 backlog B-8 的产品面；受 ADR-045 统领；**修订** ADR-040 §决策8「不嵌 coding agent」为「v1 不嵌、接缝预留」） |
 
 ---
 
@@ -176,6 +180,7 @@
 - **理由**：REST 与 Tool 各写一遍业务逻辑必然漂移、双倍 bug、权限不一致；共享 service 让"UI 能做 = agent 能做"成为结构性保证。
 - **落地缺口（→ [docs/11](11-agent-tool-surface.md) + IMPLEMENTATION M-tools）**：`Tool.execute` 需注入 `ToolContext`（当前 `base.py` 缺）；ALLOWED 策略引擎需实现（当前仅 VISIBLE 闸 + 极简 ask）；输出 spill 需落地（api.md §7.2）；候选/待办/连接器/日程/通知/活动均需补 service 抽取 + 工具（`create_todo`/`create_schedule`/日程 REST 连 REST 都缺）。
 - **来源**：用户输入「我认为 agent 肯定要有能力自主控制用户在 UI 上能看到的一切功能」；对齐 api.md §7、docs/05。
+> **落地口径修订（2026-07-30，见 [ADR-045](#adr-045)/[ADR-046](#adr-046)）**：**原则不变**（单一能力层 + REST/Tool 双适配、共享 `CallerContext` 与四道闸、按能力纵切）。修订的是**工具面的呈现方式**：从「所有已注册工具平铺发给每个会话」改为「**分层工具目录 + 上下文作用域可见集 + 渐进式披露**」（`domain.verb` 命名、`ToolDescriptor` 旁挂、`ToolsetResolver` 落地 VISIBLE 闸、`tools.search`/`tools.load`）。"UI 能做 = agent 能做"仍是结构性保证 —— 只是 agent **按上下文取用**而非一次全拿。上文§落地缺口中「`Tool.execute` 需注入 `ToolContext`」**已完成**（`app/tools/base.py:74`）；「ALLOWED 策略引擎」由 [ADR-046] §决策6 升级为 **args 感知**；「输出 spill」的类型化 `ToolOutputSpillReference`（api §7.2）仍**未落地**，排在 Phase TR。
 
 ### ADR-024 · M3 抽取质量门推迟出 v1（折入 post-v1 评估飞轮）
 - **决策（用户确认 2026-07-21）**：v1 收尾 **不含** M3 抽取精度质量门（goldens + 50–100 封脱敏邮件精度基准 + 回归数据集）。**v1 收尾 = 上下文忠实性修复（跨-run 工具历史 bug）+ 审批闭环**。评估 harness 折入 **post-v1 里程碑 #11（评估飞轮增强）**。
@@ -199,6 +204,8 @@
 > - **保留全部既有硬化不变**：`network_disabled`、`cap_drop=ALL`、`no-new-privileges`、非 root、只读 rootfs + tmpfs、mem/pids/cpu/墙钟上限、`--rm`、**无任何密钥注入**。scratch 挂载额外加 `nosuid,nodev`；编排方在**拷贝前剔除/断言无凭据**、校验 scratch 源路径、`finally` 原子清理 + 启动扫除孤儿 scratch。
 > - **信任让步与门控不变**：worker 挂 `docker.sock` ≈ 宿主 root（OWASP Docker Cheat Sheet Rule#1；**只读挂 socket 无用**）——引入「用项目字节喂容器」后风险上升，故该修订**仅在自托管、单用户**下生效（推荐补 **rootless Docker** + **patched runc ≥1.1.12**，CVE-2024-21626）。**多用户 / 真不可信第三方代码的禁止上线条件见 [ADR-039](#adr-039)**（须 gVisor/`runsc` 或 microVM + 不共享 socket + 每租户 scratch/出口/配额隔离 + 威胁评审）。**socket-proxy 对本编排角色是假安全**（需放行 `containers/create`/`exec` 即等于放行逃逸），不采用。
 > - 本条修订的完整威胁模型、方案比较与禁止上线条件在 [ADR-039](#adr-039)；W3 产品/数据/生命周期在 [ADR-040](#adr-040)。**本批次只修订本 ADR 正文的挂载口径 + 新增 ADR-039/040 + 契约增量，不落地任何生产代码/迁移/真实挂载。**
+
+> **再次收窄修订（2026-07-30，见 [ADR-047](#adr-047)）**：上文「**RW 挂载**一份一次性 scratch 副本」进一步**收窄为**「以 **tar 流注入**一次性 scratch 副本进容器内的**匿名卷**，**永不挂载任何宿主路径**」。原因：bind mount 在 Docker-out-of-Docker 下结构性失败（backlog B-8），且 `src=` 路径参数本身是需要当不可信输入校验的攻击面。**其余全部硬化与控制一字不改**（断网 / `cap_drop=ALL` / `no-new-privileges` / 非 root / 只读 rootfs+tmpfs / 资源+时限 / `--rm` / **无密钥注入** / `nosuid,nodev` / 拷贝前剔除凭据 / 原子清理 + 孤儿扫除 / 沙箱绝不接触 socket）。**这是收窄，不是放松**；[ADR-039] 的禁止上线条件完全不变。
 
 ### ADR-026 · QQ / IM 入站通道 + IM 审批渲染器（落地 roadmap 里程碑4）
 - **决策（2026-07-22）**：以**通道适配器**形态接入 IM，首个后端为自托管的 **OneBot v11 / aiocqhttp** HTTP API（go-cqhttp / Lagrange / AstrBot）。入站与 Web 提示**同源**：`POST /channels/qq/webhook` 收事件 → **复用 `admit_prompt`** 持久化后再调模型 → worker 跑同一有界循环 → 出站 `send_private_msg` 回推最终 assistant 文本。IM 线程**直接映射到既有 `sessions`**（`channel='qq'` + `external_scope_id=<qq user id>`，`umo_key=qq:<inst>:<uid>`）——**不新增表、不改冻结契约**；`run_kind` 仍用 `web_chat`（`runs` CHECK 不动，session.channel 才是判别键）。
@@ -601,6 +608,8 @@
 
 - **来源（一手证据）**：OWASP Docker Security Cheat Sheet（Rule#1 socket=宿主 root、只读挂无用；Rule#11 rootless）<https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html>；CVE-2024-21626 "Leaky Vessels" <https://nvd.nist.gov/vuln/detail/CVE-2024-21626> · <https://github.com/advisories/GHSA-xr7r-f8xq-vfvv>；Tecnativa docker-socket-proxy <https://github.com/Tecnativa/docker-socket-proxy>；Rootless Docker（官方 + Known Limitations）<https://docs.docker.com/engine/security/rootless/>；gVisor 安全架构 <https://gvisor.dev/docs/architecture_guide/security/> + Docker 快速上手 <https://gvisor.dev/docs/user_guide/quick_start/docker/> + CVE 列表 <https://app.opencve.io/cve/?product=gvisor&vendor=google>；Firecracker 设计/威胁模型 <https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md>；Kata 架构 <https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/README.md>；Sysbox <https://github.com/nestybox/sysbox>；OpenHands 沙箱 RW 挂载告警 <https://docs.openhands.dev/openhands/usage/sandboxes/docker>；Portainer bind-mount 绕过 <https://github.com/advisories/GHSA-7fw3-x4r2-g7wc>；E2B Firecracker 编排 <https://deepwiki.com/e2b-dev/infra>；R-WORKSPACE-PRODUCT §10–§11；Sherpa 现状（`infra/docker-compose.yml` worker 挂 `docker.sock`、`backend/app/sandbox/runner.py` 硬化容器、`docs/05` §sandbox socket 安全）；负责人输入「第一优先完成独立安全评审……给出 W3 首版可实施的最小安全架构与明确禁止上线条件；不得把未实施缓解写成已安全」。
 
+> **收窄修订（2026-07-30，见 [ADR-047](#adr-047)）**：§决策1 的「新增**一份一次性 scratch 只读拷贝的 RW 挂载**」收窄为「以 **tar 流注入**一次性 scratch 副本进容器内**匿名卷**」。控制①（`nosuid,nodev`）、②（拷贝前剔除/断言无凭据）、④（绝不挂快照/blob store/其它 project/Drive/`WORKSPACE_ROOT`/`TOOL_OUTPUT_ROOT`/socket/凭据）、⑤（`finally` 原子清理 + 启动扫除孤儿）、⑥（沙箱绝不接触 `docker.sock`）**逐条保留**；控制③（校验 scratch 源路径在 `SANDBOX_SCRATCH_ROOT` 内、无穿越）因**不再存在 `src=` 参数**而**不再适用** —— 攻击面被结构性移除而非被信任替代。**§决策2 的禁止上线条件（多用户 / 真不可信第三方代码前须 gVisor 或 microVM + 不共享 socket + 每租户 scratch 隔离 + 租户级出口策略 + 聚合配额 + 权限无跨租户泄漏 + 威胁评审）完全不变**，且仍是 roadmap 上的硬门；§决策3「不把未实施缓解写成已安全」继续适用于本次修订本身。
+
 ---
 
 ### ADR-040 · Projects W3 = Project Chat 任务工作副本 + 一次性 scratch 沙箱变更评审（契约与设计先行；延伸 ADR-037；受 ADR-039 门控；正式修订 ADR-025）
@@ -634,6 +643,12 @@
 - **验收关键（本契约先行批次）**：ADR-040 被接受；data-model 有 `project_working_copies`/`project_working_copy_entries`/`project_change_sets`/`project_change_set_entries`/`project_artifacts`/`project_sandbox_runs` + `projects.head_generation`（canonical vs 派生清晰、lease+fence、head-gen CAS、每表 `tenant_id`+复合键、字节不入 journal）；api §10.7 有 working-copy/sandbox-run/change-review/Save selected·checkpoint·Discard/artifacts REST + Tool schema（`project_run`/`project_review_changes` allow、Save 系列 user-only）；events §2.11 有「沙箱无 effect_unknown」+ fence 幂等持久 + head-gen CAS + crash recovery；config §1.7 有 mount/lifecycle/resource/network/credential 边界 + `SANDBOX_*`/`WORKING_COPY_*`；能力矩阵有 W3 行且 **UI 列 ⬜**；W3 静态稿（Project Chat 执行态/diff change review/artifacts/Save·checkpoint·Discard/stale·conflict/390px）落在生产 Quiet Work 设计系统、桌面与 390px 均合理，且**明标设计稿、不冒充已实现**；**无生产代码/迁移/真实挂载/W3 导航暴露**；W4 非目标写清。契约**先于代码**（本 ADR 同批）。
 
 - **来源**：R-WORKSPACE-PRODUCT 调研 [`research/workspace-product-report.md`](research/workspace-product-report.md) §10（真相源层级、Project Chat 生命周期、持久边界、并发与恢复、change set out、用户动作、初始执行器边界）；ADR-037 §决策2/3/4；[ADR-039] 隔离评审；Gitpod/Ona 工作区快照凭据边界、OpenHands「RW 挂载可被 agent 改」；负责人输入「按正常顺序进入 W3……W3 目标：Project-bound Chat 首次变更动作创建跨 turn 持久 working copy；Sherpa snapshot/head 是真相源；working copy/overlay 是持久任务态；每次执行只物化一次性 scratch 副本，sandbox 绝不挂 project snapshot/blob store/凭据；内置 file/edit/run/test 工具在 scratch 上工作；有界批次后持久化 overlay；Change Review 展示 added/modified/deleted/artifacts；用户可 Save selected、Save+checkpoint、Discard；head 移动时 stale save 必须拒绝；single-writer lease/fence；容器是短 TTL 可丢缓存；缺依赖显式 environment_missing_dependencies；不做包安装、不嵌 coding agent、不做 git init/history/commit/branch、不做 GitHub sync/push/PR（W4）」。
+
+> **执行器口径修订（2026-07-30，见 [ADR-048](#adr-048)；clean break，[ADR-045](#adr-045) 统领）**：§决策8「内置 file/edit/run/test 工具在 scratch 上工作，不嵌 coding agent」修订为——
+> - **执行器分层**：`fs.*` 走**宿主侧**直接读写工作副本 effective tree（无需容器；严格强于被删的 `project_tree`/`project_read`，后者只看 head、看不见 agent 刚写的内容）；`sh.*`/`run.*` 经**显式 `RuntimeSession`** 进沙箱。**沙箱不可用只损失「跑」，不损失「改」。**
+> - **`project_run` / `project_tree` / `project_read` 删除**（无 shim、无别名）；`project_sandbox_runs`（含从未实现的 `warm_until`、tar 传输下无意义的 `scratch_ref`）拆为 `project_runtime_sessions` + `project_exec_runs`；`POST /projects/{id}/sandbox-runs` 由 `POST /projects/{id}/runtime` + `POST /runtime/{rid}/exec`（202 + SSE + cancel）取代，且**改由 worker 执行**。
+> - **"不嵌 coding agent"→"v1 不嵌，接缝预留"**：未来沙箱内专用 coding agent 以 **sub-agent 适配器**（`delegate.code_task(runtime_session_id, …)`）形态接入同一容器、同一 overlay、同一预算与审计路径，**不需重写编排**。这是 `RuntimeSession` 必须在 v1 就是显式一等对象的根本原因。
+> - **不变**：真相源层级、single-writer lease + fence、`head_generation` CAS Save（`409 head_moved`）、Save/checkpoint/Discard **人工专属**、change set 有界 + 显式 `truncated`、artifacts 默认 `ephemeral`、**无包安装、无开网**、缺依赖显式 `environment_missing_dependencies`、W4 边界。
 
 ---
 
@@ -750,3 +765,188 @@
 - **验收关键**：开发 worker **保持运行**时 `uv run pytest` 全绿（这是与旧行为的分水岭：以前必须停 worker）；连跑两次结果一致；把 `TEST_DATABASE_URL` 指向应用库时**在导入期就中止且不发出任何 DELETE**；跑完开发库各表计数与基线**逐项相同**；`ruff check` / `ruff format --check` / `mypy app` 全绿；README/AGENTS/STATUS 里「测试会毁开发数据」的告警与规避说明一并撤除（陈述与现实不允许分叉）。
 
 - **来源**：backlog B-9（2026-07-28 发现于 B-3 验证过程）；现状 `backend/tests/conftest.py`、`backend/app/{config,db,redis_client}.py`、`app/auth/owner.py`、`app/worker.py::project_workcopy_maintenance`、`app/services/project_workcopy.py::expire_idle`。
+
+---
+
+### ADR-045 · 伞 ADR：Agent 工具面 v2 + 执行工作区统一架构（clean break，无兼容层、无数据迁移；统领 ADR-046/047/048）
+
+> **状态：架构决策已由负责人批准（2026-07-30）；实现代码仍须等待详细执行计划获批。本批次只做 ADR + 冻结契约增量 + 实现计划，不写生产代码/迁移/前端/基础设施（AGENTS.md §1/§2）。** 落地任务见 [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md)；下属决策见 [ADR-046](#adr-046)（工具目录）、[ADR-047](#adr-047)（tar 传输 + 安全模型）、[ADR-048](#adr-048)（RuntimeSession 与 Project 编码模型）。
+
+- **背景（两个 backlog 是同一个问题）**：
+  - [`backlog.md` B-2](backlog.md#b-2-built-in-tool-surface-is-too-large-53-tools)：工具面**实测 52 个**（backlog 原记 53，偏差 1），schema JSON **19,848 字节 ≈ 4,962 token**，在 `backend/app/core/loop.py:527` 于 while 循环内每轮重建、**每次模型调用全量重发**。
+  - [`backlog.md` B-8](backlog.md#b-8-project_run-always-fails-with-sandbox_unavailable)：`project_run` **必然失败**。
+  - 二者是同一缺陷的两面：工具面是**扁平、静态、全局注入**的，而"在项目里改/跑/测代码"天然需要**上下文相关、按运行时路由、还会继续长到 70+ 个**的工具集。只修 B-8（补 file/shell 工具集）会把 52 变成 70+，把设计债变成上下文事故；只修 B-2（砍工具）会挡住 B-8 必需的工具面扩张。**必须一次设计。**
+
+- **根因（代码确证）**：
+  1. **VISIBLE 闸事实上没实现**。`backend/app/tools/registry.py` 只有 SAFE/FULL 二元，SAFE 只含 `echo`/`get_time`（`app/tools/builtin.py`），且 `loop.py:412/437/449` 的 `tier` 全流程恒为 `FULL`。一个闲聊会话被迫携带 `project_run`(1142B)、`create_scheduled_task`(889B)、8 个 `drive_*`、5 个 `knowledge_*`。契约 [api.md §7.1](contracts/api.md) 说的"turn 构造时按 profile/source 决定可见集"在代码里是空的。
+  2. **无命名空间/版本/工具集/发现机制**。名字是扁平字符串，命名法三代混杂（`todo_write` / `update_todo` / `complete_todo`；`memory_user_set` / `memory_note`）。
+  3. **真实功能重复**。`file_*`(4) 走遗留 `files` 表（`app/services/files.py` + `app/api/files.py`，前端**已无 Files 页面**），`drive_*`(8) 走 ADR-030 Drive —— 对模型是两套语义相同的文件系统。
+  4. **B-8 = bind mount 在 Docker-out-of-Docker 下结构性失败**。`sandbox_scratch_root=".sherpa/scratch"`（`app/config.py:154`，**相对路径**）在 worker 容器内解析为 `/app/.sherpa/scratch/<run>`，却被当作 bind mount 的 `source` 交给**宿主** Docker 守护进程（worker 挂宿主 `docker.sock`，`infra/docker-compose.yml:178`），宿主上不存在；compose 也**无任何共享 scratch 卷**（`docker-compose.yml:239-243`）。→ `DockerException` → `sandbox_start_failed`（`app/sandbox/project_sandbox.py:269-270`）→ 被 `app/services/project_sandbox.py:141-144` **无差别塌缩成 `sandbox_unavailable` 且不打日志**。
+
+- **本次新发现的三个次生问题（backlog 未记录）**：
+  1. **人工泳道根本不存在**：`frontend/src/api.ts:1293` 定义了 `createSandboxRun`，**全前端零调用点**。能力矩阵（[docs/11](11-agent-tool-surface.md) §9）W3 行的 UI ✅ 是错的。
+  2. **即使挂载修好，REST 泳道仍会失败，且失败原因不同**：`app/api/projects.py::create_sandbox_run` **在 web 进程内同步执行** `sbx_svc.run_sandbox(...)`，而 `SANDBOX_KIND=docker` **只配在 worker**（`docker-compose.yml:163`），web 默认 `"disabled"`（`config.py:141`）且无 docker.sock；同时它**同步阻塞 HTTP 最长 120s**，而契约本就写 202。
+  3. **测试结构性看不见它**：`backend/tests/test_project_sandbox.py` 把 `psbx._execute_in_scratch` monkeypatch 掉，`test_sandbox.py` 把 `_execute` patch 掉，**全仓无一个真 Docker 集成用例**。这就是它带着 297 个绿测上线的机制性原因。
+  4. **镜像现实**：`sandbox_image = "python:3.11-slim"`（`config.py:142`），**无 pytest / ruff / node / git**；`sandbox-runner/` 目录**只有 README.md，没有 Dockerfile**。即使挂载修好，`project_run` 也跑不了任何有意义的测试。
+  5. **`warm` 从未实现**：`sandbox_warm_ttl_seconds`（config）、契约 `SandboxRunState.warm`、DB 列 `project_sandbox_runs.warm_until` 都存在，`app/sandbox/` 与 `app/services/` 代码里 **零实现**。
+
+- **决策（负责人批准 2026-07-30）**：
+  1. **B-2 与 B-8 合并为一个架构/产品程序**，一次拍板共同前提：**工具面是上下文相关的目录，执行工作区是运行时挂载的能力**。
+  2. **Clean break：明确不为旧架构做兼容优化，明确不做数据迁移。** 取消别名表、弃用周期、历史工具名保留、`/files` 保留期、`project_run` shim、双写。**理由**：现有 Sherpa 数据全部是可抛弃的测试数据（负责人确认）；为一个单用户自托管、尚未 onboard 任何外部用户的系统建兼容层，是纯粹的复杂度税。
+  3. **32 条 alembic revision squash 成单一 `0001_baseline`**，开发库与 docker 卷**销毁重建**。这不是"数据迁移"，是它的反面：`backend/migrations/versions/` 里 0001→0032 的累积史本身就是对旧架构的兼容包袱。
+  4. **窄腰不动**：[api.md §7](contracts/api.md) 的 `Tool` Protocol、四道闸（REGISTERED→VISIBLE→ALLOWED→EXECUTABLE）、`ToolResult` 双面、"错误即观察"、`begin_invocation`/审批/审计路径**原样保留**。新增的一切都在**注册表之上**，不在窄腰之内 —— 这正好兑现 api.md §7.4「built-in / MCP / sub-agent 走同一条路」。
+  5. **三条下属决策**：[ADR-046] 工具目录 / [ADR-047] tar 传输 + 安全模型 / [ADR-048] RuntimeSession 与 Project 编码模型。
+  6. **明确留 roadmap（不在本程序内）**：生产 runner（gVisor/`runsc` 或 microVM + 每租户隔离，即 [ADR-039] 的禁止上线条件）、沙箱内专用 coding agent、MCP/plugin provider、dev-server 托管预览、W4 GitHub sync/push/PR。
+
+- **clean break 之下仍必须做的三件事，及其理由（这些不是兼容工作）**：
+  | 项 | 为什么仍要做 |
+  |---|---|
+  | **事件日志里的历史工具名不动** | `event_journal` 是 append-only 真相源（[ADR-016]），**物理上不可改写**。而 `backend/app/core/history.py:133-165` 重建历史时**直接读事件 payload 里的 `name` 字符串、从不查注册表** —— 故删除工具**不会**破坏跨 run 历史重建。**结论：什么都不用做。**（这条推翻了"必须保留 `project_run` 以维持历史忠实性"的早期论据。） |
+  | **Alembic 链线性且空库 `upgrade head` 可跑** | **仓库一致性**，不是数据兼容。不能从中间抽掉 revision；squash 必须产出一条完整可跑的 baseline。 |
+  | **凭据边界 / 容器硬化 / 权限四道闸不变** | **安全**（[ADR-019]/[ADR-025]/[ADR-039]/[ADR-009]）。clean break 不等于降低安全成本 —— 这是 [ADR-022] "为真正上线的每个能力付全额安全成本"的直接推论。 |
+
+- **被否的替代方案**：
+  - **A · 最小修复**（把 bind 路径对齐 + 拆错误码 + 补一个 Run 按钮，B-2 不动）：成本最低（~2 天），但**不关闭 B-2**；保留 `src=` 路径注入面与"宿主绝对路径进配置"（Windows/Linux/CI/DinD 各一套配置，正是 B-8 逃过 297 个测试的原因）；保留"沙箱挂 = 改不了代码"的产品脆弱性；无 `RuntimeSession` 对象，未来沙箱内 coding agent 必须重写编排。**同一段编排代码要动两次。**
+  - **C · 直接上持久远程 runner + 沙箱内 coding agent**：终局最优，但**不解决 B-2**（工具面问题原样存在，且内嵌 agent 反而**新增**工具面复杂度）；一次性引入新服务 + 新协议 + KVM/containerd 依赖 + 新信任边界，违背 [ADR-022] 单用户自托管定位。**它是终局而非起点** —— [ADR-048] 的 `RuntimeSession` 抽象正是通往它的路径，故排进 roadmap 而非现在建。
+
+- **取代/延伸关系**：**取代** [ADR-023] 的工具面**落地口径**（能力层 + 双适配器的原则不变，但"所有工具平铺给所有会话"被目录 + 作用域可见集取代）；**修订** [ADR-040] §决策8（"内置 file/edit/run/test 工具 … 不嵌 coding agent" → "v1 不嵌，但 `RuntimeSession` 接缝预留"）；**收窄性修订** [ADR-025]/[ADR-039] 的挂载口径（见 [ADR-047]）；**具体化** [ADR-009] 的 VISIBLE 闸；**扩展** [ADR-008] 权限代数为 args 感知。**不改** [ADR-016]/[ADR-017]（journal + outbox 真相源与 effect 语义）、[ADR-015]（租户键）、[ADR-019]（密钥边界）、[ADR-020]（审批信封）、[ADR-030]（Drive 字节存储）、[ADR-037]/[ADR-038]（Projects W2a/W2b）。
+
+- **验收关键（本设计批次）**：ADR-045/046/047/048 被接受；契约增量落地且**明标 target vs current 实现状态**（绝不把未实现写成已实现）；`IMPLEMENTATION.md` 有可被**无对话记忆的新 Copilot 进程**独立执行的 Phase TR（P0–P5）；`STATUS.md`/`backlog.md` 只记录"架构已批准 + 下一实现阶段"，**B-2/B-8 不标 done**；**无生产代码/迁移/前端/基础设施改动**。
+
+- **来源**：backlog B-2 + B-8；本批次只读代码勘察（`app/tools/*`、`app/core/loop.py`、`app/permissions/*`、`app/sandbox/*`、`app/services/project_*`、`app/api/projects.py`、`frontend/src/{api.ts,views/ProjectsView.tsx,components/ChangeReview.tsx}`、`infra/docker-compose.yml`、`backend/tests/test_project_sandbox.py`）；实测 `build_default_registry().schemas("full")` = 52 工具 / 19,848 B；负责人输入「不要为旧架构做兼容优化、不要规划数据迁移；现有数据均为可抛弃测试数据，接受 baseline squash 与销毁重建；架构批准，实现代码仍需先批执行计划」。
+
+---
+
+### ADR-046 · 工具目录 = `domain.verb` 命名空间 + ToolDescriptor/ToolsetResolver + 渐进式披露（落地 backlog B-2；受 ADR-045 统领；具体化 ADR-009 的 VISIBLE 闸；扩展 ADR-008）
+
+> **状态：已批准（2026-07-30），契约与设计先行；实现待 Phase TR 执行计划获批。**
+
+- **决策**：
+  1. **统一命名 `domain.verb`**：全部工具一律 `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`（`drive.read` / `project.list` / `fs.write` / `sh.exec` / `tools.search`）。**这需要修订 [api.md §7](contracts/api.md) 的名称正则**（现为 `^[a-z][a-z0-9_]{0,63}$`，不含点）。点号在 OpenAI / Anthropic / Gemini 三家 wire 协议上都合法（`backend/app/providers/tools.py` 的三个适配器只做透传/裁剪）。clean break 之下**不存在新旧混排**，故 `ToolDescriptor` **不设 `stability`/`deprecated` 字段**。
+  2. **`ToolDescriptor` 旁挂，不改窄腰**：`Tool` Protocol（`backend/app/tools/base.py:68-74`）一字不改；目录元数据在**注册时**以独立 dataclass 提供：
+     ```python
+     @dataclass(frozen=True)
+     class ToolDescriptor:
+         tool: Tool
+         namespace: str            # core|inbox|todo|schedule|memory|knowledge|drive|project|fs|sh|run|tools
+         toolset: str              # 目录条目 id，如 "knowledge" / "fs.edit"
+         version: int              # 破坏性 schema 变更 ⇒ 升版（clean break 下无并存期）
+         requires: frozenset[str]  # "project_binding" | "runtime_session" | "gmail_connected"
+         surfaces: frozenset[str]  # "chat" | "scheduled_task"（"connector_analysis" 恒为空集）
+         summary: str              # ≤80 字符，只进目录摘要，不进完整 schema
+     ```
+  3. **`ToolsetResolver` = 真正的 VISIBLE 闸**（[api.md §7.1](contracts/api.md) 第 2 闸的落地）。输入 profile `(trust_tier, surface, session_kind, runtime, loaded_toolsets)`，输出 `core` / `catalog` / `loaded`。**两条硬约束**：
+     - **确定性排序 + core 恒为真前缀**：按 `(namespace, name)` 排序，`core` 永远在数组最前 —— 于是 `resolve(general).core` 在字节层面是 `resolve(project_bound)` 工具数组的**真前缀**，加载新工具集只让**尾部**失配。这是 [docs/04](04-core-loop.md) 不变量⑤（前缀字节稳定 + 动态数据在尾部）在工具数组上的落地。
+     - **turn 边界冻结**：可见集在 turn 开始时定死、turn 内不变（[ADR-009] 原文）；`tools.load` 的效果**在下一个 turn 生效**，并写一条 `toolset.resolved` 事件。
+  4. **渐进式披露**：`core` 常驻约 15 个 + **一行式目录摘要**渲染进 system 消息的能力层（位于全局前缀之后、per-user 记忆与 per-session ambient 之前，保持 `loop.py:483-491` 的分层顺序）+ 两个元工具（合计 <500 B）：
+     - `tools.search(query)` → 返回匹配的 toolset id + summary + 工具数（`read_only`，allow）
+     - `tools.load(toolsets[≤3])` → 本会话后续 turn 获得其完整 schema（`read_only` 语义，allow，但**记审计**）
+  5. **不做动词巨型工具**（`drive(op=…)`）。理由：会把 8 个精确 JSON Schema 塌成带 `oneOf` 的巨型 schema，**削弱 `app/tools/validate.py` 的参数校验**、**破坏权限粒度**（`drive.trash` 与 `drive.read` 的 `effect_class` 不同）、**污染审批 scope**（`permission_scope="tool:drive"` 太粗）。分组 + 按需加载已拿到 token 收益的绝大部分，风险却低一个数量级。
+  6. **策略引擎升级为 args 感知**：`app/permissions/policy.py` 的 `evaluate(tool)` → `evaluate(ctx, descriptor, args, scope) -> "allow"|"ask"|"deny"`，last-match 胜、`deny > ask > allow`（[ADR-008] 代数）。审批 scope 从裸 `"tool:{name}"` 升为 `"tool:{name}"` + 结构化 `scope`（如 `{"command_class":"shell","paths":["src/"]}`），使 [ADR-020] 信封能渲染**确切命令 + 目标路径**。`app/permissions/grants.py` 的 `_MATCHERS` 从只支持 `send_email` 扩到 `sh.exec`（命令白名单）与 `fs.write`（路径前缀）。
+  7. **删除**：`app/tools/file_tools.py`（4 个 `file_*`）、`app/services/files.py`、`app/api/files.py` 及 `app/main.py` 的 `include_router(files_router)`、`files` 表、`app/tools/sandbox_tools.py`（`run_code`）。**保留**并建议改名 `app/files/` → `app/objectstore/`（它是对象存储适配层，Drive/Projects 都依赖，名字与被删的 files 栈重名纯属误导）。
+  8. **命名统一（clean break，无别名）**：`memory_user_get`/`memory_user_list` → `memory.recall`（key 可选）；`todo_write`/`update_todo`/`complete_todo` → `todo.create`/`todo.update`（含 status）；其余按 `domain.verb` 逐一改名。旧名**直接消失**；模型若照抄历史 transcript 调用旧名，得到 `unknown tool` 观察 —— **错误即观察，不崩循环**（api.md §7），可接受。
+  9. **provider 概念前向预留**：目录层统一 `ToolProvider`（`BuiltinProvider` 今天唯一实现；`RuntimeProvider` 由 [ADR-048] 引入；`McpProvider`/`SubAgentProvider` 留 roadmap）。外部 provider 的工具默认 `surfaces={"chat"}` + 全部 `ask` + **永不进 core 集**（必须显式 `tools.load`）—— 这是 roadmap #9「两遍信任 + footprint ladder」在目录层的落地。
+
+- **token 预算（实测基线 19,848 B / ~4,962 token）**：
+
+  | 场景 | core | 目录摘要 | 合计 | 相对今天 |
+  |---|---|---|---|---|
+  | 普通 chat | ~15 工具 ≈ 5.5 KB | ~0.5 KB | **~6 KB / ~1.5k tok** | **−70%** |
+  | Project-bound（无 runtime） | core + `project` ≈ 9 KB | ~0.5 KB | ~9.5 KB | −52% |
+  | Project-bound + runtime | core + project + `fs` + `sh` ≈ 13 KB | ~0.5 KB | ~13.5 KB | −32%（**工具总数 52→66**） |
+  | `CONNECTOR_ANALYSIS` | **0**（[ADR-009] 无工具） | 0 | 0 | 不变 |
+
+  即：**工具总数增长 27%，普通会话上下文反而降 70%。**
+
+- **不变式**：`CONNECTOR_ANALYSIS` 永远零工具（`surfaces` 不含它，[ADR-009] 不弱化）；解决审批、破坏性 purge、model provider 配置、GitHub 凭据、Save/checkpoint/Discard 仍**不给 agent**（[docs/11](11-agent-tool-surface.md) §12 边界不变）；工具错误仍是观察不是异常。
+
+- **验收关键**：普通 chat 的工具 JSON ≤ **6 KiB**（回归断言 `TOOL_CATALOG_CORE_MAX_BYTES`）；`resolve(general).core` 是 `resolve(project_bound)` 的**字节级真前缀**（断言）；同一 profile 连调两次**字节相同**；mock provider 脚本证明 `tools.search → tools.load → 下一 turn 调用成功`；`CONNECTOR_ANALYSIS` 仍零工具；名称正则 + 唯一性 + 版本单调断言通过；`toolset.resolved` 事件记录 core 摘要 / 加载集 / `tools_offered` / `catalog_bytes`。
+
+- **来源**：backlog B-2；实测 `app/tools/registry.py` + `app/core/loop.py:527`；[ADR-045] §根因；[ADR-008]/[ADR-009]/[ADR-020]/[ADR-023]/[ADR-034]；负责人拍板 O-1（点号命名）、O-2（不做动词巨型工具）、O-7（模型可自主 `tools.load`）。
+
+---
+
+### ADR-047 · 执行工作区传输 = tar ingress/egress（删除 bind mount）+ 自建 runner 镜像 —— **收窄性修订 ADR-025/ADR-039 的挂载口径**（落地 backlog B-8；受 ADR-045 统领）
+
+> **状态：已批准（2026-07-30），契约与设计先行；实现待 Phase TR 执行计划获批。本 ADR 收窄（而非放松）既有隔离口径。**
+
+- **传输方案比较**：
+
+  | 方案 | 机制 | Windows host + DooD（当前 dev 栈） | 安全面 | 生产演进 |
+  |---|---|---|---|---|
+  | **A. bind mount**（现状） | `Mount(type="bind", source=<path>)` | ❌ **结构性坏**：source 在宿主解析，worker 容器内路径不存在（B-8） | 需把 `src=` 当不可信输入校验（[ADR-039] §决策1③）；宿主路径进配置 | 生产必须重做 |
+  | **B. named volume** | worker 建/复用具名卷，sandbox 挂同名卷 | ✅ 名字由守护进程解析 | 无路径注入面；但卷是持久对象，需生命周期管理 | 好；warm 容器天然契合 |
+  | **C. `put_archive`/`get_archive`（tar 流）** | worker 用 docker API 把 tar 直接写进容器 `/work`，跑完 `get_archive` 取回 | ✅ **完全不涉及任何文件系统路径语义** | **最小**：无 bind、无卷、无 `src=` 参数 | 好；是 gVisor/microVM/远程 runner 的**天然通用接口** |
+  | D. git clone/worktree | sandbox 内 clone 内部 git 仓 | 需 sandbox 内有 git + 一个 git 服务端 | 引入 git 传输攻击面 | 与 [ADR-038]「不引入独立 Git 存储」直接冲突 |
+  | E. 持久远程 runner | 独立 runner 服务 + session API | ✅ | 最好（[ADR-039] 禁止上线条件的正解） | **生产终局** |
+
+- **决策**：
+  1. **v1 = C（tar ingress/egress）**，`app/sandbox/` 中所有 `Mount(type="bind", ...)` **删除**；容器 `/work` 用**匿名卷**（`nosuid,nodev`）。四条理由：
+     - **消灭整类问题**：A 的修法要求宿主绝对路径以**同一路径**挂进 worker，在 Windows + Docker Desktop 上尤其脆弱，且 Linux / CI / DinD 各有一套不同的正确配置 —— 这正是 B-8 逃过 297 个测试的原因。**C 没有配置可配错。**
+     - **安全净收益**：[ADR-039] §决策1③ 要求"把构造的 scratch `src=` 路径当不可信输入校验"—— C 让这条要求**不再适用**（根本没有 `src=`）。[ADR-025] 修订的"永不 RW 挂真相源"依然成立且**更强**：**根本不挂任何宿主路径**。
+     - **通往生产 runner 的正确接口**：远程 runner 天然就是"上传工作区 → 执行 → 取回 delta"。今天写成 tar，明天换 runner 只换传输实现，[ADR-048] 的 `RuntimeSession` 抽象不变。
+     - **可测**：tar 往返可用 fake docker client 完整单测；bind mount 的正确性**只能**靠真 Docker 验证。
+  2. **对 [ADR-025]/[ADR-039] 的收窄性修订**：把"允许且仅允许 RW **挂载**一份一次性 scratch 副本"收窄为 —— **允许且仅允许把一次性 scratch 副本以 tar 流 *注入* 容器内的匿名卷；永不挂载任何宿主路径、永不挂载真相源。** [ADR-039] 的其余全部控制**逐条保留**：拷贝前剔除/断言无凭据、`nosuid,nodev`、编排 `finally` 原子清理 + 启动孤儿扫除、沙箱绝不接触 `docker.sock`、socket 只在可信编排进程（TCB）。[ADR-025] 的全部硬化**一字不改**：`network_disabled`、`cap_drop=ALL`、`no-new-privileges`、非 root（`nobody`）、只读 rootfs + tmpfs、mem/pids/cpu/墙钟上限、`--rm`、**无任何密钥注入**。
+  3. **[ADR-039] 的禁止上线条件完全不变**：多用户 / 真不可信第三方代码之前，仍必须先做 gVisor(`runsc`) 或 microVM + 不共享 `docker.sock` + 每租户 scratch/出口/配额隔离 + 威胁评审。**tar 传输不改变这个门；它只是把单用户 dev 栈从"结构性坏"修成"结构性对"。未实施的缓解绝不写成已安全。**
+  4. **同批必须交付真自建 `sandbox-runner` 镜像**：今天用 stock `python:3.11-slim`（无 pytest/ruff/node/git），`sandbox-runner/` 只有 README。v1 镜像 = 非 root、只读 rootfs 友好、**python + pytest + ruff**、版本 pin、**不含 git、不含网络工具**，并自带 `/opt/sherpa/capabilities.json` 供启动时能力探测 —— 让 `environment_missing_dependencies` 能给出"本镜像有什么"的可操作观察，而不是靠 exit 127 猜。**node 作为可选 profile 留后（O-6）。**
+  5. **传输协议**：
+     - **ingress**：`base snapshot + persisted overlay` → **内存 tar** → `put_archive("/work")`。物化前**剔除/断言无凭据**（`.env*`、`*.pem`、`*.key`、`.git/config`、`id_*`），受 `SANDBOX_SCRATCH_MAX_BYTES` 约束。
+     - **egress**：`get_archive("/work")` → 与 ingress manifest 比对出 delta（added/modified/deleted）→ **fence 守护地**持久进 overlay + 投影 change set。超界 ⇒ 显式 `truncated`，**绝不给看似完整的假 diff**。
+     - **tar 本身是不可信输入**：解包时拒绝绝对路径、`..` 穿越、NUL、设备/FIFO、硬链接、逃逸 symlink（复用 `app/services/archive.py` 的既有安全解包语义）。
+  6. **演进路径**：v1 = tar；**v1.5 = 具名卷**（触发条件：项目 > ~50 MB，或需要同一 runtime session 跨多次 exec 复用工作区而 tar 全量进出成为瓶颈）；**v2 = 持久远程 runner**（roadmap，[ADR-039] 禁止上线条件的正解）。
+  7. **删除 `warm` 概念**：`sandbox_warm_ttl_seconds` / `SandboxRunState.warm` / `project_sandbox_runs.warm_until` **从未实现**，且语义应由 [ADR-048] 的 `RuntimeSession` TTL 承载。三处一并删除，不做兼容。
+
+- **权衡（明说）**：tar 对大项目有拷贝成本。缓解 = **同一 runtime session 内多次 `sh.exec` 只做一次 ingress**（这正是 [ADR-048] 让 `RuntimeSession` 成为显式一等对象的性能理由之一）；超出后按 §决策6 升级到具名卷。
+
+- **验收关键**：`app/sandbox/` 中不再出现 `type="bind"`；`sandbox-runner/Dockerfile` 存在且构建产物含 pytest/ruff + `capabilities.json`；`sh.exec("pytest -q")` 在 **Windows + Docker Desktop 真栈**上返回真实 exit code 与 stdout；Docker 拓扑矩阵（Win+DooD / Linux+DooD / DinD / 无 Docker / rootless）全绿；**凭据 canary**：把假 KEK 放进项目树，断言它不出现在 tar / overlay / change set / artifact / 日志 / prompt / 工具结果；tar 解包拒绝 zip-slip / 硬链接 / 设备节点 / 逃逸 symlink；`config §1.7` 与本 ADR 与 [ADR-025] 修订三者口径一致。
+
+- **取代/延伸关系**：**收窄性修订** [ADR-025]（2026-07-27 修订段）与 [ADR-039] §决策1 的挂载口径；**不改** [ADR-039] 的威胁模型、方案比较表与**禁止上线条件**；复用 [ADR-030] 内容寻址 blob、[ADR-016]/[ADR-017] 持久语义、[ADR-019] 密钥边界、[ADR-009] 不可信内容边界。
+
+- **来源**：backlog B-8；实测失败链（`app/config.py:154` → `app/sandbox/project_sandbox.py:113-145,241-291` → `app/services/project_sandbox.py:141-144` → `infra/docker-compose.yml:163,178,239-243`）；[ADR-025]/[ADR-039]/[ADR-040]；负责人拍板 O-5（tar）、O-6（v1 镜像只 python+pytest+ruff）。
+
+---
+
+### ADR-048 · RuntimeSession + Project 编码模型 = 宿主侧 `fs.*` + 沙箱侧 `sh.*`/`run.*`（删除 `project_run`/`project_tree`/`project_read`/`run_code`；修订 ADR-040 §决策8）
+
+> **状态：已批准（2026-07-30），契约与设计先行；实现待 Phase TR 执行计划获批。**
+
+- **核心判断：file 与 shell 必须分层，不能一刀切**：
+
+  | 候选 | 判断 |
+  |---|---|
+  | (a) 全部作为宿主一等工具 | ✅ 对 `fs.*` 正确；❌ 对 `sh.*` 不可能（执行必须隔离） |
+  | (b) 全部路由进沙箱 | ❌ 让"读一个文件"都依赖容器可用 —— **这正是今天 B-8 的症状** |
+  | (c) 全部委派子 agent | ❌ v1 过早；失去逐步审批与逐步可见性 |
+  | **(d) 混合** | ✅ **采纳** |
+
+- **决策**：
+  1. **分层**：
+     - `fs.list` / `fs.read` / `fs.grep` / `fs.write` / `fs.edit` / `fs.delete` → **宿主侧**，直接读写工作副本的 **effective tree**（`base snapshot + overlay`，即 `app/services/project_workcopy.py::effective_tree` 的语义）。**无需容器**、确定性、可完整单测。这**严格强于**被删的 `project_tree`/`project_read` —— 后者只看 head，**看不见 agent 自己刚写的内容**（既有缺陷）。
+     - `sh.exec` → **必经 `RuntimeSession`** 进沙箱（tar 进 → exec → tar 出 → fence 持久）。
+     - `run.test` / `run.lint` → `sh.exec` 的语义糖 + 能力探测（给模型稳定的高层动作，避免它自己拼命令）。
+  2. **产品后果（本设计最重要的判断之一）**：**沙箱不可用时只损失「跑」，不损失「改」。** 今天沙箱一挂，"让 Sherpa 改代码"整体归零。
+  3. **`RuntimeSession` 从 v1 起就是显式一等对象**：`runtime.open(scope)` → 物化 + 起容器 → 返回 `runtime_session_id` + `capabilities` + TTL；`sh.exec(runtime_session_id, command)`；`runtime.close(runtime_session_id)` → 持久边界 + 拆容器。`scope ∈ {project, ephemeral}`：`project` 挂工作副本；`ephemeral` 空工作区，**取代被删的 `run_code`**（O-12）—— 从此只有**一套**沙箱代码（`app/sandbox/runner.py` 与 `project_sandbox.py` 合并为 `app/sandbox/runtime.py`）。
+  4. **未来沙箱内专用 coding agent 的接缝（零重写）**：以 **sub-agent 适配器**形态出现（[api.md §7.4](contracts/api.md) 早已契约保留）：`delegate.code_task(runtime_session_id, goal, max_steps, budget_tokens)`。它拿到**同一个** `runtime_session_id`、在同一容器里跑、每步仍产出 change set 进**同一个 overlay**、预算/取消/审计走**同一条路**（子 agent 共享父预算，[docs/09](09-roadmap.md) 生产就绪清单）。**唯一前置** = `RuntimeSession` 必须从一开始就是显式可传递对象，而不是 `project_run` 那种"每次调用内部临时起一个容器"的隐式生命周期。**这就是 v1 就要引入 `runtime.open/close` 的根本原因。** 本条**修订 [ADR-040] §决策8**（"不嵌 coding agent" → "v1 不嵌，接缝预留"）。
+  5. **策略**（[ADR-046] §决策6 的 args 感知引擎之上）：
+     - `fs.*` 读 = `read_only`/allow；`fs.write`/`fs.edit`/`fs.delete` = `idempotent_write`/**allow**（写的是**待评审 overlay**，不是 head；推进 head 永远人工，[ADR-040] §决策6 不变），但 `.env*` / `.github/workflows/**` / `*.pem` / `*.key` / `id_*` **强制 `ask`**（O-4）。
+     - `sh.exec` = `non_idempotent_write`/**`ask`**，配**平台安全命令白名单 grants** 自动放行（`pytest`/`ruff`/`python -m`/`ls`/`cat` 等只读或已知安全命令），使常见开发循环不被审批打断，同时保住 `rm -rf`、写 CI 配置一类的闸（O-3）。审批预览**必须**显示确切命令 + 目标路径。
+     - `runtime.open`/`runtime.close` = `idempotent_write`/allow。
+  6. **删除与重设计**：
+     - **删除工具**：`project_run`、`project_tree`、`project_read`（`app/tools/project_tools.py`）、`run_code`（`app/tools/sandbox_tools.py`）。**无 shim、无别名**（[ADR-045] §clean break 表已论证：`app/core/history.py` 不查注册表，删除零成本）。
+     - **保留工具**：`project.list` / `project.create` / `project.review_changes`（改名到 `domain.verb`）。
+     - **重设计表**：`project_sandbox_runs` → **`project_runtime_sessions`**（session 级：scope / image / capabilities / fence / TTL / state）+ **`project_exec_runs`**（每条命令：command / exit_code / termination_reason / 耗时 / 日志引用）。`scratch_ref` 在 tar 传输下无意义、`container_ref` 归入 session、`warm_until` 从未实现（[ADR-047] §决策7）。
+     - **REST 重设计**：`POST /projects/{id}/sandbox-runs`（web 内同步、阻塞 120s）→ `POST /projects/{id}/runtime`（**202**）+ `POST /runtime/{rid}/exec`（**202** + SSE 流式 stdout/stderr）+ `POST /runtime/{rid}/cancel` + `DELETE /runtime/{rid}`，**全部由 worker 执行**（O-9）。
+  7. **具名 termination（每个出口都必须具名）** —— 修正 B-8 的错误塌缩：
+     `done | cancelled | wall_timeout | mem_limit | pids_limit | output_limit | environment_missing_dependencies | changeset_bounds | path_escape | fence_lost | runtime_start_failed | runtime_image_missing | runtime_daemon_unreachable | runtime_transport_failed | sandbox_disabled | error:<class>`。
+     每条失败**写一行 worker 结构化日志 + 一条脱敏的工具观察** —— 模型和用户永远不必猜是哪种失败。
+  8. **流式与取消**：`sh.exec` 期间向事件总线发 `runtime.output` 增量帧（`durability: debug`，有界、可丢，**不进 append-only journal 的正确性路径** —— 符合 [ADR-016]「pub/sub 永不是正确性关键」）。取消 = 现有 run 取消信号 → 编排方 `container.kill()` → `termination_reason="cancelled"`。
+  9. **/Project UX（O-8）**：Project-bound Chat 使用**三栏工作台**（左文件树 / 中对话 / 右「Changes · Runs · Artifacts」）。人工泳道必须补齐 **Run 控件 + 流式日志面板 + Stop**（今天 `frontend/src/api.ts:1293` 的 `createSandboxRun` 是死代码）；文件树**可编辑**，人的手改与 agent 的手改**落进同一个 overlay**、一起评审。**Plan 对象后置到 v1.5**（目录层预留 `ui.*` 类工具，O-10）。
+  10. **不变**：真相源层级（snapshot head → overlay → scratch/容器为可丢缓存）、single-writer lease + 单调 fence、`head_generation` CAS Save（`409 head_moved`）、Save/checkpoint/Discard **人工专属**、change set 有界 + 显式 `truncated`、artifacts 默认 `ephemeral` 不计配额、无包安装、无开网 —— [ADR-040] 这些决策**全部保留**。
+
+- **验收关键**：agent 泳道完成一个真实循环（读代码 → 改 → 跑测试 → 看到失败 → 再改 → 通过）；**沙箱强制关闭时 `fs.*` 全部仍可用**（降级不瘫痪）；`sh.exec("rm -rf /work")` 触发审批且预览含确切命令；每个失败注入映射到唯一具名 `termination_reason` 并在 UI 与模型观察里可区分；人工泳道能点 Run、看到流式日志、能 Stop；能力矩阵（docs/11 §9）相关行 UI 单元格**经真实点击验证**后才置 ✅。
+
+- **取代/延伸关系**：**修订** [ADR-040] §决策8（执行器口径）与其 REST/工具面（§能力面）；**受** [ADR-045] 统领、依赖 [ADR-047] 传输与 [ADR-046] 目录；**不改** [ADR-040] 的真相源层级 / lease+fence / head-gen CAS / 人工评审闸 / 无包安装无开网；**不改** [ADR-039] 隔离前提与禁止上线条件；**不改** [ADR-020] 审批信封（只是把 scope 变结构化）。
+
+- **来源**：backlog B-8；实测 `app/tools/project_tools.py`、`app/services/project_workcopy.py`、`app/api/projects.py::create_sandbox_run`、`frontend/src/{api.ts,components/ChangeReview.tsx,views/ProjectsView.tsx}`；[ADR-040] §决策8/§能力面；负责人拍板 O-3（`sh.exec` ask + 平台安全命令 grants）、O-4（fs 写 allow，敏感路径 ask）、O-8（三栏 UI）、O-9（异步 202）、O-10（Plan 后置）、O-12（`run_code` 一并删）。
+
+---
