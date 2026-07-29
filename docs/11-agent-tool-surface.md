@@ -191,6 +191,7 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 会话库:浏览/续跑/重命名/恢复(P0) | ✅ sessions | GET/PATCH /sessions · resume-state · recover · timeline ✅ | ❌ 不给 agent | Sessions(/history)✅ | read_only/idempotent_write | allow |
 | 会话内容搜索(P1) | ✅ search | GET /sessions?query= ✅ | ❌ 不给 agent | Sessions 搜索框 ✅ | read_only | allow |
 | 个人网盘:列/建夹/上传/下载/改名·移动/版本·恢复版本/回收站·恢复(P2) | ✅ drive | /drive/* ✅ | `drive_list`/`search`/`make_folder`/`write`/`read`/`move`/`trash`/`restore` ✅ | Drive(/workspace)✅ | idempotent_write | allow |
+| 个人网盘:文件夹/批量上传(ADR-042, backlog B-5) | ✅ drive(复用单文件端点) | POST /drive/folders + /drive/files ✅(**无 batch 端点**) | ❌ 不给 agent(`drive_make_folder`+`drive_write` 已等价) | Drive 「Upload folder」/多选/拖拽 + 逐文件进度 ✅ | idempotent_write | allow |
 | 个人网盘:永久删除(purge) | ✅ drive | DELETE /drive/nodes/{id} ✅ | ❌ **不给 agent**(人工/审批专属) | Drive(Delete forever + 确认)✅ | non_idempotent_write | user-only |
 | 项目:列/新建(空·模板)(ADR-037, W2a) | ✅ services/projects.py | GET·POST /projects | `project_list`/`project_create` | ✅ /work/projects(列表 + 新建空/模板) | idempotent_write | allow |
 | 项目:归档导入(ZIP/TAR)(ADR-037, W2a) | ✅ services/projects_import.py(durable job) | POST /projects/imports(github→501) | ❌ 不给 agent(人工上传) | ✅ 新建项目·上传归档(安全解压 + 失败态) | idempotent_write(durable job) | allow |

@@ -2728,6 +2728,56 @@ div.run-log {
 .drive-upload-btn {
   cursor: pointer;
 }
+.drive-upload-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.drive-dragging {
+  outline: 2px dashed var(--brand);
+  outline-offset: -8px;
+  border-radius: 12px;
+}
+.upload-panel .upload-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  font-size: 13px;
+}
+.upload-row:last-child {
+  border-bottom: none;
+}
+.upload-status {
+  width: 16px;
+  text-align: center;
+  color: var(--faint);
+}
+.upload-status.done {
+  color: var(--brand);
+}
+.upload-status.failed {
+  color: var(--danger, #b3261e);
+}
+.upload-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-detail {
+  color: var(--faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .storage-card {
   margin-bottom: 16px;
   border: 1px solid var(--border);

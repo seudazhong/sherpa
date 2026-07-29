@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+} from "react";
 
 import {
   api,
@@ -9,6 +16,18 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import Sidebar from "../components/Sidebar";
+import {
+  BatchTooLargeError,
+  TooManyFilesError,
+  UPLOAD_MAX_FILES,
+  UPLOAD_MAX_TOTAL_BYTES,
+  assertWithinBounds,
+  pickedFromDataTransfer,
+  pickedFromInput,
+  uploadBatch,
+  type PickedFile,
+  type UploadItem,
+} from "../lib/driveUpload";
 
 function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -42,6 +61,9 @@ export default function WorkspaceView() {
   const [versionsFor, setVersionsFor] = useState<string | null>(null);
   const [versions, setVersions] = useState<DriveVersion[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [dragging, setDragging] = useState(false);
 
   const parent = trail[trail.length - 1];
   const searching = query.trim().length > 0;
@@ -116,27 +138,59 @@ export default function WorkspaceView() {
     }
   };
 
-  const upload = async (file: File) => {
-    if (!csrf) return;
-    setBusy("upload");
+  const upload = async (picked: PickedFile[]) => {
+    if (!csrf || picked.length === 0) return;
     setError(null);
     try {
-      await api.driveUpload(csrf, parent.id, file);
-      if (inputRef.current) inputRef.current.value = "";
-      await refresh();
+      assertWithinBounds(picked);
     } catch (e) {
-      const status = (e as { status?: number }).status;
-      setError(
-        status === 507
-          ? "Not enough storage space for this upload."
-          : status === 413
-            ? "File is too large."
-            : "Upload failed.",
-      );
+      if (e instanceof TooManyFilesError)
+        setError(
+          `That selection has ${e.count} files — upload at most ${UPLOAD_MAX_FILES} at a time.`,
+        );
+      else if (e instanceof BatchTooLargeError)
+        setError(
+          `That selection is ${fmtSize(e.bytes)} — upload at most ${fmtSize(
+            UPLOAD_MAX_TOTAL_BYTES,
+          )} at a time.`,
+        );
+      else setError("Could not read that selection.");
+      return;
+    }
+
+    setBusy("upload");
+    try {
+      const summary = await uploadBatch({
+        csrf,
+        parentId: parent.id,
+        picked,
+        onUpdate: setUploads,
+      });
+      if (summary.outOfSpace)
+        setError(
+          "Ran out of storage space — the remaining files were not uploaded.",
+        );
+      else if (summary.failed > 0)
+        setError(`${summary.failed} of ${picked.length} files failed to upload.`);
+      if (inputRef.current) inputRef.current.value = "";
+      if (folderInputRef.current) folderInputRef.current.value = "";
+      await refresh();
     } finally {
       setBusy(null);
     }
   };
+
+  const onDrop = async (e: ReactDragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragging(false);
+    if (showTrash || searching) return;
+    const picked = await pickedFromDataTransfer(e.dataTransfer);
+    await upload(picked);
+  };
+
+  const uploadsInFlight = uploads.some(
+    (u) => u.status === "queued" || u.status === "uploading",
+  );
 
   const trash = async (node: DriveNode) => {
     if (!csrf) return;
@@ -245,23 +299,90 @@ export default function WorkspaceView() {
               Your private files and folders — versioned, and available to Sherpa
             </p>
           </div>
-          <label className="btn btn-primary drive-upload-btn">
-            <input
-              ref={inputRef}
-              type="file"
-              hidden
-              aria-label="Upload file"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void upload(f);
-              }}
-            />
-            {busy === "upload" ? "Uploading…" : "Upload"}
-          </label>
+          <div className="drive-upload-actions">
+            <label className="btn drive-upload-btn">
+              <input
+                ref={folderInputRef}
+                type="file"
+                hidden
+                aria-label="Upload folder"
+                // Directory picking is a non-standard (but universally shipped) input attr.
+                {...({
+                  webkitdirectory: "",
+                  directory: "",
+                } as Record<string, string>)}
+                onChange={(e) => void upload(pickedFromInput(e.target.files))}
+              />
+              Upload folder
+            </label>
+            <label className="btn btn-primary drive-upload-btn">
+              <input
+                ref={inputRef}
+                type="file"
+                hidden
+                multiple
+                aria-label="Upload files"
+                onChange={(e) => void upload(pickedFromInput(e.target.files))}
+              />
+              {busy === "upload" ? "Uploading…" : "Upload files"}
+            </label>
+          </div>
         </header>
 
-        <div className="inbox page-content">
+        <div
+          className={"inbox page-content" + (dragging ? " drive-dragging" : "")}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (!showTrash && !searching) setDragging(true);
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget === e.target) setDragging(false);
+          }}
+          onDrop={(e) => void onDrop(e)}
+        >
           {error && <div className="auth-error">{error}</div>}
+
+          {uploads.length > 0 && (
+            <section className="content-section upload-panel">
+              <div className="section-head">
+                <span>
+                  {uploadsInFlight ? "Uploading" : "Upload results"}
+                  {" · "}
+                  {uploads.filter((u) => u.status === "done").length}/
+                  {uploads.length}
+                </span>
+                {!uploadsInFlight && (
+                  <button
+                    className="btn btn-quiet todo-action"
+                    onClick={() => setUploads([])}
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
+              <div className="upload-list">
+                {uploads.map((u) => (
+                  <div className="upload-row" key={u.id}>
+                    <span className={"upload-status " + u.status} aria-hidden="true">
+                      {u.status === "done"
+                        ? "✓"
+                        : u.status === "failed"
+                          ? "!"
+                          : u.status === "skipped"
+                            ? "–"
+                            : "•"}
+                    </span>
+                    <span className="upload-path" title={u.path}>
+                      {u.path}
+                    </span>
+                    <span className="upload-detail">
+                      {u.error ?? fmtSize(u.size)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           {storage && (
             <section className="storage-card">
@@ -372,7 +493,7 @@ export default function WorkspaceView() {
                     ? "Items you delete land here until permanently removed."
                     : searching
                       ? "Try another keyword."
-                      : "Upload a file or create a folder to get started."}
+                      : "Upload files, drop a whole folder here, or create a folder to get started."}
                 </span>
               </div>
             )}
