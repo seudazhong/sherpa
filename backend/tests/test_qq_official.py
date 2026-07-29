@@ -13,9 +13,7 @@ from typing import Any
 import httpx
 import pytest
 from httpx import ASGITransport
-from sqlalchemy import text
 
-from app.auth import owner_ids
 from app.channels.qq import RecordingQQClient
 from app.channels.qq_bind import (
     BindResult,
@@ -31,7 +29,7 @@ from app.channels.qq_official import (
     route_c2c_inbound,
 )
 from app.config import settings
-from app.db import SessionLocal, ping_db
+from app.db import ping_db
 from app.main import app
 from app.redis_client import ping_redis
 from app.security.channel_secret import (
@@ -41,6 +39,7 @@ from app.security.channel_secret import (
 )
 from app.security.keyring import load_keyring
 from app.security.vault import CredentialIntegrityError, connector_vault_capability
+from tests.db_guard import drop_owner_tenant
 
 # --------------------------------------------------------------------------- #
 # Unit — secret seal + QR bind (no I/O).                                       #
@@ -169,10 +168,7 @@ async def test_route_c2c_owner_allowlist_blocks() -> None:
 
 
 async def _drop_owner() -> None:
-    tenant_id, _ = owner_ids()
-    async with SessionLocal() as s:
-        await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tenant_id})
-        await s.commit()
+    await drop_owner_tenant()
 
 
 async def _login(client: httpx.AsyncClient) -> str:

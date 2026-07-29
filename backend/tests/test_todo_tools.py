@@ -12,10 +12,9 @@ import uuid
 import httpx
 import pytest
 from httpx import ASGITransport
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import owner_ids
 from app.config import settings
 from app.core import execute_run
 from app.db import SessionLocal, ping_db
@@ -26,6 +25,7 @@ from app.providers import Finish, MockProvider, TextDelta, ToolCall
 from app.redis_client import ping_redis
 from app.services import CallerContext, NotFound, VersionConflict, todos
 from app.tools import ToolContext, build_default_registry
+from tests.db_guard import drop_owner_tenant
 
 
 async def _seed_base(s: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:
@@ -136,10 +136,7 @@ async def test_loop_agent_creates_todo() -> None:
 
 
 async def _drop_owner() -> None:
-    tid, _ = owner_ids()
-    async with SessionLocal() as s:
-        await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
-        await s.commit()
+    await drop_owner_tenant()
 
 
 @pytest.mark.asyncio

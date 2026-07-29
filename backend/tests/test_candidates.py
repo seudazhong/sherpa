@@ -14,7 +14,7 @@ import uuid
 import httpx
 import pytest
 from httpx import ASGITransport
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.auth import owner_ids
 from app.config import settings
@@ -24,6 +24,7 @@ from app.main import app
 from app.models import Candidate, Connector, ConnectorItem, Run, Todo
 from app.providers import Finish, MockProvider, TextDelta
 from app.redis_client import ping_redis
+from tests.db_guard import drop_owner_tenant
 
 _JSON = (
     '{"candidates": [{"title": "Review Q3 budget", "description": "Send feedback",'
@@ -33,10 +34,7 @@ _JSON = (
 
 
 async def _drop_owner() -> None:
-    tid, _ = owner_ids()
-    async with SessionLocal() as s:
-        await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
-        await s.commit()
+    await drop_owner_tenant()
 
 
 async def _seed_candidate() -> uuid.UUID:

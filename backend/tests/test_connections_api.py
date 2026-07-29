@@ -13,7 +13,6 @@ import uuid
 import httpx
 import pytest
 from httpx import ASGITransport
-from sqlalchemy import text
 
 from app.auth import owner_ids
 from app.config import settings
@@ -22,14 +21,12 @@ from app.main import app
 from app.redis_client import ping_redis
 from app.services import github_source as gh
 from app.services import projects_import as pimp
+from tests.db_guard import drop_owner_tenant
 from tests.github_mock import TEST_OID, GithubMock
 
 
 async def _drop_owner() -> None:
-    tid, _ = owner_ids()
-    async with SessionLocal() as s:
-        await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
-        await s.commit()
+    await drop_owner_tenant()
 
 
 async def _login(client: httpx.AsyncClient) -> dict[str, str]:

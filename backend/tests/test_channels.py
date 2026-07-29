@@ -14,10 +14,8 @@ import uuid
 import httpx
 import pytest
 from httpx import ASGITransport
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import owner_ids
 from app.channels import (
     RecordingQQClient,
     admit_inbound,
@@ -39,6 +37,7 @@ from app.permissions.policy import classify_effect
 from app.redis_client import ping_redis
 from app.services import channels as chan_svc
 from app.tools.builtin import SendEmailTool
+from tests.db_guard import drop_owner_tenant
 
 # --------------------------------------------------------------------------- #
 # Unit — no I/O.                                                               #
@@ -292,10 +291,7 @@ async def test_find_pending_approval_by_prefix_and_latest() -> None:
 
 
 async def _drop_owner() -> None:
-    tenant_id, _ = owner_ids()
-    async with SessionLocal() as s:
-        await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tenant_id})
-        await s.commit()
+    await drop_owner_tenant()
 
 
 @pytest.mark.asyncio

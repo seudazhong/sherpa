@@ -10,13 +10,13 @@ import uuid
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy import text as sqltext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.sync import sync_gmail
 from app.db import SessionLocal, ping_db
 from app.models import Connector, ConnectorItem, Tenant, User
 from app.security import ConnectorTokenIdentity, load_keyring, seal_connector_token
+from tests.db_guard import drop_tenant
 
 
 def _msg(mid: str, subject: str, history: str = "100") -> dict[str, object]:
@@ -98,9 +98,7 @@ async def _count(tid: uuid.UUID) -> int:
 
 
 async def _drop(tid: uuid.UUID) -> None:
-    async with SessionLocal() as s:
-        await s.execute(sqltext("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
-        await s.commit()
+    await drop_tenant(tid)
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,7 @@ from app.services import Forbidden
 from app.services import grants as grant_svc
 from app.services.context import CallerContext
 from app.tools import build_default_registry
+from tests.db_guard import drop_owner_tenant
 
 _ARGS = {"to": "me@x.com", "subject": "Hi", "body": "Hello there"}
 
@@ -203,9 +204,7 @@ async def test_grant_from_action_creates_and_merges() -> None:
 async def test_grants_rest_end_to_end() -> None:
     import httpx
     from httpx import ASGITransport
-    from sqlalchemy import text
 
-    from app.auth import owner_ids
     from app.config import settings
     from app.main import app
     from app.redis_client import ping_redis
@@ -213,13 +212,7 @@ async def test_grants_rest_end_to_end() -> None:
     if not await ping_db() or not await ping_redis():
         pytest.skip("database or redis not reachable")
 
-    async def drop_owner() -> None:
-        tid, _ = owner_ids()
-        async with SessionLocal() as s:
-            await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
-            await s.commit()
-
-    await drop_owner()
+    await drop_owner_tenant()
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
         login = await client.post(

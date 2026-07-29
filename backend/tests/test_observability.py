@@ -9,7 +9,7 @@ import logging
 import uuid
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.admission import admit_prompt
@@ -18,6 +18,7 @@ from app.models import Run, Tenant, Trace, User
 from app.models import Session as SessionModel
 from app.observability import JsonFormatter, tenant_id_var
 from app.worker import run_job
+from tests.db_guard import drop_tenant
 
 
 async def _seed(s: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
@@ -43,9 +44,7 @@ async def _seed(s: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
 
 
 async def _drop(tid: uuid.UUID) -> None:
-    async with SessionLocal() as s:
-        await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
-        await s.commit()
+    await drop_tenant(tid)
 
 
 @pytest.mark.asyncio

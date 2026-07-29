@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 from httpx import ASGITransport
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.auth import owner_ids
 from app.config import settings
@@ -29,6 +29,7 @@ from app.security import (
     load_keyring,
     open_connector_token,
 )
+from tests.db_guard import drop_owner_tenant
 
 
 class _FakeGmail:
@@ -49,10 +50,7 @@ class _FakeGmail:
 
 
 async def _drop_owner() -> None:
-    tid, _ = owner_ids()
-    async with SessionLocal() as s:
-        await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
-        await s.commit()
+    await drop_owner_tenant()
 
 
 @pytest.mark.asyncio

@@ -31,15 +31,13 @@ from app.permissions import request_approval
 from app.providers import Finish, MockProvider, TextDelta, ToolCall
 from app.redis_client import ping_redis
 from app.tools import build_default_registry
+from tests.db_guard import drop_owner_tenant
 
 _ARGS: dict[str, object] = {"to": "a@b.com", "subject": "Hi", "body": "Hello there"}
 
 
 async def _drop_owner() -> None:
-    tid, _ = owner_ids()
-    async with SessionLocal() as s:
-        await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
-        await s.commit()
+    await drop_owner_tenant()
 
 
 async def _seed_session_run(

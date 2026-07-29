@@ -17,9 +17,7 @@ import uuid
 import httpx
 import pytest
 from httpx import ASGITransport
-from sqlalchemy import text
 
-from app.auth import owner_ids
 from app.channels.email import (
     AgentMailClient,
     RecordingEmailClient,
@@ -27,13 +25,14 @@ from app.channels.email import (
     verify_svix_signature,
 )
 from app.config import settings
-from app.db import SessionLocal, ping_db
+from app.db import ping_db
 from app.main import app
 from app.notifications import build_email_sender
 from app.notifications.email import AgentMailEmailSender, RecordingEmailSender
 from app.redis_client import ping_redis
 from app.tools import ToolContext
 from app.tools.builtin import SendEmailTool
+from tests.db_guard import drop_owner_tenant
 
 # --------------------------------------------------------------------------- #
 # Unit — no I/O.                                                               #
@@ -118,10 +117,7 @@ async def test_send_email_tool_routes_through_sender(monkeypatch: pytest.MonkeyP
 
 
 async def _drop_owner() -> None:
-    tenant_id, _ = owner_ids()
-    async with SessionLocal() as s:
-        await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tenant_id})
-        await s.commit()
+    await drop_owner_tenant()
 
 
 _RAW_SECRET = base64.b64encode(b"emailhooksecretbytes").decode()
