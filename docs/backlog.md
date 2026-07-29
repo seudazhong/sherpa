@@ -9,17 +9,17 @@
 | # | Kind | Item | Status |
 | --- | --- | --- | --- |
 | B-1 | bug | [Chat header shows a stale hard-coded model](#b-1-chat-header-shows-a-stale-hard-coded-model) | ✅ done |
-| B-2 | design | [Built-in tool surface is too large (53 tools)](#b-2-built-in-tool-surface-is-too-large-53-tools) | open |
+| B-2 | design | [Built-in tool surface is too large (53 tools)](#b-2-built-in-tool-surface-is-too-large-53-tools) | open · 🏗 architecture approved (ADR-045/046) |
 | B-3 | bug | [The model cannot see the chat's bound project](#b-3-the-model-cannot-see-the-chats-bound-project) | ✅ done |
 | B-4 | bug/dx | [OTel tracing silently off after a stack restart](#b-4-otel-tracing-silently-off-after-a-stack-restart) | ✅ done |
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | open |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
-| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open |
+| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open · 🏗 architecture approved (ADR-045/047/048) |
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
 
-Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
+Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2 + B-8 together** — triaged 2026-07-30 and found to be **one architecture problem, not two** (see both entries below). The owner approved the unified **clean-break** architecture ([ADR-045](decisions.md#adr-045) umbrella · [ADR-046](decisions.md#adr-046) tool catalog · [ADR-047](decisions.md#adr-047) tar transport · [ADR-048](decisions.md#adr-048) RuntimeSession); the execution plan is [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Neither item is fixed**: B-2 closes at the end of Phase TR **P2**, B-8 at the end of **P5**. Implementation is blocked on a separate owner approval of the Phase TR plan.
 
 ---
 
@@ -49,9 +49,18 @@ model=gpt-4o-mini`. 390 px overflow = 0.
 
 ## B-2 Built-in tool surface is too large (53 tools)
 
-*Reported 2026-07-28 (manual test) · kind: design · status: open*
+*Reported 2026-07-28 (manual test) · kind: design · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-046](decisions.md#adr-046)); closes at the end of [Phase TR](IMPLEMENTATION.md) **P2***
 
 **Observed.** Asked to list its tools, the assistant enumerated **53** built-ins in one flat namespace. Every chat pays the full schema cost in the cached prefix, and the model has to disambiguate near-duplicates.
+
+**Measured 2026-07-30 (correcting the report).** The registry actually holds **52** tools, not 53:
+
+```
+build_default_registry().schemas("full")  →  tools: 52   json_bytes: 19848   ≈ 4,962 tokens
+largest: project_run 1142 B · create_scheduled_task 889 B · project_tree 873 B
+```
+
+That whole 19,848-byte array is rebuilt at `backend/app/core/loop.py:527` **inside** the turn loop and sent on **every** provider call.
 
 **Inventory** (`backend/app/tools/`): builtin 3 (`echo`, `get_time`, `send_email`) · candidate 4 · connector 2 · schedule 5 · todo 4 · insight 4 · memory 6 · knowledge 5 · **drive 8** · file 4 · project 6 · sandbox 1.
 
@@ -60,8 +69,11 @@ model=gpt-4o-mini`. 390 px overflow = 0.
 - Naming is inconsistent: `todo_write` vs `update_todo` vs `complete_todo`; `memory_user_set` vs `memory_note`.
 - No scoping: a plain chat is offered the project / drive / knowledge tools it can never use.
 - Token + prefix-cache cost (docs/04 invariant ⑤), and scope drift versus ADR-022 v1 (many are post-v1 surfaces).
+- **Added during triage:** the VISIBLE gate (api.md §7.1 step 2) is **not actually implemented** — `backend/app/tools/registry.py` only has a SAFE/FULL binary and `tier` is hard-coded to `FULL` at `core/loop.py:412/437/449`, so "no scoping" is structural, not an oversight. Also `file_*` is backed by a **legacy `files` table** whose UI was replaced by Drive, yet `files_router` is still registered in `app/main.py`.
 
-**Direction (undecided, needs an ADR).** Options to weigh: verb-parameterised namespaced tools (`drive{op}`, `memory{op}`, `todo{op}`); progressive disclosure via a tool-search meta-tool; context-scoped tool sets (a project-bound session gets project tools, a plain chat does not); merging `drive_*` and `file_*`. Must preserve the narrow-waist rule (built-ins / MCP / sub-agents present as one tool interface). Deliverables: ADR → `docs/11-agent-tool-surface.md` (incl. the §9 capability matrix) → contracts → code.
+**Direction (~~undecided, needs an ADR~~ ✅ decided 2026-07-30).** Options weighed: verb-parameterised namespaced tools (`drive{op}`, `memory{op}`, `todo{op}`); progressive disclosure via a tool-search meta-tool; context-scoped tool sets; merging `drive_*` and `file_*`. **Resolved in [ADR-046](decisions.md#adr-046)**: unified `domain.verb` naming + a `ToolDescriptor` beside the **unchanged** `Tool` protocol + a `ToolsetResolver` that finally implements the VISIBLE gate + `tools.search`/`tools.load` progressive disclosure + an args-aware policy engine. **Verb mega-tools were rejected** — collapsing eight precise schemas into one `oneOf` weakens argument validation, destroys per-tool effect classification, and coarsens the approval scope. `file_*` and the whole legacy `files` stack are **deleted** (Drive is the only personal byte store), as is `run_code`. The narrow waist is untouched: built-ins / MCP / sub-agents / runtime providers still present one `Tool` interface through the same four gates. **Sequencing note from triage: this and B-8 are one problem** — fixing B-8 alone would grow the flat surface from 52 to ~66 tools. Deliverables landed: ADR-045/046/047/048 → `docs/11-agent-tool-surface.md` (incl. the §9 capability matrix) → contracts (`api.md` §7.0/§7.3/§7.5/§7.6, `events` §2.2, `config` §1.10) → [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Code not started** — Phase TR needs its own owner approval.
+
+**Close criterion (Phase TR P2).** General-chat tool JSON **≤ 6,144 bytes** (from the measured 19,848), `core` is a byte-true prefix of the project-bound array, discovery works end-to-end in the agent lane, and `CONNECTOR_ANALYSIS` still receives zero tools.
 
 ---
 
@@ -221,7 +233,7 @@ change, not a rename — not done here.
 
 ## B-8 `project_run` always fails with `sandbox_unavailable`
 
-*Reported 2026-07-28 (manual test) · kind: bug · status: open · sequence after B-2 (the redesign may remove/merge this tool)*
+*Reported 2026-07-28 (manual test) · kind: bug · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-047](decisions.md#adr-047)/[ADR-048](decisions.md#adr-048)); closes at the end of [Phase TR](IMPLEMENTATION.md) **P5***
 
 **Observed.** In a project-bound chat, "run the helloworld code" → the model calls `project_run({"command": "python main.py"})` and gets back
 `Sandbox run sandbox_unavailable (exit -1, state persisted). No file changes were produced.`
@@ -238,11 +250,22 @@ bind source path does not exist: /app/.sherpa/scratch/<run>
 1. `services/project_sandbox.py:141-144` collapses **every** error into `termination_reason="sandbox_unavailable"` — a start failure, a missing daemon and an unknown error are indistinguishable — and nothing is logged, so the worker log has no trace of it (DB row: `state=persisted`, `termination_reason=sandbox_unavailable`, `exit_code=-1`, empty `scratch_ref`).
 2. `docs/IMPLEMENTATION.md` (W3 exit note) describes this dev-stack limitation as "a `project_run` shell command sees an empty `/work`" — in reality it never starts. The doc needs correcting either way.
 
-**Direction (undecided).**
+**Direction (~~undecided~~ ✅ decided 2026-07-30).** Options weighed:
 - (a) Make the scratch path resolve identically on host and worker — bind a host directory at the *same absolute path* into the worker (or use a named volume shared with the sandbox container) so sibling mounts work.
-- (b) Skip the bind entirely: `docker cp` the materialized tree into the container and copy the delta back.
+- (b) Skip the bind entirely: move the materialized tree in and out of the container without any host path.
 - (c) The ADR-039 production posture (gVisor/microVM runner), which removes the shared-socket assumption.
-- (d) Regardless of the above: keep `sandbox_start_failed` distinct from `sandbox_unavailable`, attach a redacted detail to the tool observation, and log one worker line — the model and the user should never have to guess which failure happened.
+- (d) Regardless of the above: keep `sandbox_start_failed` distinct from `sandbox_unavailable`, attach a redacted detail to the tool observation, and log one worker line.
+
+**Resolved: (b) + (d) now, (c) stays roadmap.** [ADR-047](decisions.md#adr-047) replaces the bind mount with **tar ingress/egress** (`put_archive`/`get_archive` into an anonymous `/work` volume), so **no host path is ever passed to the Docker daemon** — the entire class of failure disappears rather than being configured around, and Windows/Linux/DinD/CI all behave identically. This is a **narrowing** of the ADR-025/ADR-039 mount wording, not a relaxation: every hardening control is retained, and the ADR-039 do-not-ship conditions for multi-user are unchanged. (a) was rejected because it needs a host absolute path in `.env` with a different correct value per topology — exactly the fragility that let this bug ship. (d) is Phase TR **P0** and lands first.
+
+**Three secondary problems found during triage (not in the original report):**
+1. **The human Run lane never existed.** `frontend/src/api.ts:1293` defines `createSandboxRun`, but it has **no call site anywhere in the frontend**. The capability matrix (`docs/11` §9) claimed UI ✅ — corrected.
+2. **Even with the mount fixed, the REST lane would still fail, for a different reason.** `app/api/projects.py::create_sandbox_run` executes `sbx_svc.run_sandbox(...)` **synchronously inside the web process**, but `SANDBOX_KIND=docker` is set **only on the worker** (`infra/docker-compose.yml:163`) and web has no Docker socket — so it defaults to `disabled`. It also blocks the HTTP request for up to 120 s, while the contract describes it as `202`.
+3. **The test suite is structurally blind to this.** `tests/test_project_sandbox.py` monkeypatches `_execute_in_scratch` and `tests/test_sandbox.py` patches `_execute`; **no test in the repository ever starts a container**. That is why 297 green tests plus a two-lane Playwright pass did not catch it. Phase TR **P3** adds a real-Docker lane (`uv run pytest -m docker`) and a topology matrix, or the same failure mode returns.
+
+Also settled: `project_run` / `project_tree` / `project_read` / `run_code` are **deleted** (clean break, no shim) in favour of host-side `fs.*` plus an explicit `RuntimeSession` (`runtime.open` → `sh.exec` → `runtime.close`), so that **a sandbox outage costs the ability to run code, not the ability to edit it** — today it costs both. The `project_sandbox_runs` table is redesigned into `project_runtime_sessions` + `project_exec_runs`; `warm_until` is dropped because warm containers were never implemented in any code path.
+
+**Close criterion (Phase TR P5).** A real command executes in a real container on the Windows dev stack and returns a real exit code and stdout; every failure injection maps to exactly one named `termination_reason` with a worker log line; the credential canary passes; and the human lane can press **Run**, watch streaming output, press **Stop**, and review the resulting change set.
 
 ---
 
