@@ -28,6 +28,7 @@
 | 2026-07-28 | 多来源模型 provider（用户在设置里配置多个 model 来源） | ✅ 把 env 单一 provider 升级为 **DB 支持、用户可配的多 provider 注册表**：一行 = 一个来源（`kind`/`api_mode` + `base_url` + **AEAD 密钥** + model 列表 + 默认），复用现有 `Provider.stream` 抽象。首版 3 个 wire 适配器：增强 **`openai_compatible`**（覆盖 DeepSeek/Qwen/Moonshot/Mistral/xAI/Groq/OpenRouter/Ollama/Gemini-OAI…）+ 原生 **`anthropic`** + 原生 **`gemini`**；forward `kind`（bedrock/vertex/openai_responses）留而不建。密钥复用 `github_token.py` 的 **KEK 直封** + connector-vault capability 门控，**仅在 `stream()` 边界解密，绝不进日志/事件/prompt/工具输出**。**全局默认 + 每会话可切 model**（会话绑定携带 provider 引用，避免用旧端点/协议）。**跨-provider failover / MoA / 成本 ledger / Bedrock·Vertex·Responses / 子 agent 后置**（各自后续 ADR）。provider 配置 = **人工设置**（Settings「Models」面 + REST，**不给 agent** —— 跨凭据边界，同 GitHub 连接）。**本批次只做 ADR + 契约与设计先行**（无生产代码/迁移） | 新增 ADR-041（延伸 ADR-008；复用 ADR-019/015/033；源自 R-MODEL-PROVIDER）|
 | 2026-07-29 | Drive 能否上传文件夹（backlog B-5） | ✅ **客户端有界展开**：`multiple` + `webkitdirectory` + 拖拽目录遍历 → 先逐层建目录（`POST /drive/folders`）再逐个上传（`POST /drive/files`），**不新增 batch/zip 端点、服务端零改动**；有界（≤200 文件 / ≤200 MiB / 并发 3）+ 逐文件状态与诚实的部分失败；archive 上传方案留作后续 | 新增 ADR-042（落地 backlog B-5；复用 ADR-030 契约）|
 | 2026-07-29 | Chat 能否上传/粘贴图片 + 从 Drive 附加文件（backlog B-6） | ✅ **字节只存 Drive**（粘贴/上传先落 `Chat uploads/`，附件只存 `drive_node_id`+`version` 引用，绝不字节复制进 `parts`）；`parts.kind` 扩为 `text\|status\|image\|file_ref`；**装配期**读字节 → user turn 变 OpenAI 形状 content 数组（纯文本 turn 仍是字符串，缓存前缀不变）；三个 provider 各自翻译（Anthropic image block / Gemini inlineData / OpenAI 直通）；**每来源 `supports_vision` 标志**，为假时图片诚实降级为文本占位而非 400；非图片文本类做有界抽取、二进制只给指针 | 新增 ADR-043（落地 backlog B-6；扩展 ADR-005/008/030；延伸 ADR-041）|
+| 2026-07-29 | 测试套件清空开发库、并与 worker 死锁（backlog B-9） | ✅ **进程级数据面隔离**，不是「把 20 处 DELETE 写好看点」：测试进程在 `app.config` 建单例**之前**改写 `DATABASE_URL`→`<应用库>_test`、`REDIS_URL`→逻辑库 15、`OWNER_EMAIL`→合成 owner；专用库由会话钩子自动建库+`alembic upgrade head`+盖**标记表**；**标记表是允许破坏性写入的唯一凭据**（fail-closed，绝不降级到应用库）；全部清场收敛到唯一入口 `drop_tenant()`（`lock_timeout` + 单次重试）。**worker 无需停机**即可跑全量 | 新增 ADR-044（落地 backlog B-9；复用 ADR-015/019/022）|
 
 ---
 
@@ -712,3 +713,40 @@
 - **验收关键**：迁移 0032 可升可降；粘贴一张图片 → 落 `Chat uploads/`、chip 可见、发送后模型**真的**描述出图片内容（agent lane）；`supports_vision=false` 时同一图片得到诚实占位而非报错；纯文本会话的 provider 消息形状**逐字节不变**（回归测试）；转录能渲染缩略图与文件 chip；390 px 无溢出；后端 `pytest`/`ruff`/`mypy` 与前端 `lint`/`build` 全绿；能力矩阵新增「Chat 附件」行且 UI 列为 ✅。
 
 - **来源**：backlog B-6（2026-07-28 负责人诉求）；现状 `backend/app/core/{admission,history}.py`、`app/providers/*`、`frontend/src/views/ChatView.tsx`；复用 ADR-030 Drive、ADR-041 provider 注册表。
+
+---
+
+### ADR-044 · 测试套件数据面隔离 = 专用 `<应用库>_test` + 独立 Redis 逻辑库 + 合成 owner + 标记表 fail-closed 守卫（落地 backlog B-9；复用 ADR-015/019/022）
+
+> **状态：已接受（2026-07-29）。** 源自负责人诉求 [`backlog.md` B-9](backlog.md#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database)：一次 `uv run pytest` **摧毁了开发工作区**（`model_providers`=0、`projects`=0、会话被清空），并且在开发 worker 运行时随机打挂一个 API 用例。
+
+- **根因（代码确证，不是猜测）**：三件事叠加，缺一不可。
+  1. `backend/` 下没有 `.env`，`Settings.database_url` 落到默认 `postgresql+asyncpg://sherpa:sherpa@localhost:5432/sherpa`，而 compose 把 postgres 映射到宿主 `5432:5432` —— **测试进程与开发栈是同一个库**。Redis 同理（都是 `/0`）。
+  2. `owner_ids()` 由 `OWNER_EMAIL` 确定性派生 uuid5，**测试用的就是运行中的栈登录的那个身份**；20 个测试文件靠 `DELETE FROM tenants WHERE tenant_id = <真 owner>` 取得干净起点。
+  3. 所有租户表都带 `ForeignKeyConstraint(tenant_id → tenants, ondelete="CASCADE")`（ADR-015 的前向兼容租户键），于是那一行 DELETE **级联删掉整个工作区**。
+  - 死锁是同一根因的第二症状：worker 的 `project_workcopy_maintenance` cron（`expire_idle()` 先改 `storage_accounts` 再改 `project_working_copies`）与测试 DELETE 的级联加锁顺序相反 → `DeadlockDetectedError`。
+  - CI 没暴露，只是因为 CI 的库本来就是一次性的、**且不跑 worker**。
+
+- **决策**：
+  1. **隔离数据面，而不是修 20 处 DELETE**。把 20 处写好看并不能阻止下一处写错，也不能解决 Redis 串扰与 worker 抢跑。分四层，层层独立可失效：
+     - **L0 环境垫片**：`tests/__init__.py`（Python 执行 `tests` 包的第一个模块，早于 `conftest.py`）改写 `DATABASE_URL` / `REDIS_URL` / `OWNER_EMAIL` 与 scratch 根目录，**必须早于 `app.config` 建成 `settings` 单例**——`app/db.py` 的 engine 就是从那个单例派生的。垫片会显式重建单例，使其对导入顺序不敏感。
+     - **L1 供给**：会话钩子建库 → 子进程跑 `alembic upgrade head` → 盖标记表。
+     - **L2 fail-closed 守卫**：**标记表 `_sherpa_test_marker` 是允许破坏性写入的唯一凭据**。没有它就中止整次运行，**绝不**降级为 skip、更不会退回应用库。
+     - **L3 唯一破坏性入口**：`drop_tenant()`，带 `lock_timeout` + 单次重试。
+  2. **合成 owner = 纵深防御**：`OWNER_EMAIL` 固定为 `test-owner@sherpa.test`。因为 `owner_ids()` 从它派生，**即使 L1/L2 全部失效，被删的租户在数学上也不可能是真 owner**（uuid5 不同）。20 个测试文件全部符号引用 `settings.owner_email`，因此零改动兼容。
+  3. **库名派生 + 显式覆盖**：默认 `<应用库>_test`（`sherpa` → `sherpa_test`），`TEST_DATABASE_URL` 可覆盖；Redis 默认逻辑库 **15**，`TEST_REDIS_URL` 可覆盖。**解析结果等于应用库名 → 直接中止**（含用 `TEST_DATABASE_URL` 显式指过去的情况）。
+  4. **逃生舱是显式的，不是隐式的**：已存在但**无标记**的库 → 报错并给出补救命令；`SHERPA_TEST_DB_ADOPT=1` 一次性收编，`SHERPA_TEST_DB_RESET=1` 重建。跑完**保留**测试库（首跑约 20–60 s，之后为空跑）。
+  5. **安全 fail-closed，可用性 best-effort**：目标不安全或供给失败 → 整次运行中止；Postgres **连不上**只打一行提示，既有的 `ping_db()` 自跳过继续生效（这是 CI 无服务/本地栈没起时仍然绿的机制，不能破坏）。
+  6. **陈旧数据预检**：`ensure_owner` 用 `ON CONFLICT DO NOTHING` 且 `tenants.slug` 唯一，因此测试库里若残留一个**别的身份**持有的 `personal` 租户，owner 播种会**静默变成 no-op**，随后每个 API 用例死在无关的外键报错上。供给阶段显式点名这种情况并给出重建命令，而不是让人去读一屏 FK 栈。
+  7. **不做的事**：不新增 alembic 迁移、不改任何 `app/` 生产代码、不把 `TEST_*` 升为一等 `Settings` 字段（保持冻结的配置契约与生产配置面不变）、不改 CI（CI 的 role 有 CREATEDB，自动建 `sherpa_test`；保留原有 `alembic upgrade head` 步骤作迁移冒烟）。
+
+- **不选的替代方案**：
+  - *只把 owner 换成每模块合成租户*：能防误删，但**防不住 Redis 串扰与 worker 抢跑测试入队的 job**，且要改 20 个文件。→ 降级为 L0 的一行全局覆盖，作纵深防御而非主方案。
+  - *per-run schema / template database*：更快，但与 `search_path`、`CREATE EXTENSION`（`vector`/`pg_trgm`/`zhparser`）、alembic 假设耦合太深，收益不抵复杂度。
+  - *仅在文档里写「跑测试前先停 worker」*：这是 B-9 记录的**临时规避**，不是修复——它把正确性寄托在人的记性上。
+
+- **不变式**：标记表**不进** `Base.metadata`，因此**绝不能**对测试库跑 `alembic revision --autogenerate`（否则 alembic 会提议把它删掉）。`tenant_id` 复合键与级联（ADR-015）保持原样——问题从来不是级联，而是测试不该待在那个库里。密钥边界（ADR-019）不变：测试库不持有任何真实凭据，KEK 仍只从 env 来。
+
+- **验收关键**：开发 worker **保持运行**时 `uv run pytest` 全绿（这是与旧行为的分水岭：以前必须停 worker）；连跑两次结果一致；把 `TEST_DATABASE_URL` 指向应用库时**在导入期就中止且不发出任何 DELETE**；跑完开发库各表计数与基线**逐项相同**；`ruff check` / `ruff format --check` / `mypy app` 全绿；README/AGENTS/STATUS 里「测试会毁开发数据」的告警与规避说明一并撤除（陈述与现实不允许分叉）。
+
+- **来源**：backlog B-9（2026-07-28 发现于 B-3 验证过程）；现状 `backend/tests/conftest.py`、`backend/app/{config,db,redis_client}.py`、`app/auth/owner.py`、`app/worker.py::project_workcopy_maintenance`、`app/services/project_workcopy.py::expire_idle`。

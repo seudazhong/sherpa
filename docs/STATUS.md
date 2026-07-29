@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Unscheduled findings from manual testing live in [`backlog.md`](backlog.md) (B-1…B-9; **B-1 + B-3 + B-4 + B-7 fixed 2026-07-28**, **B-5 + B-6 shipped 2026-07-29**; B-2 / B-8 / B-9 open). ⚠️ **B-9: `uv run pytest` still wipes the owner tenant in the *default* dev database** — until it is fixed, run the suite against a dedicated database (`CREATE DATABASE sherpa_test`, `alembic upgrade head` against it, then point `DATABASE_URL` at `…/sherpa_test` for the pytest run), which keeps dev data intact.
+> Unscheduled findings from manual testing live in [`backlog.md`](backlog.md) (B-1…B-9; **B-1 + B-3 + B-4 + B-7 fixed 2026-07-28**, **B-5 + B-6 shipped 2026-07-29**, **B-9 fixed 2026-07-29**; B-2 / B-8 open). ✅ **B-9 is fixed ([ADR-044](decisions.md))**: `uv run pytest` now provisions and uses a dedicated `<app_db>_test` database, Redis logical db 15 and a synthetic owner, so it is safe to run **with the stack and worker up** and can no longer touch dev data. The old "stop the worker / point `DATABASE_URL` at `sherpa_test` by hand" workaround is retired.
 >
 > Last updated: 2026-07-29 · Phase: **Milestones 1–5 complete**; **post-v1 P0–P2, Phase CRON (ADR-031), Phase APPROVALS (ADR-034), Phase SCHED-FIX (ADR-031 amendment), Phase OBS-A/OBS-LOG/OBS-B (ADR-033), the ADR-032 embedding→bundled-ollama switch (dim 1024), the ADR-036 source-backed Knowledge slice (KB0→KB5), the ADR-037 Workspace-Projects W2a contracts+design batch, the ADR-037 Workspace-Projects W2a production implementation (schema 0028 · blank/template/archive · durable import · REST/tools · `/work/projects` UI), the ADR-038 Workspace-Projects W2b (GitHub one-time import) contracts+design batch, and the ADR-038 Workspace-Projects W2b production implementation (schema 0029 · GitHub connection AEAD vault · resolve ref→OID → bounded tarball fetch → immutable snapshot + source OID provenance · durable import/retry/idempotent · REST §10.6 + `/connections/github` · production `/work/projects` GitHub UI), and the ADR-039/ADR-040 Workspace-Projects W3 (task working copy + one-time scratch-copy sandbox + change review) SECURITY-REVIEW + contracts+design-first batch (independent `docker.sock`/isolation threat model → ADR-039; W3 product/data/tool/lifecycle → ADR-040; **ADR-025 formally revised** to "mount only a one-time scratch, never the source of truth"; frozen data-model §Projects W3 / api §10.7 / events §2.11 / config §1.7; W3 static draft; **no production code/migration/mount/nav**), and the **ADR-039/ADR-040 Workspace-Projects W3 production implementation** (schema 0030 · 6 `project_*` W3 tables + `projects.head_generation` · durable task working copy w/ single-writer lease+fence + head_generation CAS · hardened offline sandbox mounting only a one-time scratch copy · change-set projection w/ bounded diffs + artifacts · REST §10.7 + `project_run`/`project_review_changes` tools · `/work/projects` Chat-embedded **Change Review** UI · Save/checkpoint/Discard human-only) all complete + verified**. Next: **W4** (GitHub sync/push/PR — own ADR, ADR-020 approval), or another roadmap milestone (owner's choice). The earlier RAG is archival semantic notes; the Knowledge base (`/library`) is the source-backed document vertical; Projects (`/work/projects`) sits beside Drive under Workspace.
 
@@ -69,6 +69,31 @@ green. **Agent lane** (real litellm `claude-sonnet-4.6`): the model described th
 cross-run replay; a Drive-picked text file was quoted verbatim. **Human lane**: nested folder upload → 3/3
 with the tree rebuilt; paste → chip; Drive picker → attach; reload → transcript re-renders attachments;
 `supports_vision=false` → honest composer warning; 390 px overflow = 0.
+
+## ▶ Backlog B-9 (2026-07-29) — ✅ **complete**
+
+The suite shared one Postgres/Redis with the running dev stack **and** got its clean slate by deleting the
+*configured* owner tenant, so a single `uv run pytest` cascaded away the developer's model sources, projects
+and chat sessions, and raced the worker's `project_workcopy_maintenance` cron into a `DeadlockDetectedError`
+that failed a random API test. Fixed by isolating the **data plane**, not by tidying the 20 call sites
+([ADR-044](decisions.md); no migration, no `app/` change, no CI change).
+
+- `backend/tests/__init__.py` — the first module Python executes for the package, hence the only place that
+  runs *before* `app.config` builds its `Settings` singleton — rewrites `DATABASE_URL` → `<app_db>_test`,
+  `REDIS_URL` → logical db **15**, `OWNER_EMAIL` → a **synthetic** owner (`owner_ids()` derives the tenant
+  uuid5 from it, so the deleted tenant provably cannot be the real one), plus temp scratch roots.
+  `TEST_DATABASE_URL` / `TEST_REDIS_URL` override; resolving to the app database aborts at import.
+- `backend/tests/db_guard.py` — creates the database, runs `alembic upgrade head`, stamps
+  `_sherpa_test_marker`, and treats that marker as the **only** evidence that destructive writes are allowed
+  (fail-closed; an unreachable Postgres still only warns, so the existing `ping_db()` skips keep CI green).
+  Escape hatches: `SHERPA_TEST_DB_ADOPT=1`, `SHERPA_TEST_DB_RESET=1`; the database is retained between runs.
+- All 20 cleanup sites now call one guarded `drop_tenant()` (bounded by `lock_timeout` + a single retry).
+
+**Verified:** `uv run pytest` green **with the dev worker running** — the exact scenario that used to fail —
+**370 passed, twice** (idempotent); `ruff check` · `ruff format --check` · `mypy app` clean; pointing
+`TEST_DATABASE_URL` at the app database aborts before opening a connection; dev-database row counts
+(`tenants/users/model_providers/projects/sessions/messages/runs` = 1/1/1/0/5/13/7) **identical** before and
+after. Docs that claimed the suite destroys dev data (README, AGENTS §2, this file) are corrected.
 
 ## ▶▶ Active build (owner-approved 2026-07-23): P0 → P2, no mid-review — ✅ **P0–P2 complete, awaiting unified owner acceptance**
 
@@ -271,7 +296,7 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。把 e
 ## In progress
 _Nothing in progress._ **M-tools shipped** (ADR-023, [`11-agent-tool-surface.md`](11-agent-tool-surface.md)): app/services/ capability layer + REST/Tool dual adapters; the agent tools = list/accept/edit/dismiss candidates, create/update/complete/list todos (+ POST /todos, migration 0014 for standalone agent todos), list/sync connectors, create/list/cancel reminders + digests (+ /schedules REST), list notifications/activity + get/update settings; ALLOWED policy engine (own-data writes allowed, external actions ask); tool output spill.
 _Nothing in progress._ **M-tools shipped** (ADR-023, [`11-agent-tool-surface.md`](11-agent-tool-surface.md)): app/services/ capability layer + REST/Tool dual adapters; the agent tools = list/accept/edit/dismiss candidates, create/update/complete/list todos (+ POST /todos, migration 0014 for standalone agent todos), list/sync connectors, create/list/cancel reminders + digests (+ /schedules REST), list notifications/activity + get/update settings; ALLOWED policy engine (own-data writes allowed, external actions ask); tool output spill.
-Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0014`; `--env-file .env` enables the real model). Note: `uv run pytest` wipes the owner tenant → re-login in the browser. **SPA routes must not collide with an API proxy prefix** (Activity UI lives at `/data`).
+Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -d` (schema at alembic `0014`; `--env-file .env` enables the real model). Note: `uv run pytest` used to wipe the owner tenant → re-login; **no longer true since B-9/[ADR-044](decisions.md)** — the suite runs against its own database. **SPA routes must not collide with an API proxy prefix** (Activity UI lives at `/data`).
 
 ## Blockers
 - **None for M1.** M1 runs on the **mock provider** and needs no external accounts.

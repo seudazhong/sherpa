@@ -166,9 +166,11 @@ npm run build                 # tsc -b && vite build
 docker compose -f infra/docker-compose.yml build
 ```
 
-> ⚠️ **目前测试套件会清空开发库里的 owner 租户**（[`docs/backlog.md` B-9](docs/backlog.md)）：默认 `DATABASE_URL`
-> 与运行中的栈是同一个库，跑 `uv run pytest` 会删掉你配置的模型来源、项目和会话，并可能与 worker 死锁。
-> 在修好之前：跑测试前先停掉 worker，或把 `DATABASE_URL` 指向一个专用的测试库。
+> ✅ **测试套件与开发数据互相隔离**（[ADR-044](docs/decisions.md)，落地 backlog B-9）：`uv run pytest` 会自动使用
+> 专用的 `<应用库>_test` 库、Redis 逻辑库 15 和一个合成 owner，因此**开着整套栈和 worker 直接跑即可**，
+> 不会碰到你真实的模型来源、项目和会话。可用 `TEST_DATABASE_URL` / `TEST_REDIS_URL` 覆盖；
+> 若因为已有的测试库缺少 `_sherpa_test_marker` 标记而拒绝启动，用 `SHERPA_TEST_DB_ADOPT=1` 收编一次，
+> 或用 `SHERPA_TEST_DB_RESET=1` 重建。
 
 ## 配置速查
 

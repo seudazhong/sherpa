@@ -483,6 +483,24 @@ Design/contract-first (ADR-037); the settings above are frozen but **not yet wir
 - **Attachments are a human act.** Only the composer (or a Drive pick) creates one; untrusted connector content (email, ADR-009) never becomes an attachment, so the no-tool `CONNECTOR_ANALYSIS` boundary is unchanged. There is no agent tool for attaching — the agent reads the same bytes through `drive_read`.
 - **Capability, not optimism.** A source with `supports_vision = false` never receives image content; the assembler substitutes an honest text placeholder instead of provoking a provider error.
 
+### 1.9 Test-harness environment — NOT application configuration (ADR-044)
+
+**✅ SHIPPED (backlog B-9; no migration, no `Settings` change).** The pytest suite runs against a **dedicated data plane**, and the variables that steer it are deliberately **not** part of `Settings`, the key inventory (§1.2), or the frozen `.env.example` (§2). They are read directly from the environment by `backend/tests/db_guard.py`, so the production configuration surface stays exactly as frozen above.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TEST_DATABASE_URL` | derived: `DATABASE_URL` with the database name suffixed `_test` | The throwaway database the suite provisions and may delete rows in. |
+| `TEST_REDIS_URL` | derived: `REDIS_URL` with logical db **15** | Queue/Streams/leader-lock isolation, so a running dev worker never consumes a job the suite enqueued. |
+| `SHERPA_TEST_DB_ADOPT` | unset | One-time opt-in to stamp the marker on a pre-existing database. |
+| `SHERPA_TEST_DB_RESET` | unset | Drop and recreate the test database before the run. |
+
+Rules (all fail-closed — the suite aborts rather than degrading to the application database):
+
+- **The owner is synthetic.** The harness forces `OWNER_EMAIL=test-owner@sherpa.test`. Because `owner_ids()` derives the tenant/user uuid5 from that address, the tenant the suite deletes is provably not the one the running stack authenticates as.
+- **A marker table is the only evidence.** `_sherpa_test_marker` is written **only** by the harness into a database it created or that was explicitly adopted. Destructive fixtures refuse to run without it. It is intentionally absent from `Base.metadata`, so **never run `alembic revision --autogenerate` against the test database**.
+- **Same-database is fatal.** If the resolved test database equals the application database — including via an explicit `TEST_DATABASE_URL` — the run aborts at import, before any connection is opened.
+- **No secrets move.** The test database holds no real credentials; `KEK`/`KEK_ID` remain env-only (§3) and the harness neither reads nor relocates them.
+
 ## 2. Frozen `.env.example`
 The repository-level `.env.example` MUST contain the following template. Secret placeholders intentionally fail secure validation or authentication until replaced.
 

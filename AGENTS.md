@@ -23,13 +23,15 @@ If a contract is wrong/insufficient, **update the contract + an ADR first**, the
 uv sync                                   # install
 uv run uvicorn app.main:app --reload      # web
 uv run arq app.worker.WorkerSettings      # worker
-uv run pytest                             # tests
+uv run pytest                             # tests (auto-isolated; see below)
 uv run ruff check . && uv run ruff format --check .   # lint+format
 uv run mypy app                           # types
 uv run alembic upgrade head               # migrations
 ```
 **Frontend** (run in `frontend/`, uses **npm**): `npm ci` · `npm run dev|build|lint`
 **Infra**: `docker compose -f infra/docker-compose.yml --env-file .env up --build`
+
+**Tests are isolated from your dev data (ADR-044).** `uv run pytest` provisions and uses a dedicated `<app_db>_test` database, Redis logical db 15, and a synthetic owner — so it is safe to run **with the stack and worker up**, and it can never touch your real workspace. Overrides: `TEST_DATABASE_URL`, `TEST_REDIS_URL`. If it refuses to start because a pre-existing test database carries no `_sherpa_test_marker`, adopt it once with `SHERPA_TEST_DB_ADOPT=1` or recreate it with `SHERPA_TEST_DB_RESET=1`. Never point `TEST_DATABASE_URL` at the app database (the harness aborts if you do), and never run `alembic revision --autogenerate` against the test database.
 
 A task is **Done** only when, for the code you touched:
 - [ ] `uv run pytest` green (you added/updated tests — happy path **and** edge cases).

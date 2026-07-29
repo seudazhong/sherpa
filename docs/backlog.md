@@ -17,9 +17,9 @@
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | open |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
 | B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open |
-| B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | open |
+| B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
 
-Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → **B-9** (it destroys dev data every full-suite run) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
+Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
 
 ---
 
@@ -248,11 +248,11 @@ bind source path does not exist: /app/.sherpa/scratch/<run>
 
 ## B-9 The test suite deletes the owner tenant in the dev database
 
-*Found 2026-07-28 while verifying B-3 · kind: bug/dx · status: open*
+*Found 2026-07-28 while verifying B-3 · kind: bug/dx · status: ✅ done 2026-07-29 ([ADR-044](decisions.md))*
 
 **Observed.** Running `uv run pytest` against the default dev configuration **destroyed the owner workspace**: after one full-suite run, `model_providers` = 0 (the configured litellm source gone), `projects` = 0 (the `helloworld` project gone), and the chat sessions were wiped. Verified directly in Postgres.
 
-**Evidence.** API tests get their clean slate by deleting the *real* owner tenant:
+**Evidence.** API tests got their clean slate by deleting the *real* owner tenant:
 
 ```python
 async def _drop_owner() -> None:            # tests/test_connections_api.py:28-32
@@ -260,12 +260,13 @@ async def _drop_owner() -> None:            # tests/test_connections_api.py:28-3
     await s.execute(text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": tid})
 ```
 
-`owner_ids()` resolves the configured owner (the same identity the running stack logs in as), and the default `DATABASE_URL` is the same Postgres the dev stack uses — so the suite and the app share one database. ~19 test files use this pattern.
+`owner_ids()` resolves the configured owner (the same identity the running stack logs in as), and the default `DATABASE_URL` is the same Postgres the dev stack uses — so the suite and the app shared one database. 20 test files used this pattern, and every tenant-scoped table cascades from `tenants` (`ondelete="CASCADE"`, ADR-015), which is what turned one `DELETE` into a wiped workspace.
 
-**Second symptom.** With the dev worker running, that `DELETE` also **deadlocks** against the worker's cron (`project_workcopy_maintenance` holds locks on the same tenant's rows): `DeadlockDetectedError ... DELETE FROM tenants`, failing a *random* API test each run. The earlier "flaky" `test_gmail_oauth_round_trip_and_disconnect` failure is very likely the same cause. Stopping the worker makes the full suite green — a workaround, not a fix.
+**Second symptom.** With the dev worker running, that `DELETE` also **deadlocked** against the worker's cron (`project_workcopy_maintenance` holds locks on the same tenant's rows): `DeadlockDetectedError ... DELETE FROM tenants`, failing a *random* API test each run. The earlier "flaky" `test_gmail_oauth_round_trip_and_disconnect` failure was the same cause. Stopping the worker made the full suite green — a workaround, not a fix.
 
-**Direction (undecided).**
-- Point tests at a dedicated database (`TEST_DATABASE_URL`, or a per-run schema / template DB created and dropped by a session fixture) so app data is never in reach.
-- Or at minimum, have these tests seed a **synthetic** owner tenant instead of the configured one.
-- Add a guard: refuse to run destructive fixtures when `DATABASE_URL` is not a test database.
-- Until fixed, document in `AGENTS.md` that the suite is destructive to dev data and wants the worker stopped.
+**Fixed (ADR-044).** The data plane is isolated at the process level rather than the 20 call sites being tidied:
+
+- `tests/__init__.py` rewrites `DATABASE_URL` → `<app_db>_test`, `REDIS_URL` → logical db 15, and `OWNER_EMAIL` → a **synthetic** owner *before* `app.config` builds its `Settings` singleton (so `app.db`'s engine is born isolated).
+- A session hook creates the database, runs `alembic upgrade head`, and stamps `_sherpa_test_marker`; that marker is the **only** accepted evidence that destructive writes are allowed. `SHERPA_TEST_DB_ADOPT=1` / `SHERPA_TEST_DB_RESET=1` are the explicit escape hatches; the database is retained between runs.
+- All 20 cleanup sites now go through one guarded `drop_tenant()` with a `lock_timeout` and a single retry.
+- Result: `uv run pytest` is green **with the dev worker running** (370 passed, twice), and the dev database's row counts are unchanged across runs. The "stop the worker first" workaround is retired.
