@@ -473,8 +473,17 @@ Design/contract-first (ADR-037); the settings above are frozen but **not yet wir
 - **Credential boundary (ADR-019/039).** No model/provider/storage/GitHub/KEK credential is ever passed into the sandbox environment, command line, scratch tree, overlay, change set, artifact, snapshot, prompt, log, or tool result — reaffirming §1.5/§1.6 and the ADR-025 rule "无任何密钥注入". Artifacts and checkpoints never contain credentials or running-process state (report §10.6).
 - **`docker.sock` / multi-user gate (ADR-039 do-not-ship conditions).** W3's single change (scratch RW mount) is acceptable **only** on the self-hosted single-user profile with the socket scoped to the trusted orchestrator, patched runc, and (recommended) rootless Docker. **Do NOT ship multi-user or genuinely-untrusted-third-party code** on the shared-`docker.sock`/shared-kernel runc baseline: per ADR-039 that requires a gVisor (`runsc`) or microVM (Kata/Firecracker) runtime for untrusted containers, per-tenant scratch/socket isolation, a tenant-aware egress policy, and aggregate per-tenant quotas — with a threat review — first. This boundary must be reported truthfully in readiness/docs and never overclaimed.
 
-## 2. Frozen `.env.example`
+### 1.8 Chat attachment boundary (ADR-043)
 
+**✅ SHIPPED (migration `0032`).** Chat attachments are **references to Drive nodes**, never a second byte store. The implementation honors this boundary:
+
+- **Drive is the only byte store.** Pasted/uploaded images are written to Drive (`Chat uploads/`) before admission, so the ADR-030 quota (`507`), per-file cap `DRIVE_MAX_FILE_BYTES` (`413`), versioning, trash, and blob GC apply unchanged. `parts` rows of kind `image`/`file_ref` carry only `{drive_node_id, version, name, content_type, size_bytes}`; bytes never enter `parts`, the append-only journal, an event payload, or an SSE frame.
+- **Bounded assembly.** `CHAT_MAX_ATTACHMENTS` (8) bounds a prompt; `CHAT_ATTACHMENT_MAX_IMAGE_BYTES` (5 MiB) bounds one replayed image; `CHAT_ATTACHMENT_ASSEMBLY_MAX_BYTES` (15 MiB) bounds one provider-history assembly; `CHAT_ATTACHMENT_TEXT_EXTRACT_BYTES` (32 KiB) bounds an inlined text extract. Overflow degrades to an explicit placeholder — never a silent truncation and never an unbounded prompt (docs/04 invariant ⑥).
+- **Ownership is structural.** Attachment resolution reuses the Drive service's tenant + user scoping, so referencing another owner's node is impossible; unknown/trashed/not-owned nodes return `404` (never `403`, api §2.1).
+- **Attachments are a human act.** Only the composer (or a Drive pick) creates one; untrusted connector content (email, ADR-009) never becomes an attachment, so the no-tool `CONNECTOR_ANALYSIS` boundary is unchanged. There is no agent tool for attaching — the agent reads the same bytes through `drive_read`.
+- **Capability, not optimism.** A source with `supports_vision = false` never receives image content; the assembler substitutes an honest text placeholder instead of provoking a provider error.
+
+## 2. Frozen `.env.example`
 The repository-level `.env.example` MUST contain the following template. Secret placeholders intentionally fail secure validation or authentication until replaced.
 
 ```dotenv

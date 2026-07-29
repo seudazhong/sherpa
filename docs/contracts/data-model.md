@@ -463,7 +463,7 @@ CREATE TABLE parts (
     CONSTRAINT ck_parts_ordinal
         CHECK (ordinal >= 0),
     CONSTRAINT ck_parts_kind
-        CHECK (kind IN ('text', 'status')),
+        CHECK (kind IN ('text', 'status', 'image', 'file_ref')),
     CONSTRAINT ck_parts_content_bound
         CHECK (octet_length(content_redacted::text) <= 65536)
 );
@@ -1775,9 +1775,12 @@ COMMIT;
    no distinct admission event type (the event catalog is closed); the run's
    `run.started` is the first session event and the admission response cursor is
    the committed session-journal tail.
-5. **No stored chain-of-thought.** `parts` deliberately contains only `text` and
-   durable `status` snapshots. Curated rationale belongs in
-   `candidates.rationale_redacted`.
+5. **No stored chain-of-thought.** `parts` deliberately carries only user-supplied
+   content and durable `status` snapshots — never model rationale. Since ADR-043 the
+   user-supplied kinds are `text` plus the attachment references `image` / `file_ref`,
+   whose `content_redacted` is `{drive_node_id, version, name, content_type,
+   size_bytes}` — a **reference**, never bytes (Drive is the only byte store, ADR-030).
+   Curated rationale still belongs in `candidates.rationale_redacted`.
 6. **Gmail revisions are immutable.** A changed Gmail item creates another
    `connector_items` row and flips the former row's `is_latest`; source deletion
    tombstones or purges content without deleting provenance rows.
@@ -3196,9 +3199,10 @@ Notes:
 
 ## Model providers — user-configurable multi-source model layer (ADR-041)
 
-> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-041).** Frozen shape for the multi-source model-provider
-> slice (roadmap #8's multi-provider half; failover/ensemble/sub-agents deferred). **Not implemented**
-> in this batch — no migration, no code. Replaces the env-only single provider with a DB-backed,
+> **Status: implemented** (ADR-041; migration `0031`, extended by `0032` with `supports_vision`).
+> Frozen shape for the multi-source model-provider
+> slice (roadmap #8's multi-provider half; failover/ensemble/sub-agents deferred). Replaces the env-only
+> single provider with a DB-backed,
 > user-configured registry; **the API key is AEAD-encrypted at rest** (reuses the `github_connections`
 > column shape + `security/github_token.py` KEK sealing) and is decrypted **only** at the `Provider.stream()`
 > boundary — never in the journal, logs, events, prompt, tool output, or the frontend. Every table carries
@@ -3232,6 +3236,7 @@ CREATE TABLE model_providers (
     is_default       boolean NOT NULL DEFAULT false,   -- the global default source (at most one active)
     status           text NOT NULL DEFAULT 'pending',  -- pending | active | error
     last_error_redacted text,                          -- last test/connection error (redacted, no secret)
+    supports_vision  boolean NOT NULL DEFAULT true,    -- ADR-043: may this source be sent image content?
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT pk_model_providers PRIMARY KEY (tenant_id, id),
@@ -3288,3 +3293,48 @@ Notes:
 - **Deferred (NOT this slice):** cross-provider failover; MoA/ensemble; sub-agents; a cost ledger +
   prompt-cache metering; Bedrock/Vertex/OpenAI-Responses/Codex wire; multi-key rotation; any agent tool for
   provider CRUD (configuration is a human Settings action). Each is a later ADR.
+
+## Chat attachments — typed message parts + Drive as the only byte store (ADR-043)
+
+> **Status: implemented** (ADR-043; migration `0032`). Extends `parts` (§Core) so a user turn can carry
+> **references** to Drive nodes. No new table: attachments are `parts` rows whose `kind` is `image` or
+> `file_ref`. Bytes stay in Drive (ADR-030) — quota, per-file caps, versioning, trash, and GC are inherited
+> rather than re-invented, and nothing is byte-copied into `parts`, the journal, or an event payload.
+
+```sql
+-- Migration 0032 (ADR-043)
+ALTER TABLE parts DROP CONSTRAINT ck_parts_kind;
+ALTER TABLE parts ADD CONSTRAINT ck_parts_kind
+    CHECK (kind IN ('text', 'status', 'image', 'file_ref'));
+
+ALTER TABLE model_providers
+    ADD COLUMN supports_vision boolean NOT NULL DEFAULT true;
+```
+
+`content_redacted` payload for an attachment part (both kinds share the shape):
+
+```json
+{
+  "drive_node_id": "019bbeca-9ce4-7c47-926d-b374f1e0c0ef",
+  "version": 3,
+  "name": "screenshot.png",
+  "content_type": "image/png",
+  "size_bytes": 84213
+}
+```
+
+- **`image`** — the node's `content_type` is an image type the provider layer can carry
+  (`image/png|jpeg|gif|webp`). Replayed as provider image content when the effective source has
+  `supports_vision = true`; otherwise degraded to an honest text placeholder.
+- **`file_ref`** — everything else. Text-like types (`text/*`, JSON/CSV/Markdown/XML/YAML) are inlined as a
+  **bounded** text extract (≤ 32 KiB, truncation stated); binary types become a pointer note naming the file
+  and its size, so the model can decide to call `drive_read`.
+- **Ordering.** The text part keeps `ordinal = 0`; attachments follow in submission order, so the
+  reconstructed turn is deterministic.
+- **Assembly, not admission, reads bytes.** `core/history.assemble_provider_history` fetches the pinned
+  version's bytes per run under a byte budget (per-image ≤ 5 MiB, ≤ 15 MiB per assembly). A turn with **no**
+  attachments keeps the plain-string `content` shape, so existing cached prefixes stay byte-stable
+  (docs/04 invariant ⑤).
+- **Provenance/versioning.** `version` is pinned at admission, so a later edit of the Drive file never
+  silently rewrites what the model was shown; purging the node makes the reference dangle and the assembler
+  degrades it to a "no longer available" placeholder instead of failing the run.

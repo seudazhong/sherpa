@@ -159,9 +159,22 @@ class SessionSummary(StrictModel):
     updated_at: datetime
 
 
+class PromptAttachment(StrictModel):
+    """A reference to a Drive node the user attached to a prompt (ADR-043).
+
+    Bytes are never inlined: Drive is the only byte store. `version` pins the
+    exact version replayed to the model; omitted means "current version at
+    admission time" and is resolved server-side.
+    """
+
+    drive_node_id: UUID
+    version: int | None = None
+
+
 class PromptRequest(StrictModel):
     client_message_id: UUID
     text: Annotated[str, Field(min_length=1, max_length=32_000)]
+    attachments: Annotated[list[PromptAttachment], Field(max_length=8)] = []
 
 
 class PromptAdmission(StrictModel):
@@ -174,9 +187,20 @@ class PromptAdmission(StrictModel):
     events_url: str
 
 
+class MessageAttachment(StrictModel):
+    """Attachment metadata carried by an `image`/`file_ref` part (ADR-043)."""
+
+    drive_node_id: UUID
+    version: int
+    name: str
+    content_type: str
+    size_bytes: int
+
+
 class PublicMessagePart(StrictModel):
-    kind: Literal["text", "status", "tool_summary"]
+    kind: Literal["text", "status", "tool_summary", "image", "file_ref"]
     text: str
+    attachment: MessageAttachment | None = None
 
 
 class PublicMessage(StrictModel):
@@ -578,6 +602,25 @@ Content-Type: application/json
   "text": "Show my high-priority Gmail candidates."
 }
 ```
+
+**Attachments (ADR-043).** `attachments` carries **references to Drive nodes**,
+never bytes: the client uploads or picks the file in Drive first (`POST
+/drive/files`, or an existing node), then submits its id. Admission resolves each
+reference in the same transaction as the text part and persists one `image` or
+`file_ref` part per attachment (classified by the node's `content_type`), pinning
+`version`. Errors:
+
+- `404 attachment_not_found` — unknown, trashed, or not-owned node (never `403`, per §2.1);
+- `409 idempotency_conflict` — the same `client_message_id` replayed with a different
+  text **or** a different attachment set;
+- `413 attachment_too_large` — an attachment exceeds the per-attachment cap;
+- `422` — more than 8 attachments, or a pinned `version` that does not exist.
+
+Bytes are read at **provider-history assembly** time (per run), bounded, and a
+turn without attachments keeps the plain-string `content` shape so existing
+cached prefixes stay byte-stable (docs/04 invariant ⑤). Images degrade to an
+honest text placeholder when the effective model source has `supports_vision =
+false` (§10.8) or when the assembly byte budget is exhausted.
 
 ```http
 HTTP/1.1 202 Accepted
@@ -1534,6 +1577,18 @@ class NodeMove(StrictModel):
 - The agent drives every non-purge capability through the same service layer
   (ADR-023): `drive_list`, `drive_search`, `drive_make_folder`, `drive_write`,
   `drive_read`, `drive_move`, `drive_trash`, `drive_restore`.
+- **Folder / multi-file upload is client-side expansion (ADR-042).** There is no
+  batch or archive endpoint: the client walks the selected directory (or the
+  dropped `DataTransferItem` tree), recreates it level by level with `POST
+  /drive/folders` (treating `409` as "already exists, reuse"), then uploads each
+  file with `POST /drive/files`. It is bounded client-side (≤ 200 files, ≤ 200 MiB
+  per batch, upload concurrency 3) and has **no batch transaction**: per-file
+  outcomes are reported individually, and a `507` stops the remaining queue.
+- **Chat attachments live here too (ADR-043).** Images pasted or uploaded in the
+  chat composer are stored as ordinary Drive files under a `Chat uploads/` folder
+  before the prompt is admitted, so they inherit quota, per-file size limits,
+  versioning, trash, and GC. `POST /sessions/{id}/prompt` then references the
+  resulting node id (§4.2); no byte copy exists outside Drive.
 
 ### 10.3 Core memory blocks (ADR-032)
 
@@ -2115,6 +2170,7 @@ class ModelProviderSummary(StrictModel):
     status: Literal["pending", "active", "error"]
     last_error: str | None                             # redacted; never a secret
     has_key: bool                                      # a key is set (never the key itself)
+    supports_vision: bool                              # ADR-043: may this source be sent images?
     updated_at: datetime
 
 class ModelProviderCreate(StrictModel):
@@ -2123,6 +2179,7 @@ class ModelProviderCreate(StrictModel):
     base_url: str | None = None                        # None => the kind's default endpoint
     api_key: Annotated[str, Field(min_length=1, max_length=8000)]  # write-only; AEAD-sealed, never returned
     default_model: str | None = None
+    supports_vision: bool = True                       # ADR-043
 
 class ModelProviderUpdate(StrictModel):                # PATCH; all optional
     display_name: str | None = None
@@ -2130,6 +2187,7 @@ class ModelProviderUpdate(StrictModel):                # PATCH; all optional
     api_key: str | None = None                         # present => reseal; never returned
     default_model: str | None = None
     enabled: bool | None = None
+    supports_vision: bool | None = None                # ADR-043
 
 class ModelProviderTest(StrictModel):
     ok: bool
@@ -2151,6 +2209,7 @@ class SessionModelState(SessionModelSelection):         # response
     effective_provider_name: str | None                # display name of the source
     effective_kind: str                                # provider kind, or PROVIDER_KIND for env
     effective_model: str                               # "mock" when the env provider is the mock
+    supports_vision: bool                              # ADR-043: does the effective source accept images?
 ```
 
 | Route | Body → response | Auth | Status |
@@ -2172,6 +2231,11 @@ class SessionModelState(SessionModelSelection):         # response
 - **Test connection.** `POST /providers/{id}/test` decrypts the key server-side, fetches the provider's
   `/models` (or issues a minimal chat), and stores the result: `status='active'` + `models[]` on success,
   `status='error'` + redacted `last_error` on failure. The key never reaches the client.
+- **Vision capability (ADR-043).** `supports_vision` (default `true`) declares whether this source accepts
+  image content. When `false`, chat attachments of kind `image` are replaced by an honest text placeholder
+  during provider-history assembly instead of being sent and failing; `SessionModelState.supports_vision`
+  reports the resolved value so the composer can warn before the user attaches an image. The env fallback
+  provider is treated as `true`.
 - **Default + per-chat selection (ADR-041 §5).** `POST /providers/{id}/default` makes a source the single
   global default (atomically clears the prior default). `POST /sessions/{id}/model` sets the per-conversation
   override (source + model); `null` clears it back to the global default. The switch persists **both** the

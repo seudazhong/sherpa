@@ -26,6 +26,8 @@
 | 2026-07-27 | W3 前置：沙箱隔离安全评审（docker.sock/多用户威胁模型 + 隔离方案选型） | ✅ **独立安全评审结论**：worker 挂 `docker.sock` ≈ 宿主 root（OWASP Rule#1；只读挂载无用）；当前「socket 只给可信编排进程、不可信代码只在派生容器、容器绝不碰 socket」的**专用 sandbox 编排**模式正确、须保持。W3 首版**仅**给沙箱加**一个一次性 scratch 只读拷贝的 RW 挂载**（`nosuid,nodev` + 拷贝前剔除/断言无凭据 + 路径校验 + 编排方原子清理 + 孤儿扫除），保留全部 ADR-025 硬化，且**只在自托管单用户**可接受（推荐补 rootless Docker + patched runc）。**明确禁止上线条件（多用户/真不可信第三方代码前必须先做）**：gVisor(`runsc`) 或 microVM(Kata/Firecracker) 运行时 + 不共享 docker.sock/每租户 scratch 隔离 + 租户级出口策略 + 聚合配额 + 威胁评审——未实施的缓解**绝不写成已安全**。socket-proxy 对本编排角色是**假安全**（需放行 create/exec 即等于放行逃逸），不采用 | 新增 ADR-039（落地 ADR-037 §决策4 前置硬门；证据见 R-WORKSPACE-PRODUCT + 独立评审）|
 | 2026-07-27 | W3 = Project Chat 任务工作副本 + 一次性 scratch 沙箱 + 变更评审的契约与设计先行 | ✅ 首条变更动作**惰性开**跨 turn **持久任务工作副本**（base=当前 head 快照）；**真相源 = Sherpa 快照 head**，工作副本 overlay 是**持久任务态**，scratch 卷/热容器是**可丢缓存**；每次执行**物化一次性 scratch 拷贝**、有界批次后**持久化 overlay**；**Change Review** 展示 added/modified/deleted + artifacts；用户 **Save selected / Save+checkpoint / Discard**（**Save 不给 agent**，人工评审闸）；head 移动 → **stale Save 用 head_generation CAS 拒绝**（`conflicted`，须重评审 rebase）；**single-writer lease + fence**（stale fence 不能发布 overlay）；缺依赖 → 显式 `environment_missing_dependencies`（绝不联网装包）；内置 file/edit/run/test 工具在 scratch 上工作，**不嵌 coding agent**；**不做 git init/history/commit/branch、不做 GitHub sync/push/PR（W4）**。**ADR-025 正式修订**为「仅挂一次性 scratch，永不挂真相源」（受 ADR-039 门控）。**本批次只做契约与设计先行**（无生产代码/迁移/无真实挂载/不暴露 W3 导航） | 新增 ADR-040（延伸 ADR-037/ADR-030；复用 ADR-016/017/023/015/009/019；**正式修订 ADR-025**；受 ADR-039 门控；源自 R-WORKSPACE-PRODUCT §10）|
 | 2026-07-28 | 多来源模型 provider（用户在设置里配置多个 model 来源） | ✅ 把 env 单一 provider 升级为 **DB 支持、用户可配的多 provider 注册表**：一行 = 一个来源（`kind`/`api_mode` + `base_url` + **AEAD 密钥** + model 列表 + 默认），复用现有 `Provider.stream` 抽象。首版 3 个 wire 适配器：增强 **`openai_compatible`**（覆盖 DeepSeek/Qwen/Moonshot/Mistral/xAI/Groq/OpenRouter/Ollama/Gemini-OAI…）+ 原生 **`anthropic`** + 原生 **`gemini`**；forward `kind`（bedrock/vertex/openai_responses）留而不建。密钥复用 `github_token.py` 的 **KEK 直封** + connector-vault capability 门控，**仅在 `stream()` 边界解密，绝不进日志/事件/prompt/工具输出**。**全局默认 + 每会话可切 model**（会话绑定携带 provider 引用，避免用旧端点/协议）。**跨-provider failover / MoA / 成本 ledger / Bedrock·Vertex·Responses / 子 agent 后置**（各自后续 ADR）。provider 配置 = **人工设置**（Settings「Models」面 + REST，**不给 agent** —— 跨凭据边界，同 GitHub 连接）。**本批次只做 ADR + 契约与设计先行**（无生产代码/迁移） | 新增 ADR-041（延伸 ADR-008；复用 ADR-019/015/033；源自 R-MODEL-PROVIDER）|
+| 2026-07-29 | Drive 能否上传文件夹（backlog B-5） | ✅ **客户端有界展开**：`multiple` + `webkitdirectory` + 拖拽目录遍历 → 先逐层建目录（`POST /drive/folders`）再逐个上传（`POST /drive/files`），**不新增 batch/zip 端点、服务端零改动**；有界（≤200 文件 / ≤200 MiB / 并发 3）+ 逐文件状态与诚实的部分失败；archive 上传方案留作后续 | 新增 ADR-042（落地 backlog B-5；复用 ADR-030 契约）|
+| 2026-07-29 | Chat 能否上传/粘贴图片 + 从 Drive 附加文件（backlog B-6） | ✅ **字节只存 Drive**（粘贴/上传先落 `Chat uploads/`，附件只存 `drive_node_id`+`version` 引用，绝不字节复制进 `parts`）；`parts.kind` 扩为 `text\|status\|image\|file_ref`；**装配期**读字节 → user turn 变 OpenAI 形状 content 数组（纯文本 turn 仍是字符串，缓存前缀不变）；三个 provider 各自翻译（Anthropic image block / Gemini inlineData / OpenAI 直通）；**每来源 `supports_vision` 标志**，为假时图片诚实降级为文本占位而非 400；非图片文本类做有界抽取、二进制只给指针 | 新增 ADR-043（落地 backlog B-6；扩展 ADR-005/008/030；延伸 ADR-041）|
 
 ---
 
@@ -663,3 +665,50 @@
 - **验收关键（本契约先行批次）**：ADR-041 被接受；data-model 有 `model_providers`（AEAD 列 + `models`/`default_model`/`is_default`/唯一默认，`tenant_id` 复合键）+ `sessions` model 绑定；api §10.8 有 providers CRUD + `test`/`models`/`default` + session-model REST（写需 CSRF、密钥只入不出、**无** agent 工具）；config 有 `PROVIDER_*` 兜底说明 + 无新 env 密钥（密钥进 vault）；能力矩阵有「模型 provider 配置」「会话 model 切换」行且 **UI 列 ⬜**；静态 Settings「Models」稿（来源列表/加来源[kind 下拉+base_url+password key，永不回显]/测试连接/列 model/选默认/会话切换器）落在生产 Quiet Work 设计系统、桌面 1280 + 390px 均无横向滚动、**明标设计稿**；**无生产代码/迁移**。契约**先于代码**。
 
 - **来源**：R-MODEL-PROVIDER 调研 [`research/model-provider.md`](research/model-provider.md)（AstrBot `AstrBotDevs/AstrBot@3f9aa74`、hermes-agent `NousResearch/hermes-agent@7100e8d`、PI-agent `earendil-works/pi@c820aa2` 的 provider 层深读 + provider landscape + 三方真实 quirk 目录）；负责人输入「下一步先做 model provider，支持多个来源的 model，由用户在设置里配置」「需要支持 OpenAI/Anthropic/Gemini/DeepSeek/Qwen 等全部主流 provider，参考 hermes-agent/AstrBot/PI-agent」「做全局默认 + 每会话可切」；Sherpa 现状 `app/providers/*` + `app/security/{vault,github_token,keyring}.py`。
+
+---
+
+### ADR-042 · Drive 文件夹/批量上传 = 客户端有界展开（复用现有 `POST /drive/folders` + `POST /drive/files`），不新增 batch/zip 端点（落地 backlog B-5；复用 ADR-030 契约）
+
+> **状态：已接受（2026-07-29）。** 源自手工测试发现 [`backlog.md` B-5](backlog.md#b-5-drive-cannot-upload-a-folder)：Drive 一次只能传**一个**文件，文件夹无法上传（`WorkspaceView.tsx` 是裸 `<input type="file">`，handler 只取 `files?.[0]`）。
+
+- **背景**：ADR-030 的 Drive 契约（api §10.2）已经具备文件夹（`POST /drive/folders`）与单文件上传（`POST /drive/files`，multipart + `parent_id`），配额 `507` / 单文件上限 `413` / 同名 `409` 语义齐备。缺的**只是客户端**：没有 `multiple`、没有 `webkitdirectory`、没有目录拖拽遍历。
+
+- **决策**：
+  1. **采用「客户端有界展开」（B-5 方案 a）**：`<input multiple webkitdirectory>` + 拖拽的 `DataTransferItem.webkitGetAsEntry()` 目录遍历 → 先按相对路径**逐层建目录**（`POST /drive/folders`；同名 `409` 视为「已存在，复用」），再逐个上传文件（`POST /drive/files`）。**服务端零改动、契约不变**。
+  2. **明确不做「archive 上传」（B-5 方案 b）**：它需要新端点 + 复用 ADR-037 的有界解压器（那是**项目导入**路径，配额/租户语义不同），而且要求用户先自己打包——对「把一个文件夹拖进来」这个诉求是绕路。若将来出现万级小文件场景再另开 ADR。
+  3. **有界**（防一次拖入 `node_modules` 打爆浏览器与后端）：单次 ≤ **200** 个文件、总计 ≤ **200 MiB**、上传并发 **3**；超界在**发起前**拒绝并明示原因。单文件仍受服务端 `413` 与配额 `507` 约束——客户端不复制这些阈值，只诚实转述服务端的回答。
+  4. **部分失败诚实呈现**：批量上传**没有事务性**（Drive 无批量端点，也不引入伪回滚）。每个文件一行状态（等待/上传中/完成/失败+原因），失败项可单独重试；遇到 `507`（配额耗尽）**立即停止**后续排队项，而不是刷出一屏同样的错误。
+  5. **无新 REST、无新 agent 工具**：这是纯客户端能力；agent 侧已可用 `drive_make_folder` + `drive_write` 组合达成同一效果（ADR-023 能力对等仍成立）。
+
+- **契约影响**：`docs/contracts/api.md` §10.2 增加一条说明（文件夹上传 = 客户端展开，服务端仍是单文件端点），**无 schema 变更、无迁移**。
+
+- **验收关键**：能选择/拖入一个**嵌套**文件夹并在 Drive 中重建出同样的树；超界（>200 文件或 >200 MiB）在上传前被拒绝且原因可读；单个文件失败不影响其余文件；`507` 停止后续排队；390 px 无横向溢出；`npm run lint` + `npm run build` 绿；能力矩阵（docs/11 §9）Drive 上传行的 UI 列补齐。
+
+- **来源**：backlog B-5（2026-07-28 手工测试）；现状 `frontend/src/views/WorkspaceView.tsx`、`backend/app/api/drive.py`、api §10.2。
+
+---
+
+### ADR-043 · Chat 附件 = 类型化 message parts（`image`/`file_ref`）+ Drive 作唯一字节存储 + provider 多模态翻译 + 每来源 `supports_vision` 标志（落地 backlog B-6；扩展 ADR-005/008/030；延伸 ADR-041）
+
+> **状态：已接受（2026-07-29）。** 源自负责人诉求 [`backlog.md` B-6](backlog.md#b-6-chat-attachments-image-uploadpaste--attach-from-drive)：在 Chat 里 (a) 上传/粘贴图片，(b) 从 Drive 附加已有文件。现状整条链路是**纯文本**：composer 无附件、admission 只落一个 text part、`core/history.py` 把每个 user turn 压成字符串 `content`，任何多模态内容都到不了 provider。
+
+- **决策**：
+  1. **字节只存 Drive，`parts` 只存引用**：composer 上传/粘贴的图片先写入 Drive（自动目录 **`Chat uploads/`**），拿到 `drive_node_id` + `version`；从 Drive 选择的文件直接引用。**绝不**把字节复制进 `parts`/journal。→ 免费继承配额（`507`）、单文件上限（`413`）、版本、回收站与 GC（ADR-030），附件可被再次引用，agent 也能用 `drive_read` 读到同一份东西。
+  2. **类型化 parts**：`parts.kind` 由 `('text','status')` 扩展为 **`('text','status','image','file_ref')`**，`content_redacted = {drive_node_id, version, name, content_type, size_bytes}`。data-model DDL 注释 5 相应修订：**仍然不存 chain-of-thought**——新增的是**用户输入的引用**，不是模型推理。
+  3. **admission 携带引用**（api §4）：`PromptRequest.attachments: [{drive_node_id, version?}]`，≤ **8** 个。服务端解析时校验属主、非 trashed、按 `content_type` 判定 `image` 还是 `file_ref`、钉住 `version`（缺省 = 当前版本），与 text part 在**同一事务**落库（ADR-005 的「先持久化输入」不变）。幂等：同 `client_message_id` 的重放必须 text **与**附件集合都相同，否则 `409`。
+  4. **装配期读字节，且有界**：`assemble_provider_history` 在**每次装配**时从 Drive 读附件字节（而不是 admission 时 inline base64），把带附件的 user turn 变成 OpenAI 形状的 content 数组；**纯文本 turn 保持字符串原样**（既有会话的缓存前缀字节不变）。上限：单图 ≤ **5 MiB**、单次装配图片总量 ≤ **15 MiB**，超出者降级为文本占位。附件块位于 user turn（前缀**尾部**），系统层前缀不受影响 → docs/04 不变式⑤保持。
+  5. **非图片文件**：文本类（`text/*`、json/csv/md/xml/yaml）→ **有界文本抽取**（≤ 32 KiB，截断显式标注）内联为文本块；二进制 → 只给「名称/类型/大小 + 可用 `drive_read` 读取」的诚实指针，**绝不假装模型看得到**。
+  6. **vision 能力 = 每来源标志**（延伸 ADR-041）：`model_providers` 增列 **`supports_vision`**（默认 `true`，用户可在 Settings「Models」按来源关闭）。为 `false` 时图片**降级为文本占位**并说明原因（提示切换来源/模型），而不是把图片硬塞给不支持的端点再吃 400。无 DB 来源时的 env 兜底 provider 视为 `true`。
+  7. **provider 翻译**（ADR-008 narrow waist 不变）：`openai_compatible` 直通 content 数组；`anthropic` 把 `image_url` data URL 翻成 `{"type":"image","source":{"type":"base64",…}}`；`gemini` 翻成 `{"inlineData":{"mimeType","data"}}`；`mock` 容忍数组（取其中文本）。
+  8. **本期明确不做**：模型**产出**图片、音频/视频、附件 OCR/向量化（那是 Knowledge ADR-036 的活）、附件级共享/权限、把 Drive 之外的外链当附件、`assistant` 侧多模态输出。
+
+- **数据模型**：迁移 **0032** = 放宽 `ck_parts_kind` + `model_providers.supports_vision boolean NOT NULL DEFAULT true`。无新表。
+
+- **能力面**：无新 agent 工具——附件是**人在 composer 里的输入动作**；agent 侧读同一批字节的能力已由 `drive_read`/`drive_list` 覆盖（ADR-023 对等成立）。REST：`POST /sessions/{id}/prompt` 增 `attachments`；`GET /sessions/{id}/messages` 的 part 增附件元数据（供转录渲染缩略图/下载）；`PATCH /providers/{id}` 增 `supports_vision`。
+
+- **安全边界**：附件字节走既有 Drive 属主校验（tenant + user 双重作用域，跨用户结构性不可达）；附件**不进日志/事件 payload**（journal 只留引用与大小）；不可信来源（如邮件抽取）**不会**自动变成附件——附件只能由人在 composer 产生或从自己的 Drive 选择（ADR-009 的不可信内容边界不变）。
+
+- **验收关键**：迁移 0032 可升可降；粘贴一张图片 → 落 `Chat uploads/`、chip 可见、发送后模型**真的**描述出图片内容（agent lane）；`supports_vision=false` 时同一图片得到诚实占位而非报错；纯文本会话的 provider 消息形状**逐字节不变**（回归测试）；转录能渲染缩略图与文件 chip；390 px 无溢出；后端 `pytest`/`ruff`/`mypy` 与前端 `lint`/`build` 全绿；能力矩阵新增「Chat 附件」行且 UI 列为 ✅。
+
+- **来源**：backlog B-6（2026-07-28 负责人诉求）；现状 `backend/app/core/{admission,history}.py`、`app/providers/*`、`frontend/src/views/ChatView.tsx`；复用 ADR-030 Drive、ADR-041 provider 注册表。
