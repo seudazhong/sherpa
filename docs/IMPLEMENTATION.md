@@ -329,3 +329,297 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研�
 | MP.V | full backend gate + 两栈 Playwright + UX pass；重启栈 | full pytest green；两栈验证；390px | ✅ `741ef7a` (真实 litellm 源测试连接拉 29 model；agent 用 DB 源 claude-sonnet-4.6→"Paris"；每会话切 gpt-4o-mini 生效) |
 
 **Deferred（各自后续 ADR）：** 跨-provider failover、MoA/ensemble、成本 ledger、Bedrock/Vertex/OpenAI-Responses、子 agent、多 key 轮换。
+
+---
+
+## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 📋 **PLAN APPROVED, IMPLEMENTATION NOT STARTED**
+
+> Closes backlog **B-2** (52 flat tools) and **B-8** (`project_run` always fails) as one program.
+> Architecture approved by the owner 2026-07-30 ([ADR-045](decisions.md#adr-045) umbrella,
+> [ADR-046](decisions.md#adr-046) tool catalog, [ADR-047](decisions.md#adr-047) tar transport,
+> [ADR-048](decisions.md#adr-048) RuntimeSession). **Implementation code still requires a separate
+> owner approval of this execution plan.** Nothing in P0–P5 may start before that approval.
+
+### TR.0 Owner approval checklist — defaults already approved (2026-07-30)
+
+Do **not** re-litigate these. They are settled inputs, not open questions.
+
+| # | Decision | Approved value |
+|---|---|---|
+| — | Compatibility posture | **Clean break.** No alias table, no deprecation window, no legacy tool names, no shims. |
+| — | Data migration | **None.** All existing data is disposable test data. |
+| — | Alembic | **Squash `0001`…`0032` into one new `0001_baseline`.** Destructive dev rebuild accepted. |
+| O-1 | Tool naming | **`domain.verb`** (`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`), api.md §7 regex updated. |
+| O-2 | Verb mega-tools (`drive(op=…)`) | **No.** Grouping + on-demand loading only. |
+| O-3 | `sh.exec` policy | **`ask`**, auto-released by a **platform safe-command allowlist grant**. |
+| O-4 | `fs.write`/`fs.edit`/`fs.delete` policy | **`allow`** (writes the reviewable overlay), **except** sensitive paths → `ask`. |
+| O-5 | v1 workspace transport | **tar ingress/egress** (`put_archive`/`get_archive`); no bind mount, no host path. |
+| O-6 | Runner image v1 | **Python + `pytest` + `ruff`**, first-party, pinned by digest. **Node is later/optional.** |
+| O-7 | `tools.load` | **Model may load autonomously** (audited). External/MCP tools never enter core. |
+| O-8 | `/Project` UI | **Three-column workspace** for Project-bound chat. |
+| O-9 | Execution REST | **Async `202` + SSE + cancel**, executed by the **worker**. |
+| O-10 | Plan object | **Deferred** to a later slice; reserve a `ui.*` namespace only. |
+| O-11 | Legacy `/files` stack + `run_code` | **Deleted.** |
+| O-12 | `run_code` | **Deleted**, replaced by `runtime.open(scope="ephemeral")` + `sh.exec`. |
+| O-13 | Route inventory | **Generated file + CI diff**, replacing the hand-frozen api.md §9 count. |
+| O-14 | `app/files/` package | **Rename to `app/objectstore/`** (it is the object-store adapter, not the deleted files stack). |
+
+### TR.1 Orientation for a fresh process (no conversational memory required)
+
+Read in this order: [`AGENTS.md`](../AGENTS.md) → [`STATUS.md`](STATUS.md) → ADR-045/046/047/048 in
+[`decisions.md`](decisions.md) → `contracts/api.md` §7 + §10.7 → `contracts/events-and-effects.md`
+§2.2 + §2.11 → `contracts/config-and-secrets.md` §1.4 + §1.7 + §1.10 → `contracts/data-model.md`
+§Projects. Contract sections are marked **`[shipped]`** / **`[target]`** / **`[deleted]`** — implement
+the `[target]` ones; do not assume a `[target]` section describes existing code.
+
+**Measured ground truth (verify before changing anything, so you can prove the delta):**
+
+```powershell
+cd C:\src\sherpa\backend
+@'
+import json
+from app.tools.builtin import build_default_registry
+s = build_default_registry().schemas("full")
+print("tools:", len(s), "json_bytes:", len(json.dumps(s)))
+'@ | uv run python -
+# Expected baseline before Phase TR: tools: 52  json_bytes: 19848
+```
+
+**The three facts that explain B-8** (do not re-derive them, but do re-confirm the first one after
+any change): (a) `backend/app/sandbox/project_sandbox.py` passes a **worker-container** path as a
+bind-mount `source` to the **host** daemon, and `infra/docker-compose.yml` declares no shared scratch
+volume, so container creation always fails; (b) `backend/app/services/project_sandbox.py` collapses
+every error into `sandbox_unavailable` with no log; (c) `backend/tests/test_project_sandbox.py` and
+`test_sandbox.py` monkeypatch the executor, so **no test ever starts a container** — which is why 297
+green tests did not catch it. P3 must fix (c) or it will happen again.
+
+### TR.2 Canonical commands
+
+```powershell
+# backend gate (run in C:\src\sherpa\backend)
+uv sync
+uv run pytest                                   # isolated data plane per ADR-044; safe with the stack up
+uv run pytest -m docker                         # real-Docker lane (new in P3; skipped by default)
+uv run pytest tests/test_tool_catalog.py -q     # targeted
+uv run ruff check . ; uv run ruff format --check . ; uv run mypy app
+uv run alembic upgrade head
+
+# frontend gate (run in C:\src\sherpa\frontend)
+npm ci ; npm run lint ; npm run build
+
+# stack
+docker compose -f infra/docker-compose.yml --env-file .env up --build -d
+docker compose -f infra/docker-compose.yml logs -f worker
+docker compose -f infra/docker-compose.yml down
+
+# sandbox runner image (new in P3)
+docker build -t sherpa-sandbox-runner:dev sandbox-runner/
+docker image inspect sherpa-sandbox-runner:dev --format '{{index .RepoDigests 0}}'
+```
+
+### TR.3 Destructive reset procedure (baseline squash) — **P1 only, and only once**
+
+This **destroys the dev database, Redis and MinIO volumes**. It is approved, but it is irreversible,
+so run it deliberately.
+
+1. Confirm with the owner that the dev stack holds nothing they want. (Approved in principle
+   2026-07-30; still announce it in the P1 commit body.)
+2. `docker compose -f infra/docker-compose.yml down -v` — the `-v` is what removes `pgdata`,
+   `redisdata`, `miniodata`.
+3. Delete `backend/migrations/versions/0001_initial_core.py` … `0032_chat_attachments.py`
+   (all 32 files). Do **not** leave any orphaned revision; the chain must stay linear.
+4. Author a single `backend/migrations/versions/0001_baseline.py` that creates the **target** schema:
+   no `files` table, no `project_sandbox_runs`, plus `project_runtime_sessions` and
+   `project_exec_runs` (`contracts/data-model.md` §Projects). Generate it from `Base.metadata` after
+   the model deletions land, then hand-audit it against the contract DDL — `--autogenerate` will not
+   produce the partial indexes, CHECKs, triggers or `uq_prs_live`.
+5. `docker compose -f infra/docker-compose.yml --env-file .env up --build -d`
+6. Verify: `uv run alembic upgrade head` on an empty database succeeds and
+   `uv run alembic heads` shows exactly one head.
+7. Verify the pytest harness is unaffected: `uv run pytest` — ADR-044 creates `<app_db>_test` from
+   scratch and runs `upgrade head`, so it needs no special handling. If it complains about a missing
+   marker on a pre-existing test DB, use `SHERPA_TEST_DB_RESET=1` once.
+8. **Never** run `alembic revision --autogenerate` against the test database (ADR-044).
+
+### TR.4 Phase graph and independence
+
+```
+P0 honesty ──► P1 baseline + deletions ──┬──► P2 tool catalog ──┐
+                                         └──► P3 tar transport ─┴──► P4 runtime + fs/sh ──► P5 UI
+                                                                          │
+                                                     roadmap:  P6 production runner
+                                                               P7 in-sandbox coding agent
+```
+
+**P2 and P3 are deliberately disjoint and MUST be developable in parallel by two processes:**
+
+| | P2 touches | P3 touches |
+|---|---|---|
+| owns | `backend/app/tools/**`, `backend/app/permissions/**`, `backend/app/core/loop.py` (the `registry.schemas(tier)` call site only), `backend/tests/test_tool_*.py` | `backend/app/sandbox/**`, `sandbox-runner/**`, `infra/docker-compose.yml`, `backend/tests/test_runtime_transport.py`, `backend/tests/conftest.py` (docker marker) |
+| must not touch | anything under `app/sandbox/`, `sandbox-runner/`, `infra/` | anything under `app/tools/` or `app/permissions/` |
+
+The only shared file is `backend/app/config.py` (P2 adds `tool_catalog_core_max_bytes`; P3 removes
+`sandbox_scratch_root`/`sandbox_warm_ttl_seconds` and adds `sandbox_runtime_idle_ttl_seconds`). Land
+them as two separate stanzas to keep the merge trivial. **Both must be merged before P4 starts** —
+P4 registers `fs.*`/`sh.*` through P2's descriptor API against P3's transport.
+
+### TR.5 P0 — Honesty pass (no architecture change)
+
+Doable immediately after plan approval; unblocks everything by removing false statements.
+
+| # | Task | Paths | AC |
+|---|---|---|---|
+| P0.1 | Split the `sandbox_unavailable` collapse into the named-exit list (events §2.11); emit one structured worker log line and one redacted tool observation per failure | `backend/app/services/project_sandbox.py`, `backend/app/sandbox/project_sandbox.py` | A forced daemon-unreachable, a forced image-missing and a disabled sandbox produce **three different** `termination_reason`s and three log lines; regression test asserts each |
+| P0.2 | Correct the stale W3 exit note ("a `project_run` shell command sees an empty `/work`" — the container never started) | this file, Phase W3 exit block | The note states the container never starts and points at ADR-047 |
+| P0.3 | Correct the capability matrix: the W3 human lane never existed (`api.ts::createSandboxRun` has no call site) | `docs/11-agent-tool-surface.md` §9 | The Run/UI cell is ⬜ with the blocker named, not ✅ |
+| P0.V | `uv run pytest tests/test_project_sandbox.py -q` + full gate | — | green; **commit P0 separately** |
+
+**P0 exit:** every sandbox failure is distinguishable in the log and in the model's observation; no
+document claims a capability that does not exist.
+
+### TR.6 P1 — Baseline squash + legacy deletion
+
+| # | Task | Paths | AC |
+|---|---|---|---|
+| P1.1 | Delete the legacy files stack | `backend/app/services/files.py`, `backend/app/api/files.py`, `backend/app/tools/file_tools.py`, the `File` model, `include_router(files_router)` in `backend/app/main.py`, `backend/tests/test_file*.py` | No import of `app.services.files` remains; `uv run mypy app` clean |
+| P1.2 | Delete `run_code` | `backend/app/tools/sandbox_tools.py`, `backend/tests/test_sandbox.py` | Registry no longer exposes `run_code` |
+| P1.3 | Rename `app/files/` → `app/objectstore/` (O-14) and update Drive/Projects imports | `backend/app/files/**` → `backend/app/objectstore/**`, `app/services/{drive,projects,projects_import,project_workcopy}.py` | Full gate green; no `app.files` import remains |
+| P1.4 | Delete `WORKSPACE_ROOT` (setting, `.env.example` line, compose read-only mount, role requirement) | `backend/app/config.py`, `.env.example`, `infra/docker-compose.yml` | Worker starts with no `WORKSPACE_ROOT`; config §1.4 matches |
+| P1.5 | Baseline squash per **TR.3** | `backend/migrations/versions/**` | `alembic upgrade head` on an empty DB; exactly one head; `uv run pytest` green |
+| P1.V | Full gate + stack rebuild | — | backend gate + `npm run build` green; stack healthy; **one commit per task** |
+
+**P1 exit:** one Alembic revision; no legacy files stack; no `run_code`; no `WORKSPACE_ROOT`; the
+dev stack is rebuilt from empty and healthy.
+
+### TR.7 P2 — Tool catalog, resolver, discovery (closes B-2)
+
+TDD order per task: write the failing test first, then the implementation.
+
+| # | Task | Paths | TDD / AC |
+|---|---|---|---|
+| P2.1 | `ToolDescriptor` + startup validation (name regex, uniqueness, unknown `requires`, version monotonicity) | new `backend/app/tools/catalog.py`; `backend/app/tools/builtin.py` | Test first: a bad name, a dupe and an unknown `requires` each raise at startup |
+| P2.2 | Rename every tool to `domain.verb` and register with a descriptor (hard rename, no aliases) | `backend/app/tools/{builtin,candidate_tools,todo_tools,connector_tools,schedule_tools,insight_tools,memory_tools,drive_tools,knowledge_tools,project_tools}.py` + their tests | Test first: assert the full expected name set; `memory.recall` covers the old get/list; `todo.update` covers complete |
+| P2.3 | `ToolsetResolver` + profiles | new `backend/app/tools/resolver.py`; `backend/app/tools/registry.py` | Tests: (a) `resolve(general).core` is a **byte-true prefix** of the project-bound array; (b) two calls with the same profile are byte-identical; (c) `connector_analysis` → empty array |
+| P2.4 | `tools.search` / `tools.load` + catalog digest in the system message | `backend/app/tools/meta_tools.py`, `backend/app/core/loop.py` (system-message assembly + the `registry.schemas(tier)` call site) | Mock-provider script: search → load → **next turn** exposes the toolset and the call succeeds; a same-turn load does **not** change that turn |
+| P2.5 | Byte budget | `backend/app/config.py` (`tool_catalog_core_max_bytes=6144`), `backend/app/tools/resolver.py` | Startup fails above the cap; `test_tool_catalog.py` asserts `core_bytes <= 6144` and records the measured value |
+| P2.6 | Args-aware policy + structured `PermissionScope` + grants matchers | `backend/app/permissions/{policy,grants,service}.py` | Tests: read-only → allow; overlay write → allow; sensitive path → ask; safe-command grant flips `sh.exec` ask→allow; non-allowlisted stays ask |
+| P2.7 | `toolset.resolved` telemetry event | `backend/app/events/journal.py` consumer, `backend/app/core/loop.py` | Event carries `core_toolsets`/`loaded_toolsets`/`tools_offered`/`core_bytes`/`total_bytes` |
+| P2.8 | Typed `ToolOutputSpillReference` + retention janitor (api §7.2 debt) | `backend/app/tools/bounding.py`, worker cron | Oversized output yields the typed object in `return_display`; janitor deletes past `TOOL_OUTPUT_RETENTION_HOURS` |
+| P2.V | Full gate + agent-lane Playwright | — | Chat: "what can you do about my knowledge base?" → model calls `tools.search`, then `tools.load`, then `knowledge.search` |
+
+**P2 exit (this closes B-2):** general-chat tool JSON **≤ 6,144 bytes** (down from the measured
+19,848); core is a byte-true prefix; discovery works end-to-end in the agent lane;
+`CONNECTOR_ANALYSIS` still receives zero tools; every tool name matches `domain.verb`.
+
+### TR.8 P3 — tar transport + first-party runner image (mechanical half of B-8)
+
+| # | Task | Paths | TDD / AC |
+|---|---|---|---|
+| P3.1 | Merge the two sandbox modules into one | `backend/app/sandbox/{runner,project_sandbox}.py` → `backend/app/sandbox/runtime.py` | One code path; `scope` distinguishes project vs ephemeral |
+| P3.2 | `WorkspaceTransport` + `TarTransport` (`put_archive`/`get_archive`), **delete every `Mount(type="bind")`**; `/work` becomes an anonymous volume with `nosuid,nodev` | `backend/app/sandbox/transport.py`, `backend/app/sandbox/runtime.py` | Test first with a **fake docker client**: round-trip preserves content, mode bits and the executable flag; grep proves no `type="bind"` remains |
+| P3.3 | Credential strip + assert before the tar is built | `backend/app/sandbox/transport.py` | **Canary test**: a synthetic KEK-shaped secret in `.env`, `id_rsa`, `key.pem` and `.git/config` must not appear in the tar bytes, the overlay, the change set, an artifact, the log, the prompt or a tool result |
+| P3.4 | Egress tar treated as untrusted | `backend/app/sandbox/transport.py` reusing `backend/app/services/archive.py` semantics | Rejects absolute paths, `..`, NUL, device/FIFO, hard links, escaping symlinks → `path_escape` |
+| P3.5 | First-party runner image | new `sandbox-runner/Dockerfile`, `sandbox-runner/capabilities.json`, `sandbox-runner/README.md` | Non-root, read-only-rootfs friendly, pinned versions, python + pytest + ruff, **no git, no curl/wget**; `SANDBOX_IMAGE` is a digest |
+| P3.6 | Config: drop `sandbox_scratch_root`/`sandbox_warm_ttl_seconds`, add `sandbox_runtime_idle_ttl_seconds` | `backend/app/config.py`, `.env.example`, `infra/docker-compose.yml` | Worker starts; no scratch path anywhere |
+| P3.7 | **Real-Docker test lane** | `backend/tests/conftest.py` (`docker` marker + auto-skip), new `backend/tests/test_runtime_docker.py`, `backend/pyproject.toml` marker registration | `uv run pytest -m docker` starts a real container, runs `python -c`, `pytest -q` and `ruff --version`, and asserts real exit codes |
+| P3.V | Topology matrix (TR.11) + failure injection (TR.10) | — | Windows/Docker-Desktop lane green |
+
+**P3 exit:** a real command executes in a real container on the Windows dev stack and returns a real
+exit code and stdout; no bind mount and no host path is passed to the daemon anywhere; the canary
+test passes; `uv run pytest -m docker` exists and is green locally.
+
+### TR.9 P4 — RuntimeSession + `fs`/`sh`/`run` (product half of B-8)
+
+| # | Task | Paths | TDD / AC |
+|---|---|---|---|
+| P4.1 | Schema: `project_runtime_sessions` + `project_exec_runs` (**fold into `0001_baseline`** — there is no second migration in a clean break) | `backend/app/models/projects.py`, `backend/migrations/versions/0001_baseline.py` | `uq_prs_live` blocks a second live session per working copy; `ck_prs_scope_binding` holds |
+| P4.2 | `runtime.open` / `runtime.close` service + tools | `backend/app/services/project_runtime.py`, `backend/app/tools/runtime_tools.py` | Open acquires lease + bumps fence, probes capabilities, records `ingress_bytes`; close persists the boundary **before** teardown |
+| P4.3 | `fs.*` host-side tools over the working-copy effective tree | `backend/app/tools/fs_tools.py`, `backend/app/services/project_workcopy.py` | **Key test: with `SANDBOX_KIND=disabled`, every `fs.*` tool still works** (the degradation guarantee); `fs.read` after `fs.write` returns the new content without any Save |
+| P4.4 | `sh.exec` with streaming + cancel | `backend/app/tools/sh_tools.py`, `backend/app/services/project_runtime.py`, `backend/app/api/projects.py` | `202` + `runtime.output` SSE frames + `POST /runtime/{rid}/cancel` settles `cancelled` **after** the persistence boundary runs |
+| P4.5 | `run.test` / `run.lint` over probed capabilities | `backend/app/tools/run_tools.py` | Missing tool → `environment_missing_dependencies` **naming what the image does have**, never a bare exit 127 |
+| P4.6 | Delete `project_run` / `project_tree` / `project_read`; rewrite REST to the runtime routes; delete `POST /projects/{id}/sandbox-runs` | `backend/app/tools/project_tools.py`, `backend/app/api/projects.py` | Route inventory shows the new routes and none of the old |
+| P4.7 | Route-inventory generator + CI step (O-13) | new `backend/scripts/route_inventory.py`, `docs/contracts/route-inventory.md`, `.github/workflows/ci.yml` | CI fails on undeclared route drift; `/files/*` and `sandbox-runs` cannot reappear |
+| P4.V | Full gate + agent-lane Playwright | — | One chat drives read → edit → `run.test` fail → edit → pass, with the approval card appearing for a non-allowlisted command |
+
+**P4 exit:** the agent completes a real edit/test loop; `fs.*` provably survives a disabled sandbox;
+`sh.exec` approval preview shows the exact command and paths; the old tools and route are gone and
+CI enforces it.
+
+### TR.10 P5 — `/Project` three-column UI (human lane)
+
+| # | Task | Paths | AC |
+|---|---|---|---|
+| P5.1 | Three-column Project-bound chat layout | `frontend/src/views/ChatView.tsx`, `frontend/src/styles.css` | Tree / conversation / right panel; 390 px overflow = 0 |
+| P5.2 | Editable file tree writing the same overlay as the agent | new `frontend/src/components/ProjectTree.tsx`, `frontend/src/api.ts` | A human edit and an agent edit appear in **one** change set |
+| P5.3 | Run control + streaming log panel + Stop | new `frontend/src/components/RunPanel.tsx` | Real streaming output; Stop cancels; the dead `createSandboxRun` client is replaced |
+| P5.4 | `Changes / Runs / Artifacts` tabs; Runs shows history with named termination reasons | `frontend/src/components/ChangeReview.tsx` + new `RunsPanel.tsx` | A failed run shows an explicit banner (the pre-existing observability gap noted in the W3 exit) |
+| P5.5 | One-click rebase-review on `409 head_moved` | `frontend/src/components/ChangeReview.tsx` | Conflict offers a path forward, not only a message |
+| P5.V | **Two-lane Playwright + UX acceptance** (restart the stack first) | — | Agent lane and human lane both pass; matrix UI cells flip to ✅ only after a **real click**; UX notes recorded |
+
+**P5 exit (this closes B-8):** the human lane exists and works end-to-end; `docs/11` §9 has no
+non-❌ ⬜ cell for this program; UX review recorded.
+
+### TR.11 Failure injection matrix (every row must map to exactly one named reason)
+
+| Injection | How | Expected |
+|---|---|---|
+| Daemon unreachable | point `DOCKER_HOST` at a dead socket | `runtime_daemon_unreachable` |
+| Image missing | `SANDBOX_IMAGE` = unknown digest | `runtime_image_missing` |
+| Container create fails | invalid resource limit | `runtime_start_failed` |
+| tar put/get fails | fake client raising mid-stream | `runtime_transport_failed` |
+| Sandbox disabled | `SANDBOX_KIND=disabled` | `sandbox_disabled`, **and `fs.*` still works** |
+| Wall timeout | `sleep 999` | `wall_timeout` |
+| OOM | allocate past `SANDBOX_MEM_MB` | `mem_limit` |
+| pids | fork bomb | `pids_limit` |
+| Output flood | 10⁶ lines | `output_limit` + spill reference |
+| Change-set overflow | write past `WORKING_COPY_MAX_*` | `changeset_bounds` + `truncated=true` |
+| Escaping symlink in egress | craft in `/work` | `path_escape` |
+| Stale fence | bump the lease behind a live session | `fence_lost`, overlay **not** published |
+| Head moved | Save from a second chat | `409 head_moved`, nothing applied |
+| Missing blob | delete a MinIO object | named error, no partial tar |
+| Cancel | press Stop mid-run | `cancelled`, boundary still persisted |
+
+### TR.12 Docker topology matrix (P3 gate)
+
+| Topology | Requirement |
+|---|---|
+| Windows + Docker Desktop + DooD (**the dev stack**) | `uv run pytest -m docker` green; real exit codes |
+| Linux + DooD | green |
+| Linux + DinD | green |
+| No Docker (CI default) | all docker-marked tests skip; `fs.*` tests green; `sandbox_disabled` observation is named and actionable |
+| rootless Docker | verified manually at least once, recorded in the phase exit note |
+
+### TR.13 Telemetry, budgets and canaries
+
+- **Telemetry:** `toolset.resolved` per turn (`core_bytes`, `total_bytes`, `tools_offered`, loaded
+  toolsets); `runtime.state`/`runtime.output` frames; OTel `execute_tool` spans gain
+  `sherpa.toolset` and `sherpa.runtime_session_id`; a `termination_reason` histogram.
+- **Budget gate:** `core_bytes <= TOOL_CATALOG_CORE_MAX_BYTES` (6,144) asserted in tests **and**
+  enforced at startup. Record the measured value in the P2 commit body so the 19,848 → ≤6,144 delta
+  is auditable.
+- **Security canaries (must fail the build if broken):** (1) synthetic KEK never leaves the vault
+  boundary (existing); (2) **new** — a secret-shaped file in a project tree never appears in the tar,
+  overlay, change set, artifact, log, prompt or tool result; (3) `CONNECTOR_ANALYSIS` resolves to
+  zero tools; (4) no `type="bind"` in `app/sandbox/`; (5) route inventory contains no `/files/*` and
+  no `sandbox-runs`.
+
+### TR.14 Definition of Done per phase
+
+Every phase, in addition to its own exit criteria: `uv run pytest` green · `ruff check` +
+`ruff format --check` clean · `mypy app` clean · `npm run lint` + `npm run build` green (when the
+frontend changed) · contracts/ADRs honoured and status markers updated · capability matrix updated ·
+two-lane Playwright after the phase (restart the stack first; the human lane is also a **UX
+acceptance review** with concrete suggestions) · `docs/STATUS.md` updated · small focused commits
+(one per task, per AGENTS.md §3).
+
+### TR.15 Explicitly roadmap, not this program
+
+**P6 production runner** — gVisor (`runsc`) or microVM, no shared `docker.sock`, per-tenant
+isolation/egress/quota; this is ADR-039's do-not-ship gate and is unchanged by ADR-047.
+**P7 in-sandbox coding agent** — a `SubAgentProvider` exposing `delegate.code_task(runtime_session_id,
+goal, budget)` against the **same** RuntimeSession, overlay, budget and audit path. Also roadmap:
+MCP/plugin providers, hosted dev-server preview, W4 GitHub sync/push/PR, and the Plan object.
+
+**What closes what:** **B-2 closes at the end of P2** (plus the P1 deletions it depends on).
+**B-8 closes at the end of P5** (P0 honesty + P3 transport + P4 runtime + P5 human lane). Anything in
+TR.15 is roadmap and must not be used to justify leaving B-2 or B-8 open.

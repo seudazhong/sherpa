@@ -2,7 +2,25 @@
 
 > **状态**:设计稿(2026-07-20),等你 review。落地任务见 [`IMPLEMENTATION.md` Phase M-tools](IMPLEMENTATION.md);决策见 [ADR-023](decisions.md);工具协议契约见 [`contracts/api.md §7`](contracts/api.md)。
 >
-> **目标**:凡用户在 UI 上能看到/能做的功能,agent 都能通过**工具**自主驱动——且 REST 与 Tool **不重复业务逻辑**。
+> **⚠️ 2026-07-30 更新(ADR-045/046/048)**:本文的**分层原则**(单一能力层 + REST/Tool 双适配 + 四道闸 + 一次性安全门)**全部保留**;但**工具面的呈现方式**已被 [ADR-046](decisions.md#adr-046) 取代——从「所有已注册工具平铺发给每个会话」改为「**分层工具目录 + 上下文作用域可见集 + 渐进式披露**」。下面 §6.1 关于 `ToolContext` 缺失的说法**已过时**(`app/tools/base.py:74` 早已注入 ctx);§7 的 `evaluate` 已升级为 **args 感知**;§9 能力矩阵的 W3 行 **UI 单元格是错的**(见 §9 注)。新的目标工具面见 `contracts/api.md` §7.0/§7.3/§7.5/§7.6,落地计划见 [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md)。
+>
+> **目标**:凡用户在 UI 上能看到/能做的功能,agent 都能通过**工具**自主驱动——且 REST 与 Tool **不重复业务逻辑**。ADR-046 之后这句话依然成立,只是 agent **按上下文取用**工具,而不是一次全拿。
+
+---
+
+## 0. 工具面 v2 速览(ADR-046,`[target]` 未实现)
+
+| 维度 | 现状(已上线) | 目标(Phase TR) |
+|---|---|---|
+| 工具数 / schema 体积 | **52 个 / 19,848 B ≈ 4,962 token**(实测),每次模型调用全量重发 | core ~15 个 ≈ **≤6,144 B** + 一行式目录摘要;按需 `tools.load` |
+| 命名 | 扁平 `snake_case`,三代混杂(`todo_write`/`update_todo`/`complete_todo`) | 统一 `domain.verb`(`todo.create`/`todo.update`) |
+| VISIBLE 闸 | 只有 SAFE/FULL 二元,且 `tier` 恒为 FULL ⇒ **事实上没实现** | `ToolsetResolver`(trust tier × surface × session kind × runtime),turn 边界冻结,core 恒为缓存前缀真前缀 |
+| 发现 | 无 | `tools.search` / `tools.load` 两个元工具 + 目录摘要 |
+| ALLOWED 策略 | `evaluate(tool)`,只看 `ToolFlags` | `evaluate(ctx, descriptor, args, scope)`,结构化审批 scope |
+| 重复能力 | `file_*`(遗留 files 表) vs `drive_*` 两套文件系统 | `file_*` 与整条 files 栈**删除**,Drive 唯一 |
+| 项目文件/执行 | `project_tree`/`project_read`(只看 head)+ `project_run`(必失败)+ `run_code` | `fs.*`(宿主侧,读 effective tree)+ `runtime.*`/`sh.*`/`run.*`(显式 RuntimeSession) |
+
+**clean break**:不做别名、不做弃用期、不做数据迁移(ADR-045)。删掉的工具名直接消失;模型若照抄历史 transcript 调旧名,得到 `unknown tool` 观察——错误即观察,不崩循环。
 
 ---
 
@@ -112,8 +130,8 @@ class Conflict(ServiceError):        code="conflict";         http_status=409
 
 ## 6. Tool 落地规格
 
-**6.1 接口对齐契约(当前代码偏离,需回归)**
-契约(api.md §7 L1049)是 `execute(self, ctx: ToolContext, args)`;当前 `base.py` 是 `execute(self, args)`——**缺 ToolContext**。M-tools T1 修正:
+**6.1 接口对齐契约(~~当前代码偏离,需回归~~ ✅ 已完成)**
+契约(api.md §7 L1049)是 `execute(self, ctx: ToolContext, args)`;~~当前 `base.py` 是 `execute(self, args)`——**缺 ToolContext**~~。**已修复**:`backend/app/tools/base.py:74` 的 `Tool` Protocol 就是下面这个形状,`ToolContext` 由 loop 注入。ADR-046 **不改这个窄腰**——`ToolDescriptor` 是旁挂的目录元数据,不进 Protocol。
 ```python
 class Tool(Protocol):
     name: str; description: str
@@ -136,6 +154,9 @@ class Tool(Protocol):
 ---
 
 ## 7. 四道闸 + ALLOWED 策略引擎
+
+> **⚠️ 已被 ADR-046 §决策6 取代**:下面的 `evaluate(ctx, tool, scope)` v1 极简版**只看 `ToolFlags`**,表达不了「`pytest` 可以但 `rm -rf` 要审批」。目标签名是 **args 感知**的
+> `evaluate(ctx, descriptor, args, scope) -> allow|ask|deny`(last-match 胜,`deny > ask > allow`),审批 scope 升为结构化 `PermissionScope{tool, command_class, command_preview, paths}`,grants matcher 从只支持 `send_email` 扩到 `sh.exec`(平台安全命令白名单)与 `fs.write`(路径前缀)。见 `contracts/api.md` §7.1。
 
 现状:`registry.py` 有 **VISIBLE** 闸;#20 `permissions/policy.py` 只有"非只读就 ask"极简版。**缺真正的 ALLOWED 策略引擎**(api.md §7.1 步骤 3)。
 
@@ -171,8 +192,7 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 > **UI 列是 DoD 闸**:用户可见能力,UI 还是 ⬜ 就不算 Done(见 AGENTS.md §2)。每个能力两条 Playwright 验证:agent 路径(chat→tool)+ **人工路径(真实点 UI 控件)**。
 
 | 能力 | service | REST | Tool | **UI** | effect | 策略 |
-|---|---|---|---|---|---|---|
-| 列候选 | ✅ | GET /candidates ✅ | `list_candidates` ✅ | Today ✅ | read_only | allow |
+|---|---|---|---|---|---|---|| 列候选 | ✅ | GET /candidates ✅ | `list_candidates` ✅ | Today ✅ | read_only | allow |
 | 接受候选→todo | ✅ | POST …/accept ✅ | `accept_candidate` ✅ | Today(Accept)✅ | idempotent_write | allow |
 | 编辑候选 | ✅ | POST …/edit ✅ | `edit_candidate` ✅ | ⬜(仅 chat/REST) | idempotent_write | allow |
 | 忽略候选 | ✅ | POST …/dismiss ✅ | `dismiss_candidate` ✅ | Today(Dismiss)✅ | idempotent_write | allow |
@@ -190,7 +210,9 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 会话:新建/切换 | (会话 API) | POST·GET /sessions ✅ | ❌ 不给 agent | Chat(new chat + 切换)✅ | — | — |
 | 会话库:浏览/续跑/重命名/恢复(P0) | ✅ sessions | GET/PATCH /sessions · resume-state · recover · timeline ✅ | ❌ 不给 agent | Sessions(/history)✅ | read_only/idempotent_write | allow |
 | 会话内容搜索(P1) | ✅ search | GET /sessions?query= ✅ | ❌ 不给 agent | Sessions 搜索框 ✅ | read_only | allow |
-| 个人网盘:列/建夹/上传/下载/改名·移动/版本·恢复版本/回收站·恢复(P2) | ✅ drive | /drive/* ✅ | `drive_list`/`search`/`make_folder`/`write`/`read`/`move`/`trash`/`restore` ✅ | Drive(/workspace)✅ | idempotent_write | allow |
+| 个人网盘:列/建夹/上传/下载/改名·移动/版本·恢复版本/回收站·恢复(P2) | ✅ drive | /drive/* ✅ | `drive_list`/`search`/`make_folder`/`write`/`read`/`move`/`trash`/`restore` ✅（ADR-046 改名 `drive.*`） | Drive(/workspace)✅ | idempotent_write | allow |
+| ~~个人文件工作区 `file_*`（遗留 `files` 表）~~ | ❌ **删除**（Phase TR P1） | ❌ **删除** `/files/*` | ❌ **删除** `file_write`/`file_read`/`file_list`/`file_delete` | ❌（前端早已无 Files 页） | — | — |
+| ~~通用代码执行 `run_code`~~ | ❌ **删除**（Phase TR P1） | —（本就无 REST） | ❌ **删除**，由 `runtime.open(scope="ephemeral")` + `sh.exec` 取代 | — | — | — |
 | 个人网盘:文件夹/批量上传(ADR-042, backlog B-5) | ✅ drive(复用单文件端点) | POST /drive/folders + /drive/files ✅(**无 batch 端点**) | ❌ 不给 agent(`drive_make_folder`+`drive_write` 已等价) | Drive 「Upload folder」/多选/拖拽 + 逐文件进度 ✅ | idempotent_write | allow |
 | 个人网盘:永久删除(purge) | ✅ drive | DELETE /drive/nodes/{id} ✅ | ❌ **不给 agent**(人工/审批专属) | Drive(Delete forever + 确认)✅ | non_idempotent_write | user-only |
 | Chat 附件:上传/粘贴图片 + 从 Drive 附加(ADR-043, backlog B-6) | ✅ core/attachments.py(引用解析 + 有界装配) | POST /sessions/{id}/prompt(`attachments`) + GET /sessions/{id}/messages(附件元数据) ✅ | ❌ 不给 agent(附件是人在 composer 的输入;agent 用 `drive_read` 读同一份字节) | Chat composer:Attach / From Drive 拾取器 / 粘贴 / 可删 chip / 转录缩略图 ✅ | idempotent_write | allow |
@@ -201,9 +223,12 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 项目:Open in Chat(project 绑定会话)(ADR-037, W2a) | ✅ services/projects.py | POST /projects/{id}/chats·GET /sessions/{id}/project-context | ❌ 不给 agent(会话创建) | ✅ project 绑定 Chat(首消息后不可变) | idempotent_write | user-only |
 | 项目:GitHub 连接(凭据)(ADR-038, W2b) | ✅ services/github_source.py(AEAD vault·连接边界·软撤销) | GET·POST·DELETE /connections/github | ❌ 不给 agent(凭据边界) | ✅ /work/projects(GitHub 连接面板·PAT·永不回显 token) | idempotent_write | user-only |
 | 项目:GitHub 一次性导入(选 repo/ref → 有界归档获取 → 不可变初始快照 + source OID)(ADR-038, W2b) | ✅ services/projects_import.py(github 分支·durable job·resolve→OID→tarball→安全解压→快照) | POST /projects/imports kind=github(**202**)·POST /projects/{id}/imports/retry·GET /projects/github/repos·/refs | ❌ 不给 agent(人工·跨凭据+不可信外部内容) | ✅ /work/projects(repo/ref 选择·导入进度·成功来源元数据·失败/重试·390px) | idempotent_write(durable job) | user-only |
-| 项目:任务工作副本（W3，跨 turn 持久 working copy + overlay + lease/fence + head_generation CAS）(ADR-040/ADR-039) | ✅ **W3**（ADR-040/039 生产实现；migration 0030；仅挂一次性 scratch 副本、绝不挂真相源；ADR-025 已正式修订；docker.sock/多用户隔离 = ADR-039 前置门控） | GET /sessions/{id}/working-copy · GET/POST …/working-copies·sandbox-runs（W3） | `project_run`（W3，allow） | ✅ **W3**（`/work/projects` Chat 内 Change Review 面板 + working-copy 状态） | idempotent_write | allow |
-| 项目:变更评审（W3，added/modified/deleted + artifacts + 有界 diff/truncated）(ADR-040) | ✅ **W3**（生产实现；change-set 投影 + 溢出 diff + 二进制检测） | GET …/change-sets/{cs}·/entries/{e}/diff · GET …/artifacts（W3） | `project_review_changes`（W3，read_only·allow） | ✅ **W3**（Change Review 条目列表 + diff + artifacts Keep/Export） | read_only | allow |
-| 项目:Save selected / Save+checkpoint / Discard / Keep·Export artifact（W3，人工评审闸；head 移动→CAS 拒绝）(ADR-040) | ✅ **W3**（生产实现；apply=head_generation CAS→409 SaveConflict） | POST …/change-sets/{cs}/apply（409 SaveConflict）·/discard · …/artifacts/{a}/keep·export（W3） | ❌ **不给 agent**（推进 head=人工评审决定） | ✅ **W3**（Save selected/Save+checkpoint/Discard + Keep/Export 按钮） | idempotent_write（apply=CAS） | user-only |
+| 项目:任务工作副本（跨 turn 持久 working copy + overlay + lease/fence + head_generation CAS）(ADR-040/ADR-039) | ✅ **已上线**（migration 0030；仅挂一次性 scratch 副本、绝不挂真相源） | GET /sessions/{id}/working-copy · GET/POST …/working-copies ✅ | ⚠️ `project_run` **实际必失败**（B-8）→ ADR-048 用 `runtime.*`/`fs.*`/`sh.*` **取代并删除** | ⚠️ **⬜ 修正**（Change Review 面板 ✅，但**没有 Run 控件**：`frontend/src/api.ts::createSandboxRun` 全前端**零调用点**，人工执行泳道从未存在）→ Phase TR P5 | idempotent_write | allow |
+| 项目:变更评审（added/modified/deleted + artifacts + 有界 diff/truncated）(ADR-040) | ✅ **已上线**（change-set 投影 + 溢出 diff + 二进制检测） | GET …/change-sets/{cs}·/entries/{e}/diff · GET …/artifacts ✅ | `project_review_changes` ✅（ADR-046 改名 `project.review_changes`） | ✅ Change Review 条目列表 + diff + artifacts Keep/Export | read_only | allow |
+| 项目:Save selected / Save+checkpoint / Discard / Keep·Export artifact（人工评审闸；head 移动→CAS 拒绝）(ADR-040) | ✅ **已上线**（apply=head_generation CAS→409 SaveConflict） | POST …/change-sets/{cs}/apply（409 SaveConflict）·/discard · …/artifacts/{a}/keep·export ✅ | ❌ **不给 agent**（推进 head=人工评审决定，ADR-048 不改这条） | ✅ Save selected/Save+checkpoint/Discard + Keep/Export 按钮 | idempotent_write（apply=CAS） | user-only |
+| **项目:编码运行时**（RuntimeSession open/exec/close + tar 传输 + 流式/取消）(ADR-047/ADR-048) | ⬜ **Phase TR P3/P4** | ⬜ POST /projects/{id}/runtime · POST /runtime/{rid}/exec·/cancel · DELETE /runtime/{rid}（202 + SSE） | ⬜ `runtime.open`/`runtime.close`（allow）· `sh.exec`（**ask** + 安全命令 grants）· `run.test`/`run.lint` | ⬜ **Phase TR P5**（三栏工作台 + Run 控件 + 流式日志 + Stop + Runs tab） | non_idempotent_write | **ask**（白名单 allow） |
+| **项目:文件读写**（宿主侧作用于工作副本 effective tree；沙箱不可用仍可用）(ADR-048) | ⬜ **Phase TR P4**（复用 `project_workcopy.effective_tree`） | （复用既有 tree/diff 端点 + P5 的树编辑） | ⬜ `fs.list`/`fs.read`/`fs.grep`/`fs.write`/`fs.edit`/`fs.delete`（取代 `project_tree`/`project_read`/`project_run` 的编辑面） | ⬜ **Phase TR P5**（可编辑文件树，人的手改与 agent 的手改进同一个 overlay） | idempotent_write | allow（敏感路径 ask） |
+| **工具目录 / 发现**（`domain.verb` + ToolDescriptor + ToolsetResolver + 渐进式披露）(ADR-046) | ⬜ **Phase TR P2** | —（无 REST 面） | ⬜ `tools.search` / `tools.load` | —（目录摘要进 system 消息，非页面） | read_only | allow（`tools.load` 记审计） |
 | 项目:GitHub 同步 / push / PR(对外写) | ❌ **W4**(后续 ADR;走 ADR-020 审批) | POST /projects/{id}/push 等(W4) | `project_push`(W4,ask) | ⬜ **W4** | non_idempotent_write | **ask** |
 | 模型 provider:配置多来源(OpenAI/Anthropic/Gemini/DeepSeek/Qwen…；AEAD 密钥) (ADR-041) | ✅ **生产实现**(migration 0031 model_providers + AEAD 密钥；services/model_providers；3 wire 适配器) | GET/POST /providers · GET/PATCH/DELETE …/{id} · POST …/{id}/test·default · GET …/{id}/models | ❌ **不给 agent**(跨凭据边界=人工设置,同 GitHub 连接) | ✅ **Settings「Models」面**(增删/测试连接/选默认/每源默认 model；密钥 password 永不回显) | — | user-only |
 | 模型 provider:全局默认 + 每会话切 model (ADR-041) | ✅ **生产实现**(sessions.model_provider_id/model；build_provider 按 DB 解析；env 兜底) | POST …/{id}/default · GET/POST /sessions/{id}/model | ❌ **不给 agent**(model 选择=设置) | ✅ **chat 顶栏 model 切换器** | — | user-only |
@@ -220,7 +245,11 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 知识库:重建来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | POST /knowledge/sources/{id}/reindex ✅ | `reindex_knowledge_source` ✅ | 来源详情「重建」+ 全部重建 ✅ | idempotent_write | allow |
 | 知识库:删除来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | DELETE /knowledge/sources/{id} ✅ | `remove_knowledge_source`(破坏性→审批) ✅ | 来源详情/列表「移除」+ 确认 ✅ | non_idempotent_write | **ask** |
 
-**剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)。~~Knowledge(/library)页~~ **✅ KB5 已交付**(主页/来源详情/检索测试 + Chat 引用 chips + 无依据态;Sidebar/路由/API/Vite proxy 就位)。**Projects(/work/projects)= ADR-037 W2a 已实现并两栈验证**:上面 4 行的 service/REST/Tool/UI 单元格全部 ✅(空/模板/归档导入 + 详情只读树/快照/活动 + Open in Chat 不可变绑定 + `list/create/tree/read` agent 工具);生产导航已暴露(Sidebar「Projects」)。GitHub 导入 = **ADR-038 W2b 已实现并两栈验证**(migration `0029`):契约把 `POST /projects/imports kind=github` 从 501 升为 202、新增 repo/ref 选择端点 + GitHub connection 端点 + `project_sources`/`github_connections` 数据模型 + events `create_kind=github`;生产实现落地 `services/github_source.py`(连接生命周期 + 只读 REST 代理 + resolve→OID/有界 tarball 获取)、`services/projects_import.py` 的 github 分支(durable job·复用 W2a 内存安全解压器·剥离顶层目录·source OID·幂等重试·无 effect_unknown)、`api/connections.py` + `api/projects.py`(kind=github 202·retry·repos/refs·source provenance)、生产 `/work/projects` UI(GitHub 连接面板/repo·ref 选择/导入进度/成功来源元数据/失败·重试/390px);**service/REST/UI 单元格全部 ✅**,GitHub 导入不给 agent(人工·跨凭据边界),凭据只在 AEAD vault/连接边界、绝不进树/快照/prompt/日志/事件/工具结果。W3(sandbox)/W4(对外写)仍为后续 ADR。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
+**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
+
+> **⚠️ 2026-07-30 矩阵勘误(ADR-045 §根因)**:上面「项目:任务工作副本」一行的 UI 单元格原为 ✅,**这是错的**。Change Review 面板确实上线了,但**执行(Run)控件从未存在**——`frontend/src/api.ts::createSandboxRun` 在整个前端**没有任何调用点**,而且它指向的 `POST /projects/{id}/sandbox-runs` 是在 **web 进程内同步执行**沙箱的(`SANDBOX_KIND` 只配在 worker,web 默认 `disabled`),即使 B-8 的挂载修好也不可能成功。该行已改回 ⬜ 并写明阻塞原因,由 Phase TR P5 补齐。**教训**:UI 列只能在**真实点击验证**之后才置 ✅,"REST 端点存在 + 前端有 client 函数"不算。
+
+**剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)· **Project 执行泳道(Run 控件/流式日志/Stop/Runs tab,Phase TR P5)**。~~Knowledge(/library)页~~ **✅ KB5 已交付**(主页/来源详情/检索测试 + Chat 引用 chips + 无依据态;Sidebar/路由/API/Vite proxy 就位)。**Projects(/work/projects)= ADR-037 W2a 已实现并两栈验证**:上面 4 行的 service/REST/Tool/UI 单元格全部 ✅(空/模板/归档导入 + 详情只读树/快照/活动 + Open in Chat 不可变绑定 + `list/create/tree/read` agent 工具);生产导航已暴露(Sidebar「Projects」)。GitHub 导入 = **ADR-038 W2b 已实现并两栈验证**(migration `0029`):契约把 `POST /projects/imports kind=github` 从 501 升为 202、新增 repo/ref 选择端点 + GitHub connection 端点 + `project_sources`/`github_connections` 数据模型 + events `create_kind=github`;生产实现落地 `services/github_source.py`(连接生命周期 + 只读 REST 代理 + resolve→OID/有界 tarball 获取)、`services/projects_import.py` 的 github 分支(durable job·复用 W2a 内存安全解压器·剥离顶层目录·source OID·幂等重试·无 effect_unknown)、`api/connections.py` + `api/projects.py`(kind=github 202·retry·repos/refs·source provenance)、生产 `/work/projects` UI(GitHub 连接面板/repo·ref 选择/导入进度/成功来源元数据/失败·重试/390px);**service/REST/UI 单元格全部 ✅**,GitHub 导入不给 agent(人工·跨凭据边界),凭据只在 AEAD vault/连接边界、绝不进树/快照/prompt/日志/事件/工具结果。W3(sandbox)/W4(对外写)仍为后续 ADR。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
 
 ---
 
