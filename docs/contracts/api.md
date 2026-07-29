@@ -1108,29 +1108,39 @@ resume the invocation.
 
 ## 7. Internal Tool contract
 
-The internal interface is asynchronous and provider-neutral:
+> **STATUS (2026-07-30).** This section describes the **TARGET** tool surface approved by
+> [ADR-045](../decisions.md#adr-045)/[ADR-046](../decisions.md#adr-046) (clean break: no
+> compatibility layer, no aliases, no data migration). **It is NOT yet implemented.** The
+> shipped code today has 52 flat `snake_case` tools with no descriptor, no resolver, no
+> catalog and no discovery meta-tools; `registry.schemas(tier)` sends every FULL-tier tool
+> on every provider call. Implementation is planned as `IMPLEMENTATION.md` **Phase TR**.
+> Each sub-section below marks **`[shipped]`**, **`[target]`** or **`[deleted]`**.
+
+The internal interface is asynchronous and provider-neutral. **The narrow waist below is
+unchanged by ADR-046** — built-ins, MCP adapters, sub-agents and runtime-provided tools all
+implement exactly this `Tool` protocol and pass exactly the same four gates.
 
 ```python
 from typing import Any, Protocol
 
 
-class ToolFlags(StrictModel):
+class ToolFlags(StrictModel):                      # [shipped]
     is_read_only: bool
     is_concurrency_safe: bool
     is_destructive: bool
 
 
-class DisplayPayload(StrictModel):
+class DisplayPayload(StrictModel):                 # [shipped]
     format: Literal["text", "markdown", "json"]
     content: str | dict[str, Any] | list[Any]
 
 
-class ToolResult(StrictModel):
+class ToolResult(StrictModel):                     # [shipped]
     llm_content: str
     return_display: DisplayPayload | None
 
 
-class ToolContext(StrictModel):
+class ToolContext(StrictModel):                    # [shipped]
     tenant_id: UUID
     user_id: UUID
     session_id: UUID
@@ -1140,7 +1150,7 @@ class ToolContext(StrictModel):
     deadline: datetime
 
 
-class Tool(Protocol):
+class Tool(Protocol):                              # [shipped] — UNCHANGED by ADR-046
     name: str
     description: str
     input_schema: dict[str, Any]       # canonical JSON Schema
@@ -1153,7 +1163,12 @@ class Tool(Protocol):
 
 Contract rules:
 
-- `name` is stable, unique, `^[a-z][a-z0-9_]{0,63}$`.
+- `name` is stable, unique, and **`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`** — a
+  `domain.verb` pair, at most 64 characters total (**`[target]`**, ADR-046 §决策1;
+  supersedes the former `^[a-z][a-z0-9_]{0,63}$`). The dot is accepted by the OpenAI,
+  Anthropic and Gemini wire formats. Because ADR-045 is a clean break there is **no alias
+  table and no deprecated-name grace period**: a removed name simply becomes an
+  `unknown tool` observation.
 - `description` is model-visible and MUST state purpose, boundary, and important
   non-obvious failure conditions; it MUST NOT contain secrets or tenant data.
 - `input_schema` is JSON Schema Draft 2020-12. Object schemas default to
@@ -1167,6 +1182,33 @@ Contract rules:
 - A tool implementation MUST NOT open its own tenant/session, policy, approval,
   event, or audit bypass.
 
+### 7.0 `ToolDescriptor` and the tool catalog **`[target]`**
+
+Catalog metadata sits **beside** the protocol, supplied at registration time. It never
+changes `Tool`, and it is never serialized to the model as-is (only `summary` reaches the
+model, and only inside the catalog digest of §7.5).
+
+```python
+class ToolDescriptor(StrictModel):                 # [target] ADR-046
+    tool: Tool
+    namespace: Literal[                            # the `domain` half of `domain.verb`
+        "tools", "core", "inbox", "todo", "schedule", "memory", "knowledge",
+        "connector", "drive", "project", "fs", "sh", "run",
+    ]
+    toolset: str                    # catalog entry id, e.g. "knowledge", "fs.edit"
+    version: Annotated[int, Field(ge=1)]           # breaking schema change ⇒ bump
+    requires: frozenset[str]        # "project_binding" | "runtime_session" | "gmail_connected"
+    surfaces: frozenset[str]        # "chat" | "scheduled_task"  (never "connector_analysis")
+    summary: Annotated[str, Field(max_length=80)]  # one line, catalog digest only
+```
+
+- There is deliberately **no `stability`/`deprecated` field**: a clean break has no
+  coexistence window.
+- `surfaces` never contains `connector_analysis` — the no-tool extraction mode of §8
+  receives an empty tool array, unconditionally (ADR-009).
+- Startup validation rejects duplicate names, names failing the regex, a `requires` key
+  the resolver does not know, and a non-monotonic `version`.
+
 ### 7.1 Four mandatory gates
 
 Every invocation follows one path:
@@ -1175,16 +1217,22 @@ Every invocation follows one path:
 REGISTERED -> VISIBLE -> ALLOWED -> EXECUTABLE
 ```
 
-1. **REGISTERED** — the implementation is in the process registry; its name and
-   schema pass startup validation. Unknown/dynamically supplied tools fail
+1. **REGISTERED** **`[shipped]`** — the implementation is in the process registry; its
+   name and schema pass startup validation. Unknown/dynamically supplied tools fail
    closed.
-2. **VISIBLE** — at turn construction, profile/source checks decide which
-   registered tools enter the model request. The visible set is frozen for that
-   turn. A `deny` known at this stage removes the tool before model exposure.
-3. **ALLOWED** — the tenant policy engine evaluates the tool and intended scope.
+2. **VISIBLE** **`[target]`** — at turn construction the **`ToolsetResolver`** decides
+   which registered tools enter the model request. The visible set is frozen for that
+   turn. A `deny` known at this stage removes the tool before model exposure. See §7.5.
+   *(Today this gate is only a SAFE/FULL binary and is effectively a no-op for
+   authenticated sessions — the gap ADR-046 closes.)*
+3. **ALLOWED** **`[target]`** — the tenant policy engine evaluates the tool **and its
+   actual arguments and intended scope**:
+   `evaluate(ctx, descriptor, args, scope) -> "allow" | "ask" | "deny"`.
    Effects are `allow | ask | deny`; last matching rule wins, equal-specificity
    conflict resolves `deny > ask > allow`, and the default is `ask`.
-4. **EXECUTABLE** — immediately before execution, the runtime rechecks
+   *(Today `evaluate(tool)` sees only `ToolFlags` — it cannot express "`pytest` is fine
+   but `rm -rf` needs approval", which ADR-048 requires.)*
+4. **EXECUTABLE** **`[shipped]`** — immediately before execution, the runtime rechecks
    stop-reason=`tool_use`, schema, tenant/run/invocation binding, cancellation,
    budget/deadline, current policy, approval (if `ask`), effect/idempotency
    record, and connector/workspace scope. Any mismatch fails closed.
@@ -1194,7 +1242,32 @@ an automatic authorization. Tools may execute concurrently only when every tool
 in the batch is `is_concurrency_safe=true`, policy permits it, and their declared
 resource scopes do not conflict; otherwise preserve model order and serialize.
 
+**Approval scope `[target]`.** The permission scope carried into the ADR-020 envelope
+becomes structured rather than the bare `"tool:{name}"` string, so a renderer can show the
+exact action being approved:
+
+```python
+class PermissionScope(StrictModel):                # [target] ADR-046 §决策6
+    tool: str                                      # "sh.exec"
+    command_class: str | None = None               # "shell" | "package" | ...
+    command_preview: Annotated[str, Field(max_length=2000)] | None = None
+    paths: Annotated[list[str], Field(max_length=20)] = Field(default_factory=list)
+```
+
+An approval preview for `sh.exec` MUST render the exact command and the target paths; an
+approval preview for a sensitive-path `fs.write` MUST render the path. Pre-authorization
+grants (ADR-034) match on this scope — today only `send_email` has a matcher; the target
+adds `sh.exec` (safe-command allowlist) and `fs.write` (path-prefix).
+
+
 ### 7.2 Output bounding and spill
+
+> **STATUS.** Bounding (2,000 lines / 50 KB) and the on-disk spill file are
+> **`[shipped]`** (`backend/app/tools/bounding.py`). The **typed**
+> `ToolOutputSpillReference` below, its `expires_at`/retention janitor and the authorized
+> read path are **`[target]`** — today the spill reference is a bare
+> `"tool-output:{invocation_id}"` string embedded in the bounded preview. Phase TR closes
+> this gap; the schema below is unchanged.
 
 After redaction, the serialized result of one invocation is bounded to both
 **2,000 lines** and **50,000 UTF-8 bytes (50 KB)**. If either limit is exceeded:
@@ -1243,136 +1316,179 @@ or partially claiming the artifact. Spill root, caps, and retention are owned by
 `config-and-secrets.md`. Runtime-owned spill writes do not grant the model a
 general write tool.
 
-### 7.3 v1 starter registry
+### 7.3 Tool catalog **`[target]`** (replaces the deleted "v1 starter registry")
 
-| Stable tool name(s) | Boundary | Flags |
-|---|---|---|
-| `read`, `glob`, `grep` | Read only inside `WORKSPACE_ROOT`; normalized relative paths; no symlink escape; no file REST API | read-only, concurrency-safe, non-destructive |
-| `candidate_list`, `candidate_edit`, `candidate_accept`, `candidate_dismiss` | Private candidate service and provenance rules; accept/edit requires an explicit authenticated-user instruction and atomically creates a todo | mixed read/write; mutations serialized; non-destructive |
-| `todo_list`, `todo_update` | User-private accepted-candidate todos only; same validation/domain service as REST | mixed read/write; mutations serialized; non-destructive |
-| `memory_user_get`, `memory_user_set` | Bounded user-private core memory only; no tenant-shared memory, embeddings, pgvector, or RAG | get is read-only/safe; set is serialized/non-destructive |
-| `gmail_search`, `gmail_get_message` | Connected account, granted labels/scopes, read-only; bounded excerpts by default; no send/modify/delete | read-only, concurrency-safe, non-destructive |
-| `ask_user` | Ask a clarification in the authenticated Web session and suspend at a safe turn boundary; cannot grant permission | non-read-only, serialized, non-destructive |
+> **DELETED.** The former §7.3 "v1 starter registry" (`read`/`glob`/`grep`/`candidate_*`/
+> `todo_*`/`memory_user_*`/`gmail_*`/`ask_user` over `WORKSPACE_ROOT`, plus the sentence
+> "There is no v1 `write`, `edit`, `bash`, `run_code` …") described a profile that has not
+> existed for months — the shipped registry has 52 different tools and `run_code` shipped
+> in ADR-025. It is removed rather than rewritten (ADR-045 clean break). `WORKSPACE_ROOT`
+> and its `read`/`glob`/`grep` tools are deleted with it; project files are reached through
+> `fs.*` (§7.6) and personal files through `drive.*`.
 
-The canonical starter `input_schema` values are generated from these strict
-Pydantic models:
+The catalog is the **registered** set, grouped into toolsets. What a given turn actually
+sees is the **visible** subset chosen by the resolver (§7.5) — the two are no longer equal.
+
+| Toolset | Tools (`domain.verb`) | `requires` | Default policy |
+|---|---|---|---|
+| `tools` (core) | `tools.search`, `tools.load` | — | allow |
+| `core` (core) | `core.get_time` | — | allow |
+| `inbox` (core) | `inbox.list_candidates`, `inbox.accept`, `inbox.edit`, `inbox.dismiss` | — | allow |
+| `todo` (core) | `todo.list`, `todo.create`, `todo.update` | — | allow |
+| `project` (core, project-bound) | `project.list`, `project.create`, `project.review_changes` | `project_binding` for review | allow |
+| `fs` (core, project-bound) | `fs.list`, `fs.read`, `fs.grep`, `fs.write`, `fs.edit`, `fs.delete` | `project_binding` | allow; sensitive paths `ask` |
+| `sh` (loadable, project-bound) | `sh.exec` | `runtime_session` | **`ask`** + safe-command grants |
+| `run` (loadable, project-bound) | `run.test`, `run.lint` | `runtime_session` | inherits `sh.exec` |
+| `runtime` (core, project-bound) | `runtime.open`, `runtime.close` | `project_binding` | allow |
+| `schedule` (loadable) | `schedule.create_reminder`, `schedule.create_digest`, `schedule.create_task`, `schedule.list`, `schedule.cancel` | — | allow |
+| `memory` (loadable) | `memory.set`, `memory.recall`, `memory.delete`, `memory.note`, `memory.search` | — | allow |
+| `knowledge` (loadable) | `knowledge.search`, `knowledge.list_sources`, `knowledge.add_source`, `knowledge.reindex`, `knowledge.remove_source` | — | allow; `remove_source` **`ask`** |
+| `drive` (loadable) | `drive.list`, `drive.read`, `drive.write`, `drive.search`, `drive.make_folder`, `drive.move`, `drive.trash`, `drive.restore` | — | allow |
+| `connector` (loadable) | `connector.list`, `connector.sync` | `gmail_connected` for sync | allow |
+| `notify` (loadable) | `notify.list`, `notify.get_settings`, `notify.update_settings`, `notify.list_activity` | — | allow |
+| `email` (loadable) | `email.send` | — | **`ask`** (ADR-020 envelope) |
+
+**Renames are hard renames** (no aliases, ADR-045): `memory_user_get`/`memory_user_list` →
+`memory.recall` (optional `key`); `todo_write`/`update_todo`/`complete_todo` →
+`todo.create`/`todo.update` (status is a field). **Deletions**: `file_write`/`file_read`/
+`file_list`/`file_delete` (the legacy `files` stack — Drive is the only personal byte
+store, ADR-030), `run_code` (replaced by `runtime.open(scope="ephemeral")` + `sh.exec`),
+`project_run`/`project_tree`/`project_read` (replaced by `fs.*` + `runtime.*` + `sh.*`;
+`fs.*` is strictly stronger because it reads the working copy's **effective tree**, so the
+agent can see what it just wrote — the old tools only saw the saved head).
+
+**Still never given to the agent** (unchanged): resolving approvals, destructive purge,
+model-provider configuration, GitHub credentials/import, chat attachment creation, and
+Project `Save` / `Save + checkpoint` / `Discard` / artifact `keep`·`export` (advancing the
+Project head is a human Change-Review decision, ADR-040 §决策6).
+
+### 7.4 Built-ins, MCP, sub-agents and runtime providers use the same path
+
+- A built-in implements `Tool` directly. **`[shipped]`**
+- A **runtime provider** presents an open `RuntimeSession`'s capabilities (`sh.*`, `run.*`)
+  as ordinary `Tool`s bound to that session id. **`[target]`, ADR-048**
+- An MCP adapter converts an MCP tool description/schema/result into the same
+  `Tool`/`ToolResult` and rejects unsupported or unbounded schema constructs. **`[roadmap]`**
+- A sub-agent adapter presents delegation as a `Tool` with an explicit bounded
+  input/output/budget and child invocation identity — this is the seam a future
+  in-sandbox coding agent uses (`delegate.code_task(runtime_session_id, …)`), which is why
+  `RuntimeSession` is an explicit first-class object from v1. **`[roadmap]`, ADR-048 §决策4**
+
+All four are registered in the same registry and pass the same four gates,
+argument validation, effect persistence, permission handling, output bounding,
+events, and audit path. MCP and sub-agent adapters remain contract-reserved and
+unregistered. No plugin transport may execute before `EXECUTABLE`. An externally
+supplied (MCP/plugin) tool defaults to `surfaces={"chat"}`, policy `ask`, and **never
+enters the core set** — it must be loaded explicitly via `tools.load`.
+
+### 7.5 `ToolsetResolver`, catalog digest, and discovery **`[target]`**
 
 ```python
-class ReadArgs(StrictModel):
-    path: Annotated[str, Field(min_length=1, max_length=1000)]
+class ToolsetProfile(StrictModel):                 # inputs to the VISIBLE gate
+    trust_tier: Literal["safe", "full"]
+    surface: Literal["chat", "scheduled_task", "connector_analysis"]
+    session_kind: Literal["general", "project_bound"]
+    runtime_session_id: UUID | None                # an open RuntimeSession, if any
+    loaded_toolsets: frozenset[str]                # accumulated via tools.load this session
+
+
+class CatalogLine(StrictModel):
+    toolset: str
+    summary: Annotated[str, Field(max_length=80)]
+    tool_count: Annotated[int, Field(ge=1)]
+
+
+class ResolvedToolset(StrictModel):
+    core: list[Tool]                # always present, deterministic order, sent first
+    loaded: list[Tool]              # tools.load additions, appended after core
+    catalog: list[CatalogLine]      # one line per unloaded toolset (digest, not schemas)
+    core_bytes: int                 # serialized JSON byte count of `core`
+```
+
+Rules:
+
+1. **Deterministic order, core-first.** Tools are ordered by `(namespace, name)` with the
+   core set always first, so `resolve(general).core` is a **byte-true prefix** of the tool
+   array produced for any richer profile. Loading a toolset only invalidates the *tail* of
+   the cached prefix — the docs/04 invariant ⑤ requirement applied to the tool array.
+2. **Frozen per turn.** The visible set is computed at turn construction and does not
+   change mid-turn (ADR-009). A `tools.load` call takes effect on the **next** turn and
+   emits a `toolset.resolved` event (`events-and-effects.md` §2.2).
+3. **`connector_analysis` resolves to an empty tool array**, unconditionally, plus an empty
+   catalog. §8 is unchanged.
+4. **The catalog digest is rendered into the system message**, not into the tool array. It
+   sits in the capability layer after the global prefix and before per-user memory and
+   per-session ambient context, preserving the existing layering order.
+5. **Byte budget.** `core_bytes` MUST stay at or below `TOOL_CATALOG_CORE_MAX_BYTES`
+   (`config-and-secrets.md`; initial value 6,144). Startup fails if the core set exceeds it
+   — this is the regression guard that stops the catalog from silently refilling.
+
+```python
+class ToolsSearchArgs(StrictModel):
+    query: Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class ToolsLoadArgs(StrictModel):
+    toolsets: Annotated[list[str], Field(min_length=1, max_length=3)]
+```
+
+`tools.search` is `read_only`/allow and returns matching `CatalogLine`s. `tools.load` is
+`read_only`/allow (it grants *visibility*, never authority — every loaded tool still passes
+ALLOWED and EXECUTABLE independently) but is **audited**, because a change to the visible
+set is a security-relevant event.
+
+### 7.6 `fs.*`, `runtime.*`, `sh.*`, `run.*` **`[target]`** (ADR-048)
+
+`fs.*` runs **host-side** against the Project working copy's effective tree
+(`base snapshot + persisted overlay`). It needs no container, so **a sandbox outage costs
+the ability to *run* code, not the ability to *edit* it.**
+
+```python
+class FsReadArgs(StrictModel):
+    path: Annotated[str, Field(min_length=1, max_length=1024)]
     start_line: Annotated[int, Field(ge=1)] = 1
     max_lines: Annotated[int, Field(ge=1, le=2000)] = 500
 
-
-class GlobArgs(StrictModel):
-    pattern: Annotated[str, Field(min_length=1, max_length=500)]
-    path: Annotated[str, Field(max_length=1000)] = "."
-    max_results: Annotated[int, Field(ge=1, le=1000)] = 200
-
-
-class GrepArgs(StrictModel):
+class FsGrepArgs(StrictModel):
     pattern: Annotated[str, Field(min_length=1, max_length=1000)]
-    path: Annotated[str, Field(max_length=1000)] = "."
-    file_glob: Annotated[str, Field(max_length=500)] | None = None
-    case_sensitive: bool = True
-    max_results: Annotated[int, Field(ge=1, le=1000)] = 200
+    path: Annotated[str, Field(max_length=1024)] = "."
+    max_results: Annotated[int, Field(ge=1, le=500)] = 100
 
+class FsWriteArgs(StrictModel):
+    path: Annotated[str, Field(min_length=1, max_length=1024)]
+    content: Annotated[str, Field(max_length=1_000_000)]
+    executable: bool = False
 
-class CandidateListArgs(StrictModel):
-    status: CandidateStatus = "pending"
-    limit: Annotated[int, Field(ge=1, le=100)] = 50
+class FsEditArgs(StrictModel):
+    # Anchored replacement, so a large file is not rewritten wholesale into the prompt.
+    path: Annotated[str, Field(min_length=1, max_length=1024)]
+    old_text: Annotated[str, Field(min_length=1, max_length=100_000)]
+    new_text: Annotated[str, Field(max_length=100_000)]
+    expect_occurrences: Annotated[int, Field(ge=1, le=100)] = 1
 
+class RuntimeOpenArgs(StrictModel):
+    scope: Literal["project", "ephemeral"] = "project"
+    reason: Annotated[str, Field(max_length=200)] | None = None
 
-class CandidateAcceptArgs(StrictModel):
-    candidate_id: UUID
-    if_version: int
-
-
-class CandidateEditArgs(CandidateAcceptArgs):
-    # At least one editable field must be supplied.
-    title: Annotated[str, Field(min_length=1, max_length=300)] | None = None
-    description: Annotated[str, Field(max_length=8000)] | None = None
-    due_at: datetime | None = None
-    priority: Priority | None = None
-
-
-class CandidateDismissArgs(CandidateAcceptArgs):
-    reason: Annotated[str, Field(max_length=500)] | None = None
-
-
-class TodoListArgs(StrictModel):
-    status: Literal["open", "completed", "cancelled"] | None = None
-    due_before: datetime | None = None
-    limit: Annotated[int, Field(ge=1, le=100)] = 50
-
-
-class TodoUpdateArgs(StrictModel):
-    todo_id: UUID
-    if_version: int
-    title: Annotated[str, Field(min_length=1, max_length=300)] | None = None
-    description: Annotated[str, Field(max_length=8000)] | None = None
-    status: Literal["open", "completed", "cancelled"] | None = None
-    due_at: datetime | None = None
-    snoozed_until: datetime | None = None
-    priority: Priority | None = None
-
-
-class MemoryUserGetArgs(StrictModel):
-    key: Annotated[
-        str, Field(pattern=r"^[a-z][a-z0-9_.-]{0,63}$")
-    ]
-
-
-class MemoryUserSetArgs(MemoryUserGetArgs):
-    value: Annotated[str, Field(max_length=4000)]  # also <= 16,384 UTF-8 bytes
-    if_version: int | None = None
-
-
-class GmailSearchArgs(StrictModel):
-    query: Annotated[str, Field(min_length=1, max_length=1000)]
-    max_results: Annotated[int, Field(ge=1, le=50)] = 20
-
-
-class GmailGetMessageArgs(StrictModel):
-    message_id: Annotated[str, Field(min_length=1, max_length=512)]
-    max_chars: Annotated[int, Field(ge=1, le=20_000)] = 10_000
-
-
-class AskUserArgs(StrictModel):
-    question: Annotated[str, Field(min_length=1, max_length=2000)]
-    options: Annotated[list[str], Field(max_length=10)] = Field(
-        default_factory=list
-    )
-    allow_free_text: bool = True
+class ShExecArgs(StrictModel):
+    runtime_session_id: UUID
+    command: Annotated[str, Field(min_length=1, max_length=4000)]
+    timeout_seconds: Annotated[int, Field(ge=1, le=900)] | None = None
 ```
 
-Path arguments are always interpreted relative to the canonical
-`WORKSPACE_ROOT`; absolute paths, `..` escape, alternate data streams, device
-paths, and resolved symlinks outside the root are rejected. Gmail tool results
-are normalized/redacted and bounded before entering `ToolResult`; connector
-credentials and raw HTTP responses never enter model context.
+- Every `path` is a normalized project-relative path. Absolute paths, `..` escape, NUL,
+  device paths, and symlinks resolving outside the project root are rejected.
+- `fs.write`/`fs.edit`/`fs.delete` write the **reviewable overlay**, never the Project
+  head, so they are `idempotent_write`/allow — except paths matching the sensitive set
+  (`.env*`, `*.pem`, `*.key`, `id_*`, `.github/workflows/**`), which are forced to `ask`.
+- `sh.exec` is `non_idempotent_write`/**`ask`**, auto-released by a platform safe-command
+  grant (ADR-034 matcher). It requires an open `RuntimeSession`; it never installs packages
+  and never enables the network (ADR-047).
+- `run.test` / `run.lint` are bounded semantic wrappers over `sh.exec` that consult the
+  runtime's probed `capabilities` first, so a missing tool returns
+  `environment_missing_dependencies` with the list of what the image does provide, rather
+  than a bare exit 127.
 
-`candidate_accept` is not permission approval. It may run only when the current
-authenticated Web input explicitly identifies/accepts the candidate; connector
-content can never call it. `ask_user` is also not permission approval and cannot
-produce `allow_*`/`always`.
-
-There is no v1 `write`, `edit`, `bash`, `run_code`, generic network fetch,
-external-send, GitHub, or sub-agent tool.
-
-### 7.4 Built-ins, MCP, and sub-agents use the same path
-
-- A built-in implements `Tool` directly.
-- An MCP adapter converts an MCP tool description/schema/result into the same
-  `Tool`/`ToolResult` and rejects unsupported or unbounded schema constructs.
-- A sub-agent adapter presents delegation as a `Tool` with an explicit bounded
-  input/output/budget and child invocation identity.
-
-All three are registered in the same registry and pass the same four gates,
-argument validation, effect persistence, permission handling, output bounding,
-events, and audit path. MCP and sub-agent adapters are contract-reserved but not
-registered in the v1 profile. No plugin transport may execute before
-`EXECUTABLE`.
 
 ## 8. `CONNECTOR_ANALYSIS` no-tool mode (ADR-009)
 
@@ -1417,24 +1533,32 @@ tool-call response in this mode is a protocol error, not an executable request.
 Notifications are evaluated later by deterministic opt-in settings and schedule
 policy, never by connector content.
 
-## 9. Frozen route inventory
+## 9. Route inventory — CI-enforced, not hand-frozen
 
-The v1 contract contains **31 REST routes** plus **1 SSE route**:
+> **REPLACED (2026-07-30, ADR-045).** The former §9 froze "**31 REST routes** plus 1 SSE
+> route" and asserted that `/files/*`, `/sandbox/*`, `/connectors/github/*`,
+> `/agentic-email/*`, `/qq/*`, generic `/cron/*` and approval-renderer routes "MUST be
+> absent". Every one of those clauses had become false: `files_router`,
+> `channels_router`, `connections_router` (GitHub), `grants_router`, `knowledge_router`,
+> `drive_router`, `projects_router` (including `POST /projects/{id}/sandbox-runs`) and
+> `model_providers_router` are all registered in `backend/app/main.py`. A hand-maintained
+> count is the wrong instrument: it drifts silently and nobody notices.
 
-- auth: 3;
-- sessions/messages/prompts: 4;
-- candidates/todos: 6;
-- Gmail connector: 7;
-- schedules/firings: 6;
-- settings: 2;
-- permission resolution: 1;
-- health/readiness: 2;
-- session SSE: 1.
+The replacement is mechanical:
 
-Anything not listed is not a v1 API. In particular, `/webhooks/*`, `/qq/*`,
-`/agentic-email/*`, `/connectors/github/*`, `/files/*`, `/sandbox/*`,
-`/agents/*`, generic `/cron/*`, WebSocket routes, and approval-renderer routes
-MUST be absent.
+- **`docs/contracts/route-inventory.md` is generated**, not written: a check enumerates
+  `app.routes` at import time and renders `METHOD PATH auth=<session|public> csrf=<bool>`
+  sorted by path.
+- **CI fails on any un-reviewed drift.** The check regenerates the inventory and diffs it
+  against the committed file; a new, removed or renamed route fails the build until the
+  generated file is committed in the same change. This is the anti-drift guarantee the old
+  frozen count was trying to provide.
+- **Deletions are enforced the same way.** After Phase TR the inventory MUST NOT contain
+  `/files/*` (legacy stack deleted, ADR-046) or `POST /projects/{id}/sandbox-runs`
+  (replaced by the runtime routes of §10.7, ADR-048). A route reappearing is a CI failure,
+  not a review oversight.
+- The **v1 profile route set** remains historically accurate as the ADR-022 scope record;
+  it is no longer a runtime assertion about this repository.
 
 ## 10. Post-v1 endpoints (ADR-029 / ADR-030)
 
@@ -1818,18 +1942,20 @@ class ProjectContext(StrictModel):
 - `GET /projects/{id}/tree` returns a **bounded page** ordered by `path` (default 200, hard cap
   500 entries per call). `returned_count` is the number of entries in this page; `truncated=true`
   means **more entries exist beyond this page** — the page is **not** the full tree, so absence of
-  a path from a truncated page is **not** proof it doesn't exist. Callers (and the `project_tree`
+  a path from a truncated page is **not** proof it doesn't exist. Callers (and the `fs.list`
   tool) must narrow with the `path` prefix filter (or later `cursor`) to inspect subtrees. Because
   a `path`-filtered listing has no cheap total, the response intentionally carries **no** `total`
   field — only `truncated` + `returned_count`.
 - Reservation/quota reuse ADR-030: a project's snapshot bytes are the same content-addressed,
   ref-counted `storage_blobs`; `507 insufficient_storage` when a reservation would exceed quota.
-- **Tool surface (W2a, ADR-023):** `project_list` / `project_create` / `project_tree` /
-  `project_read` are `allow` (read-only or own-data idempotent write). Inside a **Project-bound
-  chat** `project_tree` / `project_read` may omit `project_id` — it defaults to `sessions.project_id`
-  (backlog B-3), and a general chat that omits it gets an observation naming `list_projects`.
-  **Not given to the agent
-  in W2a:** any destructive purge, `project_run` (W3), `project_push` (W4). Project files remain
+- **Tool surface (ADR-023 + ADR-046/048):** `project.list` / `project.create` are `allow`.
+  Project file reads go through **`fs.list` / `fs.read` / `fs.grep`** (§7.6), which read the
+  Project-bound chat's **effective tree** (`base snapshot + persisted overlay`) and therefore also
+  show what the agent has just written — strictly stronger than the deleted
+  `project_tree`/`project_read`, which only ever saw the saved head. The project is taken from
+  `sessions.project_id` (backlog B-3); a general chat gets an observation naming `project.list`.
+  **Not given to the agent:** any destructive purge, `project_push` (W4), and the human-only
+  Save/checkpoint/Discard gate. Project files remain
   **untrusted content** (ADR-009); source credentials (W2b+) never enter a project tree, prompt,
   log, or tool result.
 - **Additive support endpoints (impl, ADR-037):** `GET /projects/templates` (blank/template
@@ -1958,61 +2084,161 @@ class ProjectSource(StrictModel):
 - **Tool surface (W2b, ADR-023):** **no new agent tool.** GitHub import is **human-only** (it
   crosses the credential boundary and pulls untrusted external content, and avoids letting the
   agent enumerate the user's private repos) — consistent with W2a archive upload. After import the
-  agent reads the project via the existing `project_tree`/`project_read` (project files remain
-  **untrusted content**, ADR-009). **Not given to the agent:** `project_push` (W4), `project_run`
-  (W3), any destructive purge.
+  agent reads the project via `fs.list`/`fs.read`/`fs.grep` (project files remain
+  **untrusted content**, ADR-009). **Not given to the agent:** `project_push` (W4), the human-only
+  Save/checkpoint/Discard gate, any destructive purge.
 - **UI:** the W2b flow (GitHub connection status / repo + ref selection / import progress / success
   source metadata / failure + retry) is **shipped** on the production `/work/projects` page (ported
   from the [static draft](../design-workspace/github-import.html) onto the Quiet Work system); the
   capability-matrix UI cells (docs/11 §9) are ✅ and the W2b GitHub create path is exposed.
 
-### 10.7 Projects — Workspace W3 task working copy + scratch-copy sandbox change review (ADR-040 + ADR-039)
+### 10.7 Projects — task working copy + RuntimeSession coding runtime (ADR-040 · ADR-047 · ADR-048)
 
-> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-040 product/data + ADR-039 isolation).** These routes/schemas
-> are **frozen but NOT implemented** — no production code, no migration, no real sandbox mount, and **no
-> W3 navigation exposed** in this batch. W3 = a Project-bound Chat's first mutating action opens a
-> **durable task working copy** (spans turns) from the current Project head; each execution materializes
-> a **one-time disposable scratch copy** into a **hardened, network-disabled** sandbox (ADR-039) — the
-> sandbox **never** mounts the Project snapshot / blob store / credentials / another Project / Drive.
-> Built-in file/edit/run/test tools work on scratch; a bounded overlay is persisted after each batch;
-> **Change Review** shows added/modified/deleted files + artifacts; the user chooses **Save selected**,
-> **Save + checkpoint**, or **Discard**; a moved Project head **rejects** a stale Save. All routes are
-> `Session`-authenticated, tenant + user scoped; writes require CSRF. GitHub sync/push/PR is **W4**.
+> **STATUS (2026-07-30).** The **working copy / change review / Save·checkpoint·Discard /
+> artifacts** half is **`[shipped]`** (migration `0030`, `/work/projects` Change Review UI).
+> The **execution** half is being replaced under ADR-045's clean break and is **`[target]`,
+> not implemented**:
+> - `POST /projects/{id}/sandbox-runs` is **deleted** — it ran the sandbox **synchronously
+>   inside the web process** (blocking the HTTP request up to 120 s) while `SANDBOX_KIND`
+>   is only set on the worker, so it could never have succeeded; its frontend client
+>   (`frontend/src/api.ts::createSandboxRun`) has **no call site at all**, i.e. the human
+>   Run lane never existed. The capability matrix cell claiming otherwise is corrected.
+> - `SandboxRunState` (with `warm`) is **deleted**. `warm` was never implemented anywhere.
+> - The replacement is an explicit **`RuntimeSession`** (open → exec* → close) executed by
+>   the **worker**, with `202` + SSE streaming + cancellation.
+>
+> The sandbox is hardened and **network-disabled** (ADR-025/ADR-039) and receives the
+> working copy as a **tar-injected disposable scratch copy in an anonymous volume — it
+> mounts no host path at all** (ADR-047, a narrowing of the earlier bind-mount wording).
 
 ```python
-class SandboxRunState(StrictModel):
-    run_id: UUID                                       # the durable model-loop run (event journal)
-    state: Literal["materializing", "running", "persisted", "failed", "timed_out"]
-    warm: bool                                         # a warm container is holding the scratch cache
+class RuntimeCapabilities(StrictModel):            # probed from the image at open time
+    # e.g. {"python": "3.11.9", "pytest": "8.2.0", "ruff": "0.5.0", "node": None, "git": None}
+    tools: dict[str, str | None]
+    image: str
+    image_digest: str
+
+class RuntimeSessionState(StrictModel):
+    id: UUID
+    project_id: UUID | None                        # null when scope='ephemeral'
+    working_copy_id: UUID | None
+    session_id: UUID
+    scope: Literal["project", "ephemeral"]
+    state: Literal["opening", "ready", "executing", "closing", "closed", "failed"]
+    fence_token: int | None                        # the working-copy fence this session holds
+    capabilities: RuntimeCapabilities | None
+    ingress_bytes: int | None                      # tar bytes injected at open
+    entry_count: int | None
+    expires_at: datetime | None                    # idle TTL (SANDBOX_RUNTIME_IDLE_TTL_SECONDS)
+    termination_reason: str | None                 # see the named-exit list below
+    created_at: datetime
+
+class RuntimeOpenRequest(StrictModel):
+    session_id: UUID                               # the chat session; must be Project-bound for scope='project'
+    scope: Literal["project", "ephemeral"] = "project"
+    reason: Annotated[str, Field(max_length=200)] | None = None
+
+class ExecRequest(StrictModel):
+    # Runs ONLY with runtimes/tools already in the approved base image + dependencies
+    # already present in the Project snapshot. NEVER installs packages, never enables the
+    # network; a missing dependency ends with 'environment_missing_dependencies'.
+    command: Annotated[str, Field(min_length=1, max_length=4000)]
+    timeout_seconds: Annotated[int, Field(ge=1, le=900)] | None = None
+
+class ExecRun(StrictModel):
+    id: UUID
+    runtime_session_id: UUID
+    run_id: UUID | None                            # the durable model-loop run, when agent-driven
+    command_preview: Annotated[str, Field(max_length=2000)]
+    state: Literal["queued", "running", "persisted", "failed", "cancelled"]
     exit_code: int | None
     timed_out: bool
-    # done | environment_missing_dependencies | wall_timeout | mem_limit | pids_limit |
-    # output_limit | changeset_bounds | path_escape | fence_lost | sandbox_unavailable | error:...
     termination_reason: str | None
+    stdout_head: Annotated[str, Field(max_length=50_000)] | None
+    stderr_tail: Annotated[str, Field(max_length=50_000)] | None
+    output_truncated: bool
+    spill_ref: Annotated[str, Field(pattern=r"^tool-output:[0-9a-f-]{36}$")] | None
+    change_set_id: UUID | None                     # projected after the persistence boundary
+    duration_ms: int | None
+    created_at: datetime
+```
 
-class WorkingCopySummary(StrictModel):
-    id: UUID
-    project_id: UUID
-    session_id: UUID
-    base_snapshot_id: UUID
-    state: Literal["open", "ready_for_review", "saved", "discarded", "conflicted", "expired"]
-    overlay_entry_count: int
-    overlay_bytes: int
-    reserved_bytes: int
-    head_moved: bool                                   # projects.head_generation != base_head_generation (Save will conflict)
-    open_change_set_id: UUID | None                    # the current reviewable change set, if any
-    sandbox: SandboxRunState | None                    # latest sandbox run for this working copy
-    last_boundary_at: datetime | None                  # last persisted execution boundary (durability marker)
-    expires_at: datetime | None                        # idle-TTL expiry
-    updated_at: datetime
+`WorkingCopySummary` (shipped) replaces its `sandbox: SandboxRunState | None` field with
+`runtime: RuntimeSessionState | None` and `last_exec: ExecRun | None`.
 
-class SandboxRunRequest(StrictModel):
-    # The human "Run" control; the agent uses the equivalent project_run tool. The command runs ONLY
-    # with runtimes/tools already present in the approved base image + dependencies already in the
-    # Project snapshot (report §10.7). It NEVER installs packages or enables network; a missing
-    # dependency returns termination_reason='environment_missing_dependencies'.
-    command: Annotated[str, Field(min_length=1, max_length=4000)]
+**Named termination reasons** (every exit is named; ADR-048 §决策7 — this replaces the
+current code path that collapses *every* error into `sandbox_unavailable` with no log):
 
+```text
+done | cancelled | wall_timeout | mem_limit | pids_limit | output_limit
+| environment_missing_dependencies | changeset_bounds | path_escape | fence_lost
+| runtime_start_failed | runtime_image_missing | runtime_daemon_unreachable
+| runtime_transport_failed | sandbox_disabled | error:<class>
+```
+
+Each failure MUST also produce one structured worker log line and one redacted tool
+observation — the model and the user never have to guess which failure happened.
+
+| Route | Body → response | Auth | Status |
+|---|---|---|---|
+| `GET /sessions/{id}/working-copy` | none → `WorkingCopySummary \| null` | Session | `200`, `401`, `404` |
+| `POST /projects/{id}/runtime` | `RuntimeOpenRequest` → `RuntimeSessionState` | Session + CSRF | `202`, `401`, `404`, `409`, `422`, `507` |
+| `GET /runtime/{rid}` | none → `RuntimeSessionState` | Session | `200`, `401`, `404` |
+| `POST /runtime/{rid}/exec` | `ExecRequest` → `ExecRun` | Session + CSRF | `202`, `401`, `404`, `409`, `422` |
+| `GET /runtime/{rid}/exec/{eid}` | none → `ExecRun` | Session | `200`, `401`, `404` |
+| `POST /runtime/{rid}/cancel` | none → `RuntimeSessionState` | Session + CSRF | `202`, `401`, `404`, `409` |
+| `DELETE /runtime/{rid}` | none → `RuntimeSessionState` | Session + CSRF | `200`, `401`, `404` |
+| `GET /projects/{id}/working-copies/{wc_id}` | none → `WorkingCopySummary` | Session | `200`, `401`, `404` |
+| `GET /projects/{id}/change-sets/{cs_id}?cursor=&limit=` | none → `ChangeSet` | Session | `200`, `401`, `404`, `422` |
+| `GET /projects/{id}/change-sets/{cs_id}/entries/{entry_id}/diff` | none → bounded unified-diff text | Session | `200`, `401`, `404`, `413` |
+| `POST /projects/{id}/change-sets/{cs_id}/apply` | `ChangeSetApply` → `ProjectSummary` | Session + CSRF | `200`, `401`, `404`, `409`, `422`, `507` |
+| `POST /projects/{id}/change-sets/{cs_id}/discard` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404` |
+| `POST /projects/{id}/working-copies/{wc_id}/discard` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404` |
+| `GET /projects/{id}/artifacts?working_copy_id=` | none → `list[Artifact]` | Session | `200`, `401`, `404` |
+| `POST /projects/{id}/artifacts/{art_id}/keep` | none → `Artifact` | Session + CSRF | `200`, `401`, `404`, `507` |
+| `POST /projects/{id}/artifacts/{art_id}/export` | `ArtifactExport` → `DriveNode` | Session + CSRF | `201`, `401`, `404`, `507` |
+
+- **All execution is asynchronous and worker-owned.** `POST …/runtime` and
+  `POST …/exec` return `202` immediately with the current state; progress arrives on the
+  existing session SSE stream (§5) as `runtime.state` and bounded `runtime.output` frames
+  (`events-and-effects.md` §2.11). No REST handler ever blocks on a container.
+  `POST /runtime/{rid}/cancel` kills the container and settles the exec with
+  `termination_reason='cancelled'`.
+- **Working copy is lazy + isolated per chat.** A Project-bound chat reads the head until
+  its **first mutating action** (`fs.write`/`fs.edit`/`fs.delete` or `runtime.open`), which
+  atomically opens the durable working copy at `base_snapshot_id = current_snapshot_id`
+  (recording `base_head_generation`). Multiple chats on one Project get **isolated** working
+  copies; a General chat has none.
+- **`POST /projects/{id}/runtime`** acquires the working copy's single-writer lease/fence,
+  materializes `base snapshot + persisted overlay` into an **in-memory tar**, strips/asserts
+  no credentials (`.env*`, `*.pem`, `*.key`, `id_*`, `.git/config`), and `put_archive`s it
+  into the hardened container's anonymous `/work` volume. `409` if a live session already
+  holds the lease or the working copy is `conflicted`/closed; `507` over quota.
+- **Persistence boundary.** After a bounded batch — and always **before** teardown — the
+  orchestrator `get_archive`s `/work`, diffs against the ingress manifest, and persists the
+  delta into the overlay under the held fence, then projects a change set. **Unpersisted
+  container writes are never reported as completed work**; a lost container re-materializes
+  from `base + overlay`. A stale fence can never publish (`fence_lost`).
+- **Change Review / Save / Discard / Artifacts** are unchanged from the shipped behaviour:
+  bounded, path-ordered change-set pages with an explicit `truncated` flag (never a silent
+  full-looking diff); `POST …/apply` is a compare-and-set on
+  `(current_snapshot_id, head_generation)` returning **`409` `SaveConflict` (`head_moved`)**
+  and applying nothing if the head moved; artifacts are `ephemeral` until Keep/Export.
+- **Tool surface** — see §7.3/§7.6. `fs.*` (host-side, works without a container),
+  `runtime.open`/`runtime.close`, `sh.exec` (**`ask`** + safe-command grants), `run.test`/
+  `run.lint`, and `project.review_changes` (read-only). **Not given to the agent:**
+  `Save` / `Save + checkpoint` / `Discard` / artifact `keep`·`export` remain **user-only**
+  (advancing the head is a human Change-Review decision, ADR-040 §决策6); `project_push`
+  (W4), destructive purge and dependency installation are also excluded. Project files and
+  all sandbox output remain **untrusted content** (ADR-009).
+- **UI `[target]`:** the Project-bound Chat becomes a three-column workspace (file tree /
+  conversation / `Changes · Runs · Artifacts`), with an editable tree, a real **Run**
+  control, a streaming log panel and **Stop**. Human edits and agent edits land in the
+  **same overlay** and are reviewed together. A Plan object is deferred (ADR-048 §决策9).
+
+**Change-review schemas `[shipped]`** (unchanged by ADR-048):
+
+```python
 class ChangeSetEntrySummary(StrictModel):
     id: UUID
     path: str
@@ -2071,7 +2297,7 @@ class ArtifactExport(StrictModel):
     name: str | None = None                            # optional rename on export
 ```
 
-`ProjectContext` (api §10.5) is extended for W3 with the live working copy of a Project-bound chat:
+`ProjectContext` (api §10.5) carries the live working copy of a Project-bound chat:
 
 ```python
 class ProjectContext(StrictModel):        # extended
@@ -2082,70 +2308,6 @@ class ProjectContext(StrictModel):        # extended
     working_copy: WorkingCopySummary | None            # null until the first mutating action opens one
 ```
 
-| Route | Body → response | Auth | Status |
-|---|---|---|---|
-| `GET /sessions/{id}/working-copy` | none → `WorkingCopySummary \| null` | Session | `200`, `401`, `404` |
-| `POST /projects/{id}/sandbox-runs` | `SandboxRunRequest` → `SandboxRunState` | Session + CSRF | `202`, `401`, `404`, `409`, `422`, `507` |
-| `GET /projects/{id}/working-copies/{wc_id}` | none → `WorkingCopySummary` | Session | `200`, `401`, `404` |
-| `GET /projects/{id}/change-sets/{cs_id}?cursor=&limit=` | none → `ChangeSet` | Session | `200`, `401`, `404`, `422` |
-| `GET /projects/{id}/change-sets/{cs_id}/entries/{entry_id}/diff` | none → bounded unified-diff text | Session | `200`, `401`, `404`, `413` |
-| `POST /projects/{id}/change-sets/{cs_id}/apply` | `ChangeSetApply` → `ProjectSummary` | Session + CSRF | `200`, `401`, `404`, `409`, `422`, `507` |
-| `POST /projects/{id}/change-sets/{cs_id}/discard` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404` |
-| `POST /projects/{id}/working-copies/{wc_id}/discard` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404` |
-| `GET /projects/{id}/artifacts?working_copy_id=` | none → `list[Artifact]` | Session | `200`, `401`, `404` |
-| `POST /projects/{id}/artifacts/{art_id}/keep` | none → `Artifact` | Session + CSRF | `200`, `401`, `404`, `507` |
-| `POST /projects/{id}/artifacts/{art_id}/export` | `ArtifactExport` → `DriveNode` | Session + CSRF | `201`, `401`, `404`, `507` |
-
-- **Working copy is lazy + immutable-per-chat.** A Project-bound chat reads the Project head until its
-  **first mutating action** (a `project_run`/edit), which atomically opens the durable working copy at
-  `base_snapshot_id = current_snapshot_id` (and records `base_head_generation`). `GET
-  /sessions/{id}/working-copy` returns `null` before that. Multiple chats on one Project get
-  **isolated** working copies (report §10.4); a General chat (`project_id=null`) has none.
-- **`POST /projects/{id}/sandbox-runs`** acquires the working copy's single-writer lease/fence,
-  materializes `base snapshot + persisted overlay` into a **fresh disposable scratch tree**, and runs
-  the **hardened, network-disabled** sandbox (ADR-039) against **only** that scratch (never the
-  snapshot/blob store/credentials). `202` returns the run state; the durable run/event journal carries
-  progress. After the bounded batch the overlay + change set are persisted **before** the run is
-  reported durably complete. `409` if a live run already holds the lease or the working copy is
-  `conflicted`/closed; `507` if the reservation would exceed quota. A missing dependency ends the run
-  with `environment_missing_dependencies` — **never** an undeclared package install or network enable.
-- **Change Review.** `GET /projects/{id}/change-sets/{cs_id}` returns a bounded, path-ordered page of
-  added/modified/deleted entries + counts + `truncated` (bounds hit ⇒ **explicit partial**, never a
-  silent full-looking diff). Per-file bounded unified diffs come from the `.../diff` sub-route
-  (`413` if the single-file diff exceeds the cap → download/summary only). Binary files carry
-  `is_binary=true` and no inline diff.
-- **Save selected / Save + checkpoint (report §10.6).** `POST .../apply` applies the subset
-  `selected_entry_ids` (or all currently-selected), building a **new immutable snapshot**
-  (`reason='save'`), atomically advancing `current_snapshot_id` **and** bumping `head_generation`; a
-  `checkpoint` also pins it (`reason='checkpoint'`). The apply is a **compare-and-set** on
-  `(current_snapshot_id, head_generation)`: if the head moved it returns **`409` `SaveConflict`
-  (`head_moved`)** and applies nothing — the client must review a rebased change set. `507` if applying
-  new bytes would exceed quota. Unselected entries remain in the working copy for later turns.
-- **Discard.** `POST .../change-sets/{cs_id}/discard` or `.../working-copies/{wc_id}/discard` deletes
-  the overlay/staged bytes, releases the reservation, and leaves the Project head **byte-identical** to
-  the base snapshot (`state='discarded'`).
-- **Artifacts.** Run outputs are `ephemeral` and charge **no** quota until **Keep** (`.../keep` →
-  `retention='retained'`, reserves quota, `507` over quota) or **Export** (`.../export` copies into
-  Drive via the Drive service → `DriveNode`). Credentials and running processes are **absent** from
-  every artifact/snapshot (report §10.6).
-- **Tool surface (W3, ADR-023 dual adapter):**
-  - `project_run` — run built-in **file/edit/run/test** tools against the **current Project-bound
-    chat's working copy** in the hardened offline sandbox. Effect `idempotent_write` (the durable
-    overlay/change-set persist is fence-guarded + idempotent per boundary); policy **allow** (own-data,
-    sandboxed, network-off) — but **only** in a Project-bound chat, and **only** with the hardened
-    scratch-only mount from ADR-039. There is **no** `delegate_coding_agent` tool.
-  - `project_review_changes` — read the current change set (added/modified/deleted + bounded diffs).
-    Effect `read_only`; policy **allow**.
-  - **Not given to the agent (human review gate):** `project_save` / `project_checkpoint` /
-    `project_discard` / artifact `keep`/`export` are **user-only** — advancing the Project head is an
-    explicit human Change-Review decision, never an agent auto-apply (deferred: a grant-gated
-    agent-save is a later ADR). `project_push` (W4), any destructive purge, and dependency install are
-    also **not** agent tools. Project files + sandbox output remain **untrusted content** (ADR-009).
-- **UI:** the W3 flow (Project-bound Chat execution state / diff Change Review / artifacts / Save
-  selected · Save + checkpoint · Discard / stale-head + conflict) is a **design/contract-first static
-  draft only** ([`../design-workspace/w3-change-review.html`](../design-workspace/w3-change-review.html));
-  the capability-matrix UI cells (docs/11 §9) stay **⬜** and **no W3 production navigation is exposed**
-  until implementation lands after owner review.
 
 ### 10.8 Model providers — user-configurable multi-source model layer (ADR-041)
 

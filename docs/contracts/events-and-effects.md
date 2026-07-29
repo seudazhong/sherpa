@@ -287,6 +287,36 @@ Producers MAY coalesce adjacent chunks. Each `delta` is at most 8,192 UTF-8
 bytes. `turn_attempt` lets clients distinguish a recovered/re-executed attempt;
 only the attempt named by `turn.end` is a completed turn.
 
+#### `toolset.resolved` **`[target]`** (ADR-046)
+
+Emitted once per turn, immediately after the `ToolsetResolver` computes the visible set,
+and again whenever `tools.load` changes it. It exists so a run **self-documents which tools
+the model could see** — today only a `tools_offered` integer reaches the optional debug
+event, which is not enough to explain a "why didn't it use X?" report. Durability `debug`;
+it carries no schemas and no user content.
+
+```text
+{
+  turn_index: integer >= 1,
+  profile: {
+    trust_tier: "safe" | "full",
+    surface: "chat" | "scheduled_task" | "connector_analysis",
+    session_kind: "general" | "project_bound",
+    runtime_session_id: uuid | null
+  },
+  core_toolsets: [string],        # toolset ids in the always-on set
+  loaded_toolsets: [string],      # ids added via tools.load this session
+  catalog_toolsets: [string],     # advertised-but-unloaded ids
+  tools_offered: integer >= 0,    # length of the serialized tool array
+  core_bytes: integer >= 0,       # serialized byte count of the core set
+  total_bytes: integer >= 0       # serialized byte count of the whole tool array
+}
+```
+
+A change to the visible tool set is security-relevant, so a `tools.load` call ALSO produces
+the ordinary `tool-call`/`tool-result` pair and an audit receipt; `toolset.resolved` is the
+diagnostic projection, never the authorization record.
+
 #### `text-delta`
 
 ```text
@@ -772,36 +802,43 @@ decrypted only by the import worker at the connector boundary and never enter an
 prompt, tool result, snapshot, or (W3) sandbox (ADR-019). Establishing/removing a GitHub connection
 is an owner user-level operation and emits no `project.lifecycle` event (it touches no project).
 
-### 2.11 Project sandbox run + working-copy save — Workspace W3 (ADR-040 + ADR-039, design/contract-first — additive)
+### 2.11 Project RuntimeSession exec + working-copy save (ADR-040 · ADR-047 · ADR-048)
 
-> **⚠️ DESIGN / CONTRACT-FIRST ONLY (ADR-040 product/data + ADR-039 isolation).** Frozen shape for the
-> W3 slice (task working copy + one-time scratch-copy sandbox + change review). **Not implemented** in
-> this batch. Project **file bytes and all credentials never enter the append-only journal** — bytes
-> live in immutable ADR-030 `storage_blobs`; the journal/log carries only ids + bounded metadata +
-> named termination reasons (ADR-016/019/021).
+> **STATUS (2026-07-30).** The **working copy / change set / Save-CAS** discipline below is
+> **`[shipped]`**. The **execution** discipline is **`[target]`**: `project_sandbox_runs` is
+> replaced by `project_runtime_sessions` + `project_exec_runs` (ADR-048), the scratch copy
+> is **tar-injected into an anonymous volume rather than bind-mounted** (ADR-047), and the
+> named-exit list is expanded so that a start failure, an unreachable daemon and a missing
+> image are no longer all reported as `sandbox_unavailable`. Project **file bytes and all
+> credentials never enter the append-only journal** — bytes live in immutable ADR-030
+> `storage_blobs`; the journal/log carries only ids + bounded metadata + named termination
+> reasons (ADR-016/019/021).
 
-W3 execution runs **inside** a Project-bound chat's durable **model-loop run** (the frozen `run`/
+Execution runs **inside** a Project-bound chat's durable **model-loop run** (the frozen `run`/
 `event_journal` machinery, ADR-016). It reuses the run lifecycle (`run.started`/`run.settled`),
-streaming, and tool events (§2.1/§2.2); a `project_run` tool call is an ordinary `tool-call`/
-`tool-result` on that run. W3 adds **no new run event type** — the durable project-side record is the
-W3 tables (data-model §Projects W3) + structured logs. The **new effect discipline** is:
+streaming, and tool events (§2.1/§2.2); a `runtime.open` / `sh.exec` / `runtime.close` tool call
+is an ordinary `tool-call`/`tool-result` on that run. The durable project-side record is the
+project runtime tables (data-model §Projects runtime) + structured logs. The effect discipline is:
 
 **① Sandbox execution has no external side effect ⇒ no `effect_unknown` for the run.** The sandbox is
-**network-disabled** and mounts **only** a disposable node-local scratch copy (ADR-039); it mutates no
+**network-disabled** and receives **only** a disposable tar-injected scratch copy in an anonymous
+volume (ADR-047; it mounts no host path at all); it mutates no
 external system, no remote, no source of truth. Killing the container, losing the node, or a redelivered
 job therefore never produces an `effect_unknown` external outcome — the run simply **rematerializes**
 `base snapshot + persisted overlay` into a fresh scratch tree and continues from the last persisted
-boundary (report §10.4). `effect_unknown`/remote reconciliation belongs to **W4** push, not W3.
+boundary (report §10.4). `effect_unknown`/remote reconciliation belongs to **W4** push, not here.
 
 **② The only durable effect is the fence-guarded overlay/change-set persist (idempotent).** After each
-**bounded tool batch, before waiting for the user, and before teardown**, the worker persists the
-scratch delta into `project_working_copy_entries` + a `project_change_sets` projection, stamped with the
+**bounded exec batch, before waiting for the user, and before teardown**, the worker `get_archive`s
+`/work`, diffs it against the ingress manifest, and persists the delta into
+`project_working_copy_entries` + a `project_change_sets` projection, stamped with the
 working copy's `fence_token`. This write is **idempotent**: a replay with the same fence + boundary
-re-produces the same overlay (content-addressed blobs dedupe); a **stale** sandbox whose fence is behind
+re-produces the same overlay (content-addressed blobs dedupe); a **stale** session whose fence is behind
 the working copy's current `fence_token` is **rejected** and cannot publish (data-model §Projects W3,
-"single-writer lease + fence"). A run is **not** reported successfully durable until this boundary
-commits (`project_sandbox_runs.persisted_boundary_at` set). Unpersisted scratch writes are never shown
-as completed work.
+"single-writer lease + fence"). An exec is **not** reported successfully durable until this boundary
+commits (`project_exec_runs.persisted_boundary_at` set). Unpersisted container writes are never shown
+as completed work. **`fs.*` writes do not go through this path at all** — they write the overlay
+directly on the host and so remain available when no runtime can be opened (ADR-048 §决策2).
 
 **③ Save is a compare-and-set head advance (idempotent per change set).** *Save selected* / *Save +
 checkpoint* build a new immutable snapshot and advance `projects.current_snapshot_id` **and**
@@ -813,20 +850,51 @@ no-op (its `state='applied'` + `created_snapshot_id` are terminal). *Discard* re
 and leaves the head byte-identical to the base. Idle-expiry release and reservation release are **one
 atomic transition** (an open working copy cannot keep reserved bytes after an independent sweep).
 
-**④ Named termination reasons (every exit).** A `project_sandbox_runs.termination_reason` is one of:
-`done | environment_missing_dependencies | wall_timeout | mem_limit | pids_limit | output_limit |
-changeset_bounds | path_escape | fence_lost | sandbox_unavailable | error:...`. A missing dependency is
-an **explicit** `environment_missing_dependencies` result — the offline sandbox **never** silently
-enables network to fetch packages (report §10.7). Change-set bounds (`WORKING_COPY_MAX_*`, config §1.7)
-overflow ⇒ `changeset_bounds` + a `truncated` change set (explicit partial), never a silent full diff.
+**④ Named termination reasons (every exit) `[target]`.** A `project_exec_runs.termination_reason` /
+`project_runtime_sessions.termination_reason` is one of:
+
+```text
+done | cancelled | wall_timeout | mem_limit | pids_limit | output_limit
+| environment_missing_dependencies | changeset_bounds | path_escape | fence_lost
+| runtime_start_failed | runtime_image_missing | runtime_daemon_unreachable
+| runtime_transport_failed | sandbox_disabled | error:<class>
+```
+
+Every failing exit MUST also emit **one structured worker log line** and **one redacted tool
+observation** naming the same reason. This is the direct fix for backlog B-8, where every
+distinct failure — an unreachable daemon, a failed container create, a disabled sandbox —
+collapsed into one indistinguishable `sandbox_unavailable` with no log at all. A missing
+dependency is an **explicit** `environment_missing_dependencies` carrying the image's probed
+capability list — the offline sandbox **never** silently enables network to fetch packages.
+Change-set bounds (`WORKING_COPY_MAX_*`, config §1.7) overflow ⇒ `changeset_bounds` + a
+`truncated` change set (explicit partial), never a silent full-looking diff.
+
+#### `runtime.state` / `runtime.output` **`[target]`**
+
+Execution progress reaches the UI over the existing session SSE stream (§3). Both are
+durability `debug`: they are **presentation acceleration, never correctness-critical**
+(ADR-016 — pub/sub is never the recovery path). A dropped `runtime.output` frame loses log
+text, never work: the durable record is the persisted boundary of ②.
+
+```text
+runtime.state  { runtime_session_id: uuid, exec_run_id: uuid | null,
+                 state: string, termination_reason: string | null }
+runtime.output { runtime_session_id: uuid, exec_run_id: uuid,
+                 stream: "stdout" | "stderr", seq: integer >= 1,
+                 delta: string }        # <= 8,192 UTF-8 bytes, bounded and redacted
+```
+
+Cancellation (`POST /runtime/{rid}/cancel`) kills the container and settles the exec with
+`termination_reason='cancelled'`; the persistence boundary of ② still runs first, so work
+already written to `/work` is not silently thrown away.
 
 **⑤ Crash recovery (reuse §5 turn-granular replay).** Recovery rebuilds the working copy from durable
-state at the last committed boundary and rematerializes an equivalent scratch tree; `project_run` tool
+state at the last committed boundary and rematerializes an equivalent scratch tree; exec-tool
 replays are safe because the persist is fence-guarded + idempotent and the sandbox has no external
 effect. Container/node loss cannot lose the last persisted boundary; two chats on one Project cannot
 observe or mutate each other's pending working copies (isolated rows, per-session live-uniqueness).
-**Credentials never enter** the scratch tree, overlay, change set, artifact, snapshot, journal, or log
-(ADR-019/039); the scratch tree, warm container, and prepared image are rebuildable caches, never the
+**Credentials never enter** the scratch tar, overlay, change set, artifact, snapshot, journal, or log
+(ADR-019/039); the scratch tree, the container and the prepared image are rebuildable caches, never the
 recovery source of truth.
 
 ## 3. Delivery and SSE

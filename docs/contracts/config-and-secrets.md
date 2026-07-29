@@ -60,7 +60,8 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = Field(default=604_800, ge=300, le=2_592_000)
     session_cookie_secure: bool = False
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    workspace_root: Path | None = None
+    # DELETED (ADR-046, §1.4): workspace_root — the read/glob/grep tools it backed are removed;
+    # project code is reached with fs.* and personal files with drive.*.
     tool_output_root: Path = Path(".sherpa/tool-output")
     tool_output_retention_hours: int = Field(default=24, ge=1, le=168)
     tool_output_max_bytes: int = Field(
@@ -140,21 +141,29 @@ class Settings(BaseSettings):
     github_archive_timeout_seconds: int = Field(default=120, ge=1)          # bounded archive fetch deadline
 
     # Projects — Workspace W3 (ADR-040 product/data + ADR-039 isolation): task working copy +
-    # one-time scratch-copy sandbox + change review. DESIGN/CONTRACT-FIRST — frozen here, NOT wired
-    # (no migration, no real sandbox mount) until the W3 implementation lands after owner review.
-    # The sandbox mounts ONLY a disposable scratch copy of the working copy — never the Project
-    # snapshot/blob store/credentials/another Project/Drive (see §1.7). Reuses the hardened offline
+    # one-time scratch-copy coding runtime + change review. STATUS: the WORKING_COPY_* change-set
+    # bounds are SHIPPED; the transport settings are TARGET (ADR-047 replaces the bind mount with tar
+    # injection). The sandbox receives ONLY a tar-injected disposable copy of the working copy in an
+    # anonymous /work volume, and mounts NO host path at all — never the Project snapshot/blob
+    # store/credentials/another Project/Drive (see §1.7). Reuses the hardened offline
     # container from ADR-025 (network_disabled, cap_drop ALL, no-new-privileges, non-root, read-only
-    # rootfs + tmpfs, mem/pids/cpu/wall caps); W3 adds ONLY the disposable scratch RW mount.
+    # rootfs + tmpfs, mem/pids/cpu/wall caps).
     working_copy_idle_ttl_seconds: int = Field(default=86400, ge=60)        # durable working-copy idle expiry (24h)
-    sandbox_warm_ttl_seconds: int = Field(default=900, ge=0)               # warm-container idle TTL cache hint (15m; 0=off)
-    sandbox_scratch_root: str = Field(default=".sherpa/scratch")            # node-local disposable scratch dir (NOT a source of truth; wiped freely)
-    sandbox_scratch_max_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1)  # per-run materialized scratch cap (2 GiB)
+    # DELETED (ADR-047): sandbox_warm_ttl_seconds — warm containers were never implemented; the
+    # concept is now the RuntimeSession idle TTL below.
+    # DELETED (ADR-047): sandbox_scratch_root — tar transport has no host scratch path at all.
+    sandbox_runtime_idle_ttl_seconds: int = Field(default=600, ge=30)       # [target] RuntimeSession idle TTL (10m)
+    sandbox_scratch_max_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1)  # per-session tar ingress cap (2 GiB)
     working_copy_max_changed_files: int = Field(default=5000, ge=1)         # change-set bound: changed-file count
     working_copy_max_changed_bytes: int = Field(default=500 * 1024 * 1024, ge=1)  # change-set bound: total changed bytes
     working_copy_max_artifact_bytes: int = Field(default=200 * 1024 * 1024, ge=1) # change-set bound: total artifact bytes
     working_copy_max_diff_bytes: int = Field(default=2 * 1024 * 1024, ge=1)  # per-file spilled unified-diff cap (2 MiB)
-    sandbox_run_timeout_seconds: int = Field(default=120, ge=1)             # per project_run wall-clock deadline
+    sandbox_run_timeout_seconds: int = Field(default=120, ge=1)             # per-exec wall-clock deadline
+
+    # Tool catalog budget (ADR-046) — [target]. Hard cap on the serialized JSON byte count of the
+    # resolver's CORE tool set; startup fails above it. Baseline before ADR-046: 52 flat tools /
+    # 19,848 bytes resent on every provider call.
+    tool_catalog_core_max_bytes: int = Field(default=6144, ge=1024)
 
     # Agent observability (ADR-033): OpenTelemetry gen_ai spans, off by default.
     # A derived diagnostic layer over the ADR-016 journal — never a source of truth.
@@ -272,7 +281,7 @@ class Settings(BaseSettings):
                 "kek_id",
                 "gmail_client_id",
                 "gmail_client_secret",
-                "workspace_root",
+                # "workspace_root" removed by ADR-046 (§1.4) together with the read/glob/grep tools.
             ),
             "migration": ("database_url",),
         }
@@ -341,7 +350,7 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | App/session | `SESSION_TTL_SECONDS` | `int`, 300–2,592,000 | `604800` | No | No | Seven-day session default. |
 | App/session | `SESSION_COOKIE_SECURE` | `bool` | `false` | Must be `true` in production | No | Cookie is also `HttpOnly` and `SameSite=Lax` in code. |
 | App | `LOG_LEVEL` | level enum | `INFO` | No | No | `DEBUG` never disables redaction. |
-| App/runtime | `WORKSPACE_ROOT` | `pathlib.Path` | None | `worker` | No | Canonical root exposed read-only to v1 workspace tools. |
+| App/runtime | ~~`WORKSPACE_ROOT`~~ | — | — | — | — | **DELETED (ADR-046, §1.4)** — the `read`/`glob`/`grep` tools it backed are gone; project code uses `fs.*`, personal files use `drive.*`. |
 | App/runtime | `TOOL_OUTPUT_ROOT` | `pathlib.Path` | `.sherpa/tool-output` | No | No | Runtime-owned spill root shared by web and worker; never a user workspace. |
 | App/runtime | `TOOL_OUTPUT_RETENTION_HOURS` | `int`, 1–168 | `24` | No | No | Maximum lifetime from spill creation. |
 | App/runtime | `TOOL_OUTPUT_MAX_BYTES` | `int`, 65,536–104,857,600 | `10485760` | No | No | Maximum bytes persisted for one invocation (10 MiB). |
@@ -394,15 +403,18 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Projects (W2b) | `GITHUB_APP_ID` | `str` | None | `web`, `worker` | No | GitHub App id (only when `app_installation`). |
 | Projects (W2b) | `GITHUB_APP_PRIVATE_KEY` | `SecretStr` | None | `worker` | **Yes** | GitHub App PEM for minting installation tokens; vault/secret, never logged or in project content. |
 | Projects (W2b) | `GITHUB_ARCHIVE_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Bounded deadline for the archive (tarball) fetch. |
-| Projects (W3) | `WORKING_COPY_IDLE_TTL_SECONDS` | `int` ≥ 60 | `86400` | No | No | Durable task working-copy idle expiry (ADR-040; expiry + reservation release are one atomic transition). |
-| Projects (W3) | `SANDBOX_WARM_TTL_SECONDS` | `int` ≥ 0 | `900` | No | No | Warm-container idle TTL (cache hint only; `0`=always cold). Never a recovery source of truth. |
-| Projects (W3) | `SANDBOX_SCRATCH_ROOT` | `str` | `.sherpa/scratch` | `worker` | No | Node-local disposable scratch dir (per-run copy; wiped freely). NOT a source of truth; NOT a user workspace. |
-| Projects (W3) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `2147483648` | No | No | Per-run materialized scratch cap (2 GiB). |
-| Projects (W3) | `WORKING_COPY_MAX_CHANGED_FILES` | `int` ≥ 1 | `5000` | No | No | Change-set bound: changed-file count; overflow ⇒ explicit truncated review. |
-| Projects (W3) | `WORKING_COPY_MAX_CHANGED_BYTES` | `int` ≥ 1 | `524288000` | No | No | Change-set bound: total changed bytes (500 MiB). |
-| Projects (W3) | `WORKING_COPY_MAX_ARTIFACT_BYTES` | `int` ≥ 1 | `209715200` | No | No | Change-set bound: total artifact bytes (200 MiB); artifacts charge quota only when kept. |
-| Projects (W3) | `WORKING_COPY_MAX_DIFF_BYTES` | `int` ≥ 1 | `2097152` | No | No | Per-file spilled unified-diff cap (2 MiB); over ⇒ `diff_truncated`. |
-| Projects (W3) | `SANDBOX_RUN_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Per `project_run` wall-clock deadline; over ⇒ `wall_timeout`. |
+| Projects (runtime) | `WORKING_COPY_IDLE_TTL_SECONDS` | `int` ≥ 60 | `86400` | No | No | Durable task working-copy idle expiry (ADR-040; expiry + reservation release are one atomic transition). |
+| Projects (runtime) | ~~`SANDBOX_WARM_TTL_SECONDS`~~ | — | — | — | — | **DELETED (ADR-047)** — warm containers were never implemented in code; superseded by `SANDBOX_RUNTIME_IDLE_TTL_SECONDS`. |
+| Projects (runtime) | ~~`SANDBOX_SCRATCH_ROOT`~~ | — | — | — | — | **DELETED (ADR-047)** — tar transport passes no host path to the daemon at all; this setting was the direct cause of backlog B-8. |
+| Projects (runtime) | `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` | `int` ≥ 30 | `600` | No | No | **`[target]`** RuntimeSession idle TTL; the container is closed after it, and the working copy survives. |
+| Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `2147483648` | No | No | Per-session tar ingress cap (2 GiB). |
+| Projects (runtime) | `WORKING_COPY_MAX_CHANGED_FILES` | `int` ≥ 1 | `5000` | No | No | Change-set bound: changed-file count; overflow ⇒ explicit truncated review. |
+| Projects (runtime) | `WORKING_COPY_MAX_CHANGED_BYTES` | `int` ≥ 1 | `524288000` | No | No | Change-set bound: total changed bytes (500 MiB). |
+| Projects (runtime) | `WORKING_COPY_MAX_ARTIFACT_BYTES` | `int` ≥ 1 | `209715200` | No | No | Change-set bound: total artifact bytes (200 MiB); artifacts charge quota only when kept. |
+| Projects (runtime) | `WORKING_COPY_MAX_DIFF_BYTES` | `int` ≥ 1 | `2097152` | No | No | Per-file spilled unified-diff cap (2 MiB); over ⇒ `diff_truncated`. |
+| Projects (runtime) | `SANDBOX_RUN_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Per-exec wall-clock deadline; over ⇒ `wall_timeout`. |
+| Projects (runtime) | `SANDBOX_IMAGE` | `str` | pinned `sherpa-sandbox-runner` digest | `worker` | No | **`[target]`** MUST be the repository's own runner image by digest (python + pytest + ruff + `capabilities.json`, no git, no network tooling) — never a stock upstream tag. |
+| Tools | `TOOL_CATALOG_CORE_MAX_BYTES` | `int` ≥ 1024 | `6144` | No | No | **`[target]`** Hard cap on the serialized core tool-set bytes (ADR-046); startup fails above it. Pre-ADR-046 baseline was 19,848 bytes across 52 flat tools. |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
 | Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | `AnyHttpUrl` | None | No | No | OTLP endpoint (e.g. self-hosted Phoenix `http://phoenix:4317`); unset = console/in-memory exporter only. |
 | Observability | `OTEL_CAPTURE_MESSAGE_CONTENT` | `bool` | `false` | No | No | Opt-in capture of prompt/completion/tool content into spans (PII); redacted when on. Also set the upstream `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` if using OTel auto-instrumentation. |
@@ -432,15 +444,21 @@ Large tool output is an ephemeral runtime artifact, not a database record, user 
 - Web reads and deletes authorized spill references; worker writes them. Compose MUST mount the same private named volume at the configured root in both services.
 - Spill files are excluded from database/object-store backups, events, logs, prompts, frontend assets, and sandbox mounts. They may contain sensitive user content and receive the same access-control and deletion treatment as the originating tool result.
 
-### 1.4 Read-only workspace root
+### 1.4 Read-only workspace root — **REMOVED (2026-07-30, ADR-046)**
 
-`WORKSPACE_ROOT` is the sole filesystem authority for v1 `read`, `glob`, and `grep` workspace tools defined by [api.md](api.md). It is distinct from `TOOL_OUTPUT_ROOT`, deferred Files/MinIO, connector data, and any future sandbox workspace.
-
-- Worker startup resolves the configured directory with `Path.resolve(strict=True)`, verifies it is a directory, and retains that canonical path as the authority root. Startup fails if it is absent or unreadable.
-- Every tool path is workspace-relative. The worker joins it to the canonical root, resolves the target strictly, and requires `resolved_target.is_relative_to(canonical_root)`. It rejects absolute input, `..` escape, NUL, device paths, and symlinks whose resolved target leaves the root.
-- v1 workspace tools are read-only. Compose mounts the selected host directory into the worker with `:ro`; no web, migration, frontend, backup, connector, or tool-output service path is mounted beneath it.
-- The deployment MUST NOT select the Sherpa repository/deployment root or any directory containing `.env`, Docker secrets, KEKs, database files, Docker sockets, or service credentials.
-- APIs, events, and logs use workspace-relative paths only and never reveal the configured host path. File content remains bounded/redacted according to [api.md](api.md).
+> **DELETED.** `WORKSPACE_ROOT` and its `read`/`glob`/`grep` tools are removed by the
+> ADR-045 clean break. They were the filesystem authority for an api.md §7.3 starter
+> registry that no longer exists, and they are strictly superseded:
+> - **Project code** is reached with `fs.list`/`fs.read`/`fs.grep` (api §7.6), which read
+>   the Project working copy's **effective tree** and enforce project-relative paths.
+> - **Personal files** are reached with `drive.*` over the ADR-030 Drive.
+>
+> Removing it also removes a standing hazard: `WORKSPACE_ROOT` pointed at a **host
+> directory bind-mounted into the worker**, with a documented rule that the deployment must
+> not select a directory containing `.env`, KEKs or the Docker socket. The clean break
+> deletes the setting, the mount and the rule together rather than keeping a warning about
+> a path nobody uses. The path-safety requirements themselves are not lost — they are
+> restated for project paths in §1.7 and api §7.6.
 
 ### 1.5 Projects security boundary — Workspace W2a (ADR-037)
 
@@ -461,17 +479,87 @@ Design/contract-first (ADR-037); the settings above are frozen but **not yet wir
 - **Read-only fetch ⇒ idempotent; no external write.** The archive fetch does not mutate the remote, so there is no `effect_unknown` remote reconciliation in W2b (that is W4 push). A failed/partial fetch is retryable by resolved OID. `source_oid` is recorded as provenance; W2b never re-fetches or tracks the remote.
 - **No sandbox / no external write in W2b.** Working copy + scratch-copy sandbox is W3; GitHub sync/push/PR (ADR-020 approval, expected remote OID, no first-version force push) is W4. Each is a later ADR.
 
-### 1.7 Sandbox mount / lifecycle / resource / network / credential boundary — Workspace W3 (ADR-039 isolation + ADR-040 product/data)
+### 1.7 Sandbox transport / lifecycle / resource / network / credential boundary (ADR-039 isolation + ADR-047 transport + ADR-048 runtime)
 
-**⚠️ DESIGN / CONTRACT-FIRST ONLY.** The `SANDBOX_*`/`WORKING_COPY_*` settings above are frozen but **NOT wired**; no real sandbox mount ships in this batch. When the W3 implementation lands (after owner review of ADR-039 + ADR-040 + the ADR-025 revision + the `docker.sock`/multi-user hardening) it MUST honor this boundary. This section governs the one change W3 makes to the ADR-025 sandbox: **it adds a single read-write mount of a disposable scratch copy, and nothing else.**
+**STATUS (2026-07-30).** The `WORKING_COPY_*` change-set bounds and the hardened container
+are **`[shipped]`**. The **transport** is **`[target]`**: ADR-047 replaces the bind mount
+with tar injection, which deletes `SANDBOX_SCRATCH_ROOT` and adds
+`SANDBOX_RUNTIME_IDLE_TTL_SECONDS`; `SANDBOX_WARM_TTL_SECONDS` is deleted because warm
+containers were never implemented anywhere in the code. This section governs the one change
+the coding runtime makes to the ADR-025 sandbox: **it injects a disposable copy of the
+working copy and nothing else.**
 
-- **Mount boundary (the core W3 rule).** The sandbox mounts **only** a per-run **disposable node-local scratch copy** of the current working copy (`SANDBOX_SCRATCH_ROOT/<run>`), read-write, with `nosuid,nodev`. It **MUST NOT** mount, and receives no path to: the Project `project_snapshots`/`project_snapshot_entries`, the MinIO/`storage_blobs` object store, another Project or working copy, Drive, `WORKSPACE_ROOT`, `TOOL_OUTPUT_ROOT`, the `.env`/KEK/Docker socket, or any credential file. Canonical source-of-truth storage is **never** mounted read-write (ADR-025 revision; report §10.2/§11). The orchestrator validates the constructed `src=` scratch path as **untrusted input** (must resolve inside `SANDBOX_SCRATCH_ROOT`, no traversal) — the socket-holding orchestrator is the trust boundary and must never be influenced by agent/project content.
-- **Materialize from durable state, never from a live mount.** A run materializes `base snapshot + persisted overlay` into a fresh scratch tree (bounded by `SANDBOX_SCRATCH_MAX_BYTES`). The scratch tree, warm container (`SANDBOX_WARM_TTL_SECONDS`), and prepared image are **rebuildable caches**, never a recovery source of truth (events §2.11). **No credential is ever written into the scratch tree** during materialization (project bytes only).
-- **Lifecycle + orphan sweep.** The orchestrator persists the overlay/change-set boundary **before** teardown, then removes the scratch tree in a `finally` (container `--rm`). A worker-startup sweep purges orphaned `SANDBOX_SCRATCH_ROOT/*` from crashed runs. A durable working copy idle for `WORKING_COPY_IDLE_TTL_SECONDS` expires; idle-expiry release and quota-reservation release are **one atomic transition** (data-model §Projects W3).
-- **Resource bounds (reuse ADR-025 + add scratch/change-set caps).** Keep the ADR-025 hardened container: `network_disabled`, `cap_drop=ALL`, `no-new-privileges`, non-root (`nobody`), read-only rootfs + `tmpfs /tmp`, mem/pids/cpu limits, and a wall-clock kill (`SANDBOX_RUN_TIMEOUT_SECONDS`). Add: `SANDBOX_SCRATCH_MAX_BYTES` (materialized scratch cap) and the `WORKING_COPY_MAX_*` change-set bounds (changed-file count, changed bytes, artifact bytes, per-file diff bytes) — overflow ⇒ a named termination reason + an **explicit truncated** change set, never a silent full-looking diff.
-- **Network + dependency policy.** The sandbox stays **network-disabled**; there is **no egress and no package installation** in W3. A command needing an unavailable runtime/dependency ends with `environment_missing_dependencies` (events §2.11) — the sandbox **never** silently enables network to fetch packages. Commands run only with runtimes/tools already in the approved base image and dependencies already present in the Project snapshot (report §10.7).
-- **Credential boundary (ADR-019/039).** No model/provider/storage/GitHub/KEK credential is ever passed into the sandbox environment, command line, scratch tree, overlay, change set, artifact, snapshot, prompt, log, or tool result — reaffirming §1.5/§1.6 and the ADR-025 rule "无任何密钥注入". Artifacts and checkpoints never contain credentials or running-process state (report §10.6).
-- **`docker.sock` / multi-user gate (ADR-039 do-not-ship conditions).** W3's single change (scratch RW mount) is acceptable **only** on the self-hosted single-user profile with the socket scoped to the trusted orchestrator, patched runc, and (recommended) rootless Docker. **Do NOT ship multi-user or genuinely-untrusted-third-party code** on the shared-`docker.sock`/shared-kernel runc baseline: per ADR-039 that requires a gVisor (`runsc`) or microVM (Kata/Firecracker) runtime for untrusted containers, per-tenant scratch/socket isolation, a tenant-aware egress policy, and aggregate per-tenant quotas — with a threat review — first. This boundary must be reported truthfully in readiness/docs and never overclaimed.
+- **Transport boundary (the core rule) `[target]`.** A runtime session materializes
+  `base snapshot + persisted overlay` into an **in-memory tar** and `put_archive`s it into
+  the container's **anonymous** `/work` volume (`nosuid,nodev`); the reverse boundary is
+  `get_archive`. **There is no bind mount and no host path in the container-create call at
+  all.** The sandbox therefore has no path to, and cannot be pointed at, the Project
+  `project_snapshots`/`project_snapshot_entries`, the MinIO/`storage_blobs` object store,
+  another Project or working copy, Drive, `TOOL_OUTPUT_ROOT`, the `.env`/KEK/Docker socket,
+  or any credential file. Canonical source-of-truth storage is **never** mounted read-write
+  (ADR-025 revision). *Because there is no `src=` parameter, the ADR-039 §决策1③ requirement
+  to validate a constructed scratch source path as untrusted input no longer applies — the
+  attack surface is structurally removed rather than guarded.* The socket-holding
+  orchestrator remains the trust boundary and must never be influenced by agent/project
+  content.
+- **Materialize from durable state, never from a live mount.** Ingress is bounded by
+  `SANDBOX_SCRATCH_MAX_BYTES`. The container and the prepared image are **rebuildable
+  caches**, never a recovery source of truth (events §2.11). **No credential is ever written
+  into the tar** — the materializer strips and then asserts the absence of `.env*`, `*.pem`,
+  `*.key`, `id_*` and `.git/config` before the archive is built.
+- **Untrusted archive on both directions.** The egress tar is untrusted input: expansion
+  rejects absolute paths, `..` traversal, NUL, device/FIFO nodes, hard links, and symlinks
+  resolving outside the project root, reusing the bounded expander already used for project
+  imports. A violation ends the exec with `path_escape`.
+- **Lifecycle + orphan sweep.** The orchestrator persists the overlay/change-set boundary
+  **before** teardown, then removes the container in a `finally` (`--rm`). A worker-startup
+  sweep purges containers labelled with this deployment's runtime label from crashed runs. A
+  runtime session idle for `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` is closed; a durable working
+  copy idle for `WORKING_COPY_IDLE_TTL_SECONDS` expires, and idle-expiry release plus
+  quota-reservation release are **one atomic transition**.
+- **Resource bounds (reuse ADR-025 + change-set caps).** Keep the ADR-025 hardened
+  container: `network_disabled`, `cap_drop=ALL`, `no-new-privileges`, non-root (`nobody`),
+  read-only rootfs + `tmpfs /tmp`, mem/pids/cpu limits, and a wall-clock kill
+  (`SANDBOX_RUN_TIMEOUT_SECONDS`). Keep `SANDBOX_SCRATCH_MAX_BYTES` and the
+  `WORKING_COPY_MAX_*` change-set bounds (changed-file count, changed bytes, artifact bytes,
+  per-file diff bytes) — overflow ⇒ a named termination reason + an **explicit truncated**
+  change set, never a silent full-looking diff.
+- **Image boundary `[target]`.** `SANDBOX_IMAGE` MUST be a **pinned digest of the
+  repository's own `sandbox-runner` image**, not a stock upstream tag. The v1 image carries
+  Python + `pytest` + `ruff` and a `capabilities.json` manifest that the orchestrator probes
+  at `runtime.open`; it deliberately contains **no `git` and no network tooling**. Node is a
+  later optional profile. Probed capabilities let a missing dependency return
+  `environment_missing_dependencies` **with the list of what is available**, instead of an
+  unexplained exit 127.
+- **Network + dependency policy.** The sandbox stays **network-disabled**; there is **no
+  egress and no package installation**. A command needing an unavailable runtime/dependency
+  ends with `environment_missing_dependencies` (events §2.11) — the sandbox **never**
+  silently enables network to fetch packages.
+- **Credential boundary (ADR-019/039).** No model/provider/storage/GitHub/KEK credential is
+  ever passed into the sandbox environment, command line, tar, overlay, change set,
+  artifact, snapshot, prompt, log, or tool result — reaffirming §1.5/§1.6 and the ADR-025
+  rule "无任何密钥注入". A **canary test** asserts this: a synthetic KEK-shaped secret placed
+  in a project tree must not appear in the tar, overlay, change set, artifact, log, prompt
+  or tool result.
+- **`docker.sock` / multi-user gate (ADR-039 do-not-ship conditions) — UNCHANGED.** The
+  transport change makes the single-user dev posture *correct* rather than broken; it does
+  **not** move the multi-user gate. **Do NOT ship multi-user or genuinely-untrusted-
+  third-party code** on the shared-`docker.sock`/shared-kernel runc baseline: per ADR-039
+  that still requires a gVisor (`runsc`) or microVM (Kata/Firecracker) runtime for untrusted
+  containers, per-tenant isolation, a tenant-aware egress policy, and aggregate per-tenant
+  quotas — with a threat review — first. This boundary must be reported truthfully in
+  readiness/docs and never overclaimed.
+
+### 1.10 Tool catalog budget (ADR-046) **`[target]`**
+
+- `TOOL_CATALOG_CORE_MAX_BYTES` (initial **6144**) is a hard cap on the serialized JSON byte
+  count of the resolver's **core** tool set. Startup fails if the core set exceeds it, and a
+  regression test asserts it — this is the guard that stops the catalog from silently
+  refilling to today's 19,848 bytes.
+- The measured baseline for the pre-ADR-046 flat registry is **52 tools / 19,848 bytes /
+  ≈4,962 tokens** sent on **every** provider call. Telemetry (`toolset.resolved`,
+  events §2.2) records `tools_offered`, `core_bytes` and `total_bytes` per turn so the
+  budget is observable in production, not only in tests.
 
 ### 1.8 Chat attachment boundary (ADR-043)
 
@@ -519,8 +607,9 @@ SESSION_TTL_SECONDS=604800
 # false is for local HTTP only; production startup requires true.
 SESSION_COOKIE_SECURE=false
 
-# Required by worker; mount this directory read-only. Do not point at the Sherpa repo.
-WORKSPACE_ROOT=.sherpa/workspace
+# DELETED by ADR-046 (§1.4): WORKSPACE_ROOT. The read/glob/grep tools it backed are gone;
+# project code is reached with fs.*, personal files with drive.*. Remove it from .env and
+# remove its read-only worker mount from compose during Phase TR.
 
 # Runtime-owned tool-output spill storage (not a user workspace).
 TOOL_OUTPUT_ROOT=.sherpa/tool-output
@@ -735,7 +824,7 @@ Compose MUST map explicit keys per service; it MUST NOT pass the complete `.env`
 | Service | Receives |
 |---|---|
 | `web` | `SERVICE_ROLE=web`; app/session/log and tool-output keys; `DATABASE_URL`; `REDIS_URL`; active `KEK`/ID/version for callback sealing; Gmail OAuth keys including redirect/mode; Gmail retention and notification defaults. It receives no previous KEKs and no `PROVIDER_API_KEY`. |
-| `worker` | `SERVICE_ROLE=worker`; `APP_ENV`, `LOG_LEVEL`, `WORKSPACE_ROOT`, and tool-output keys; `DATABASE_URL`; `REDIS_URL`; active/previous KEK keys; Gmail client ID/secret and data policy; all provider and embedding keys; memory-formation settings; observability/OTel settings; notification defaults. It does **not** receive `APP_SECRET`. |
+| `worker` | `SERVICE_ROLE=worker`; `APP_ENV`, `LOG_LEVEL`, and tool-output keys; `DATABASE_URL`; `REDIS_URL`; active/previous KEK keys; Gmail client ID/secret and data policy; all provider and embedding keys; memory-formation settings; observability/OTel settings; notification defaults; the `SANDBOX_*`/`WORKING_COPY_*` runtime keys and the Docker socket for sandbox orchestration. It does **not** receive `APP_SECRET`. |
 | one-shot `migration` | `SERVICE_ROLE=migration`; `APP_ENV`, `LOG_LEVEL`, and `DATABASE_URL` only. |
 | `frontend` | No key from this contract and no backend secret. Public API origin, if needed at build time, is a separate public frontend setting. |
 | `postgres` | No Sherpa application secret and no KEK. Image bootstrap credentials come from deployment-managed Docker secrets and must match `DATABASE_URL`; they are not application `Settings`. |
@@ -744,7 +833,7 @@ Compose MUST map explicit keys per service; it MUST NOT pass the complete `.env`
 
 MinIO and pgvector are not v1 services. Redis is not a backup/recovery source of truth.
 
-The `web` and `worker` services mount one private tool-output named volume at `TOOL_OUTPUT_ROOT`. Separately, only `worker` receives the `WORKSPACE_ROOT` mount, and that mount is read-only. No other service receives either workspace access or the tool-output mount.
+The `web` and `worker` services mount one private tool-output named volume at `TOOL_OUTPUT_ROOT`. The former read-only `WORKSPACE_ROOT` worker mount is **removed** (ADR-046, §1.4). No sandbox scratch mount exists at all: under ADR-047 the working copy is tar-injected into the container's anonymous `/work` volume, so **no host path is ever passed to the Docker daemon** — this is what makes the transport behave identically on a Windows Docker-Desktop host, a Linux host, in DinD, and in CI. Only `worker` holds the Docker socket, and only `worker` executes sandbox work.
 
 ### 5.1 Migration ownership
 

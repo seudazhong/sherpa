@@ -1862,10 +1862,28 @@ pending -> running -> settled(delivered | failed | missed | unknown)
 
 ## Alembic migration plan
 
-1. **Initial revision (`0001_v1_data_model`).** Create objects in dependency
+> **BASELINE SQUASH (approved 2026-07-30, ADR-045).** All existing Sherpa data is disposable
+> test data. The 32 accumulated revisions `0001_initial_core` … `0032_chat_attachments` are
+> **squashed into a single new `0001_baseline`** that creates the target schema directly.
+> This is not a data migration — it is its opposite: the revision history existed only to
+> carry an old schema forward, and a clean break has nothing to carry. Rules:
+> - The new baseline MUST create the **post-ADR-046/047/048 schema** in one revision:
+>   without the deleted `files` table, without `project_sandbox_runs`, and with
+>   `project_runtime_sessions` + `project_exec_runs`.
+> - `alembic upgrade head` MUST succeed against an **empty** database — that is the whole
+>   correctness requirement, and it is a **repository-consistency** rule, not a compatibility
+>   one. Downgrade support remains "for empty development databases" (item 5 below).
+> - The old revision files are **deleted**, not left orphaned; the chain stays linear.
+> - Every developer/deployment rebuilds: `docker compose ... down -v` then `up --build`.
+>   This destroys the dev database, Redis and MinIO volumes. The pytest harness (ADR-044) is
+>   unaffected — it already creates `<app_db>_test` from scratch and runs `upgrade head`.
+
+1. **Initial revision (`0001_baseline`).** Create objects in dependency
    order: tenant/user/settings/user-memory/identity; sessions/runs/transcript; traces; connectors/items;
    extractions/generations; candidates/todos/provenance; journal/outbox/effects;
-   schedules/firings; approval envelope; audit receipts; then indexes, deferred
+   schedules/firings; approval envelope; audit receipts; drive/storage blobs; memory blocks;
+   knowledge; projects + snapshots + working copies + change sets + artifacts +
+   runtime sessions + exec runs; model providers; then indexes, deferred
    cyclic FKs, function, and immutability triggers.
 2. Use an Alembic naming convention matching the explicit `pk_`, `fk_`, `uq_`,
    `ck_`, and `ix_` names above. Execute the partial indexes, PL/pgSQL function,
@@ -2880,13 +2898,14 @@ Notes:
 >
 > **Canonical / durable** = `projects.head_generation` (CAS token) + `project_working_copies` +
 > `project_working_copy_entries` (the durable overlay) + `project_change_sets` +
-> `project_change_set_entries` + `project_artifacts` + `project_sandbox_runs`. **Rebuildable cache
-> (never a table)** = the materialized scratch tree, package/dependency cache, prepared base image,
-> warm container. Project **file bytes** are the same immutable, content-addressed, ref-counted
+> `project_change_set_entries` + `project_artifacts` + `project_runtime_sessions` +
+> `project_exec_runs`. **Rebuildable cache
+> (never a table)** = the materialized scratch tar, package/dependency cache, prepared base image,
+> the running container. Project **file bytes** are the same immutable, content-addressed, ref-counted
 > ADR-030 `storage_blobs` as Drive/snapshots; **file bytes never enter the journal or a change-set
 > row** (rows carry blob refs + bounded metadata + bounded spilled diffs only). **Credentials** (model/
 > provider/storage/GitHub) **never** enter a working copy, overlay, change set, artifact, snapshot,
-> scratch tree, or sandbox.
+> scratch tar, or sandbox.
 
 ```sql
 -- Cheap, monotonic head-generation CAS token. Bumped in the SAME transaction that advances
@@ -3093,48 +3112,94 @@ CREATE TABLE project_artifacts (
 CREATE INDEX ix_part_wc ON project_artifacts (tenant_id, working_copy_id);
 CREATE INDEX ix_part_project ON project_artifacts (tenant_id, project_id, created_at DESC);
 
--- A sandbox execution. It REUSES the existing durable runs/event journal for the model loop; this row
--- links a run to a working copy and records BOUNDED, NON-AUTHORITATIVE operational metadata plus the
--- durable execution-boundary outcome. scratch_ref/container_ref are node-local caches — NEVER recovery
--- truth. A missing env dependency yields termination_reason='environment_missing_dependencies'
--- (report §10.7): the offline sandbox never silently enables network to fetch packages.
-CREATE TABLE project_sandbox_runs (
+-- REPLACED (2026-07-30, ADR-047 + ADR-048). `project_sandbox_runs` is split into a session-level row
+-- and a per-command row, because the coding runtime is an explicit RuntimeSession (open → exec* → close)
+-- rather than one container per tool call. Dropped columns and why:
+--   scratch_ref  — meaningless under tar transport: there is no host scratch path any more (ADR-047).
+--   warm_until   — a warm-container TTL that was NEVER implemented anywhere in the code; the concept is
+--                  now carried by project_runtime_sessions.expires_at (the session idle TTL).
+-- Both tables are BOUNDED, NON-AUTHORITATIVE operational records; the container is a rebuildable cache,
+-- NEVER recovery truth. A missing dependency yields termination_reason='environment_missing_dependencies'
+-- together with the image's probed capability list: the offline sandbox never enables network to fetch
+-- packages. Every exit is NAMED (events §2.11) — this is the fix for backlog B-8, where a start failure,
+-- an unreachable daemon and a disabled sandbox were all reported as one 'sandbox_unavailable' with no log.
+CREATE TABLE project_runtime_sessions (
     tenant_id        uuid NOT NULL,
     id               uuid NOT NULL,
-    project_id       uuid NOT NULL,
-    working_copy_id  uuid NOT NULL,
-    session_id       uuid NOT NULL,
-    run_id           uuid NOT NULL,                   -- the durable model-loop run (event journal)
+    project_id       uuid,                            -- NULL when scope='ephemeral'
+    working_copy_id  uuid,                            -- NULL when scope='ephemeral'
+    session_id       uuid NOT NULL,                   -- the chat session that owns it
     user_id          uuid NOT NULL,
-    base_snapshot_id uuid NOT NULL,                   -- snapshot materialized for this run
-    fence_token      bigint NOT NULL,                 -- working-copy fence held during this run
-    state            text NOT NULL DEFAULT 'materializing',  -- materializing|running|persisted|failed|timed_out
-    scratch_ref      text,                            -- node-local scratch volume/dir id (operational only)
+    scope            text NOT NULL DEFAULT 'project', -- project|ephemeral (ephemeral replaces run_code)
+    base_snapshot_id uuid,                            -- snapshot materialized into the tar
+    fence_token      bigint,                          -- working-copy fence held by this session
+    state            text NOT NULL DEFAULT 'opening', -- opening|ready|executing|closing|closed|failed
     container_ref    text,                            -- docker container id (operational only)
-    warm_until       timestamptz,                     -- optional warm-container idle TTL (cache only)
-    exit_code        integer,
-    timed_out        boolean NOT NULL DEFAULT false,
-    termination_reason text,                          -- done|environment_missing_dependencies|wall_timeout|
-                                                      -- mem_limit|pids_limit|output_limit|changeset_bounds|
-                                                      -- path_escape|fence_lost|sandbox_unavailable|error:...
-    persisted_boundary_at timestamptz,                -- overlay/change-set persisted => run is durably complete
+    image            text NOT NULL,
+    image_digest     text,                            -- pinned digest actually started
+    capabilities     jsonb,                           -- probed capabilities.json from the image
+    ingress_bytes    bigint,                          -- tar bytes injected at open
+    entry_count      integer,
+    termination_reason text,                          -- see events §2.11 named-exit list
+    expires_at       timestamptz,                     -- idle TTL (SANDBOX_RUNTIME_IDLE_TTL_SECONDS)
+    closed_at        timestamptz,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT pk_psr PRIMARY KEY (tenant_id, id),
-    CONSTRAINT fk_psr_tenant FOREIGN KEY (tenant_id)
+    CONSTRAINT pk_prs PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_prs_tenant FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON DELETE CASCADE,
-    CONSTRAINT fk_psr_project FOREIGN KEY (tenant_id, project_id)
+    CONSTRAINT fk_prs_project FOREIGN KEY (tenant_id, project_id)
         REFERENCES projects (tenant_id, id) ON DELETE CASCADE,
-    CONSTRAINT fk_psr_wc FOREIGN KEY (tenant_id, working_copy_id)
+    CONSTRAINT fk_prs_wc FOREIGN KEY (tenant_id, working_copy_id)
         REFERENCES project_working_copies (tenant_id, id) ON DELETE CASCADE,
-    CONSTRAINT fk_psr_session FOREIGN KEY (tenant_id, session_id)
+    CONSTRAINT fk_prs_session FOREIGN KEY (tenant_id, session_id)
         REFERENCES sessions (tenant_id, id) ON DELETE CASCADE,
-    CONSTRAINT fk_psr_user FOREIGN KEY (tenant_id, user_id)
+    CONSTRAINT fk_prs_user FOREIGN KEY (tenant_id, user_id)
         REFERENCES users (tenant_id, id) ON DELETE CASCADE,
-    CONSTRAINT ck_psr_state CHECK (state IN ('materializing','running','persisted','failed','timed_out'))
+    CONSTRAINT ck_prs_scope CHECK (scope IN ('project','ephemeral')),
+    CONSTRAINT ck_prs_state CHECK (state IN ('opening','ready','executing','closing','closed','failed')),
+    -- a project-scoped session must carry its project/working copy; an ephemeral one must not
+    CONSTRAINT ck_prs_scope_binding CHECK (
+        (scope = 'project'   AND project_id IS NOT NULL AND working_copy_id IS NOT NULL)
+     OR (scope = 'ephemeral' AND project_id IS NULL     AND working_copy_id IS NULL)
+    )
 );
-CREATE INDEX ix_psr_wc ON project_sandbox_runs (tenant_id, working_copy_id, created_at DESC);
-CREATE INDEX ix_psr_run ON project_sandbox_runs (tenant_id, run_id);
+CREATE INDEX ix_prs_wc ON project_runtime_sessions (tenant_id, working_copy_id, created_at DESC);
+CREATE INDEX ix_prs_session ON project_runtime_sessions (tenant_id, session_id, created_at DESC);
+-- at most one live runtime session per working copy (single-writer, mirrors the lease)
+CREATE UNIQUE INDEX uq_prs_live ON project_runtime_sessions (tenant_id, working_copy_id)
+    WHERE state IN ('opening','ready','executing','closing');
+
+-- One command executed inside a runtime session. `run_id` is the durable model-loop run when the
+-- command was agent-driven, and NULL when a human pressed Run in the UI.
+CREATE TABLE project_exec_runs (
+    tenant_id        uuid NOT NULL,
+    id               uuid NOT NULL,
+    runtime_session_id uuid NOT NULL,
+    run_id           uuid,                            -- durable model-loop run (event journal), if any
+    seq              integer NOT NULL,                -- 1-based order within the session
+    command_preview  text NOT NULL,                   -- bounded, redacted; the approval preview shows this
+    state            text NOT NULL DEFAULT 'queued',  -- queued|running|persisted|failed|cancelled
+    exit_code        integer,
+    timed_out        boolean NOT NULL DEFAULT false,
+    termination_reason text,                          -- see events §2.11 named-exit list
+    output_truncated boolean NOT NULL DEFAULT false,
+    spill_ref        text,                            -- tool-output:{invocation_id} when bounded output spilled
+    change_set_id    uuid,                            -- projected at the persistence boundary
+    duration_ms      integer,
+    persisted_boundary_at timestamptz,                -- overlay/change-set persisted => durably complete
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_per PRIMARY KEY (tenant_id, id),
+    CONSTRAINT fk_per_tenant FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id) ON DELETE CASCADE,
+    CONSTRAINT fk_per_rs FOREIGN KEY (tenant_id, runtime_session_id)
+        REFERENCES project_runtime_sessions (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT uq_per_seq UNIQUE (tenant_id, runtime_session_id, seq),
+    CONSTRAINT ck_per_state CHECK (state IN ('queued','running','persisted','failed','cancelled'))
+);
+CREATE INDEX ix_per_rs ON project_exec_runs (tenant_id, runtime_session_id, seq);
+CREATE INDEX ix_per_run ON project_exec_runs (tenant_id, run_id);
 ```
 
 Notes:
@@ -3181,17 +3246,21 @@ Notes:
   charged once; Save/Discard/expire release the reservation. Artifacts charge quota **only** after
   Keep/Export (`retention='retained'`); ephemeral artifacts do not count. `projects.used_bytes` counts
   each distinct referenced blob once after Save.
-- **Sandbox runs reuse the durable run/journal.** `project_sandbox_runs` links a run to a working copy
-  and records operational metadata + the durable boundary outcome; the model loop still writes the
-  frozen run/event-journal records (ADR-016). `scratch_ref`/`container_ref`/`warm_until` are
-  node-local cache identifiers, **never** recovery truth. A run is **not** reported successfully
+- **Runtime sessions and execs reuse the durable run/journal.** `project_runtime_sessions` links a
+  chat session (and, for `scope='project'`, a working copy) to a container; `project_exec_runs`
+  records one command each with its own **named** termination reason. The model loop still writes the
+  frozen run/event-journal records (ADR-016). `container_ref` is a
+  node-local cache identifier, **never** recovery truth. An exec is **not** reported successfully
   durable until `persisted_boundary_at` is set (overlay + change set committed).
-- **Isolation & credentials (ADR-039; report §10.7/§11).** The sandbox mounts **only** the disposable
-  scratch tree read-write — **never** the Project snapshot, `storage_blobs`/MinIO, another Project,
+  `uq_prs_live` enforces at most one live runtime session per working copy, mirroring the
+  single-writer lease.
+- **Isolation & credentials (ADR-039 + ADR-047; report §10.7/§11).** The sandbox receives the working
+  copy as a **tar-injected disposable copy in an anonymous `/work` volume** and **mounts no host path
+  at all** — never the Project snapshot, `storage_blobs`/MinIO, another Project,
   Drive, the tool-output spill path, or any credential. It stays **network-disabled** and receives no
   model/provider/storage/GitHub token. A command needing an unavailable dependency returns
   `environment_missing_dependencies` and **never** silently enables network to install packages. See
-  events §2.11 for effect/idempotency/crash-recovery and config §1.7 for the mount/lifecycle/resource/
+  events §2.11 for effect/idempotency/crash-recovery and config §1.7 for the transport/lifecycle/resource/
   network/credential boundary + `SANDBOX_*`/`WORKING_COPY_*` settings.
 - **Deferred (NOT W3):** dependency installation/package managers; embedded coding-agent executors
   (`delegate_coding_agent`); `git init/commit/branch`, merge, push, PR (W4); long-running dev servers /
