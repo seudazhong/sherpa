@@ -12,13 +12,14 @@
 | B-2 | design | [Built-in tool surface is too large (53 tools)](#b-2-built-in-tool-surface-is-too-large-53-tools) | open |
 | B-3 | bug | [The model cannot see the chat's bound project](#b-3-the-model-cannot-see-the-chats-bound-project) | ✅ done |
 | B-4 | bug/dx | [OTel tracing silently off after a stack restart](#b-4-otel-tracing-silently-off-after-a-stack-restart) | ✅ done |
-| B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | open |
+| B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | ✅ done |
+| B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | open |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
 | B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open |
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | open |
 
-Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → **B-9** (it destroys dev data every full-suite run) → **B-5, B-6** (need a contract decision) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
+Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → **B-9** (it destroys dev data every full-suite run) → **B-2** (largest design question, own ADR) → **B-8** (sequence after B-2, which may remove the tool).
 
 ---
 
@@ -114,37 +115,81 @@ log line.
 
 ## B-5 Drive cannot upload a folder
 
-*Reported 2026-07-28 (manual test) · kind: gap · status: open*
+*Reported 2026-07-28 (manual test) · kind: gap · status: ✅ done 2026-07-29*
 
 **Observed.** Drive uploads exactly one file at a time; a folder cannot be uploaded.
 
-**Evidence.** `frontend/src/views/WorkspaceView.tsx:248-257` renders a bare `<input type="file">` with neither `multiple` nor `webkitdirectory`, and the handler takes `files?.[0]` only. The contract offers just `POST /drive/files` (single multipart `path` + file) beside `POST /drive/folders` (`docs/contracts/api.md:1513-1523`). There is no directory drag-and-drop either.
+**Evidence.** `frontend/src/views/WorkspaceView.tsx:248-257` rendered a bare `<input type="file">` with neither `multiple` nor `webkitdirectory`, and the handler took `files?.[0]` only. The contract offers just `POST /drive/files` (single multipart `path` + file) beside `POST /drive/folders` (`docs/contracts/api.md:1513-1523`). There was no directory drag-and-drop either.
 
-**Direction (undecided, contract decision first).**
-- (a) *Client-side expansion* — add `multiple` + `webkitdirectory` (plus a `DataTransferItem` directory walk for drag-drop), create the tree via `POST /drive/folders`, upload each file via `POST /drive/files`, with bounded concurrency, per-file progress/errors, and caps on file count + total bytes.
-- (b) *Archive upload* — a new endpoint reusing the hardened bounded expander built for Projects (`backend/app/services/archive.py`, ADR-037) so a zip becomes a folder tree server-side.
+**Fixed by** option (a) — **client-side bounded expansion** ([ADR-042](decisions.md)), so the server and the
+contract are unchanged: `frontend/src/lib/driveUpload.ts` collects the selection (`multiple` /
+`webkitdirectory`) or walks a dropped `DataTransferItem` entry tree, **rejects an over-budget batch before
+sending anything** (≤ 200 files, ≤ 200 MiB), mirrors the folder tree with `POST /drive/folders` (409 ⇒
+"already exists, reuse", resolved by listing the parent), then uploads each file at concurrency 3. A batch
+is **not** a transaction and does not pretend to be: each file carries its own status with the server's own
+reason (`413` too large, `409` name taken, `507` out of space), and a `507` **stops** the remaining queue
+instead of repeating the same error per file. `WorkspaceView` gained *Upload folder* + multi-select *Upload
+files*, a page drop zone, and a dismissable per-file result panel. Option (b) (archive upload) was
+explicitly rejected in the ADR.
 
-Either way: respect quota (`507`) and per-file size (`413`) semantics, report partial failure honestly, and update `docs/contracts/api.md` + the §9 capability matrix.
+**Bug found *by* the human lane (and fixed).** The first live run failed every file with `422 invalid`: a
+directory-picked upload sends its **relative path** as the multipart filename (`upload-demo/notes/a.md`),
+and `services/drive._validate_name` rejects any name containing `/`. Fixed on both sides — the client now
+sends the base name explicitly, and `POST /drive/files` reduces a client-supplied filename to its base name
+(`PurePosixPath(...).name`, also handling `\`), since a client filename is untrusted input. Regression test:
+`tests/test_drive_api.py::test_upload_filename_with_path_is_stored_as_base_name`.
+
+**Verified.** Backend gate green (ruff/mypy/full pytest); frontend `lint` + `build` green. Human lane
+(Playwright, real stack): uploading a nested `upload-demo/{readme.txt, notes/a.md, notes/deep/b.txt}` →
+"Upload results · 3/3" with every row ✓, and the tree is rebuilt in Drive (`upload-demo` → `notes` →
+`deep`). 390 px overflow = 0. Known-benign noise: a reused folder logs a handled `409` in the browser
+console.
 
 ---
 
 ## B-6 Chat attachments: image upload/paste + attach from Drive
 
-*Requested 2026-07-28 · kind: feature · status: open*
+*Requested 2026-07-28 · kind: feature · status: ✅ done 2026-07-29*
 
 **Ask.** In Chat, (a) upload or paste an image straight into the composer, and (b) attach an existing file from Drive.
 
-**Current state.** The whole path is text-only: the composer has no attach/paste handling, admission stores a single text part, and `backend/app/core/history.py:57-74,202` collapses each user turn into a plain string `content` — nothing multimodal can reach the provider.
+**Prior state.** The whole path was text-only: the composer had no attach/paste handling, admission stored a single text part, and `backend/app/core/history.py:57-74,202` collapsed each user turn into a plain string `content` — nothing multimodal could reach the provider.
 
-**Design work needed before code.**
-1. **Message model** — typed parts (`text` / `image` / `file_ref`); decide what is persisted versus referenced (a Drive node id + version, not a byte copy), and how redaction/bounding applies.
-2. **Provider layer** — OpenAI-shape content arrays and Anthropic image blocks, plus a per-source vision capability flag (ADR-041) so a non-vision model degrades honestly instead of erroring.
-3. **Storage** — pasted images should land in Drive (quota `507` / size `413` semantics) so they are versioned and re-referenceable rather than orphaned blobs.
-4. **Non-image files** — extract-text versus attach-as-is; reuse the bounded reader.
-5. **UI** — composer attach button, clipboard paste, a Drive picker, removable attachment chips, and attachment rendering in the transcript.
-6. **Prompt/cache + replay** — impact on the layered prefix (docs/04 invariant ⑤) and how attachments replay across turns.
+**Shipped as [ADR-043](decisions.md)** — attachments are **references to Drive nodes**, never a second byte
+store:
+1. **Storage.** A pasted/uploaded image is written to Drive under `Chat uploads/` *before* admission
+   (`frontend/src/lib/chatAttachments.ts`), so it inherits quota (`507`), the per-file cap (`413`),
+   versioning, trash and GC. Picking an existing Drive file skips the upload entirely.
+2. **Message model.** Migration **0032** widens `ck_parts_kind` to `text|status|image|file_ref`; an
+   attachment part stores `{drive_node_id, version, name, content_type, size_bytes}` — a reference, never
+   bytes, so nothing large enters `parts`, the journal, or an event payload.
+3. **Admission.** `PromptRequest.attachments` (≤ 8) is resolved in the same transaction as the text part
+   (`app/core/attachments.py`): ownership via the Drive service's tenant+user scoping, not trashed, real
+   file, pinned `version`, per-image cap. Idempotency now compares text **and** the attachment set.
+4. **Assembly.** `assemble_provider_history` expands attachments **per run** under a shared byte budget
+   (≤ 5 MiB per image, ≤ 15 MiB per assembly). A turn **without** attachments keeps the plain-string
+   `content`, so existing sessions' cached prefixes stay byte-stable (docs/04 invariant ⑤).
+5. **Honest degradation** instead of provider errors, in four cases: the source has
+   `supports_vision = false` (new `model_providers` column + Settings→Models toggle), the byte budget is
+   spent, the image is oversized, or the node was purged. Non-image text-like files are inlined as a
+   **bounded** extract (≤ 32 KiB, truncation stated); binary files become a pointer that names `drive_read`.
+6. **Providers.** `app/providers/content.py` parses the OpenAI-shape content array once; `anthropic` emits
+   base64 `image` blocks, `gemini` emits `inlineData`, `openai_compatible` passes through, `mock` renders
+   text.
+7. **UI.** Composer *Attach* / *From Drive* picker / clipboard paste / removable chips with size, the
+   no-vision warning, and transcript rendering (image thumbnail, file chip with download).
 
-Order: ADR → `docs/contracts/api.md` + data-model contract → backend → UI → §9 capability matrix.
+**Verified.** Backend gate green (ruff/mypy + 355 pytest incl. `test_chat_attachments*`); frontend `lint` +
+`build` green. **Agent lane** (real model, litellm `claude-sonnet-4.6`): attached a generated PNG and asked
+"这张图片里有哪些形状和文字？" → the model answered exactly *"SHERPA TEST" 文字、红色圆形、蓝色三角形、浅灰背景、黑色边框* — the
+image genuinely reached the provider; a **follow-up run** ("三角形是什么颜色") answered *蓝色*, proving attachments
+replay across runs. A `file_ref` picked from Drive was quoted verbatim (`nested b`). **Human lane**: paste
+→ chip; *From Drive* search → pick; reload → the transcript re-renders the thumbnail + chip from
+`GET /sessions/{id}/messages`; with `supports_vision` off the composer shows the honest warning; 390 px
+overflow = 0.
+
+**Deliberately not done** (ADR-043 §8): model-*produced* images, audio/video, attachment OCR/vectorisation
+(that is Knowledge, ADR-036), attachment-level sharing, and non-Drive external links as attachments.
 
 ---
 
