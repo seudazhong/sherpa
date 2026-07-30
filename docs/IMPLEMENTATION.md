@@ -513,6 +513,17 @@ the human Run control (P4/P5). B-8 stays **open**.
 | P1.5 | Baseline squash per **TR.3** | `backend/migrations/versions/**` | `alembic upgrade head` on an empty DB; exactly one head; `uv run pytest` green |
 | P1.V | Full gate + stack rebuild | — | backend gate + `npm run build` green; stack healthy; **one commit per task** |
 
+**P1.4 correction (2026-07-30, measured during execution).** `WORKSPACE_ROOT` was
+**contract-only and never existed in code**: no `workspace_root` field in
+`backend/app/config.py`, no line in `.env.example`, no mount in
+`infra/docker-compose.yml` (the `worker` service mounts only `/var/run/docker.sock`), and
+no `read`/`glob`/`grep` tools were ever registered. `config-and-secrets.md` §1.4 already
+records it as **DELETED**, so the contract and the code now agree — but the deletion was of
+a *planned* setting, not a shipped one. The task row above is kept verbatim for audit;
+this note is the honest result. The only remaining occurrences repo-wide are the deletion
+records themselves plus historical ADR-025/ADR-039 "never mount" lists and the
+`design-workspace` mockup, which are immutable history and correctly left alone.
+
 **P1 exit:** one Alembic revision; no legacy files stack; no `run_code`; no `WORKSPACE_ROOT`; the
 dev stack is rebuilt from empty and healthy.
 
