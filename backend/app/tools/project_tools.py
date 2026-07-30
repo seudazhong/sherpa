@@ -286,8 +286,12 @@ class ProjectRunTool:
             )
         except ServiceError as e:
             raise as_tool_error(e) from None
-        sr = outcome.sandbox_run
-        lines = [f"Sandbox run {sr.termination_reason} (exit {sr.exit_code}, state {sr.state})."]
+        rs = outcome.runtime_session
+        er = outcome.exec_run
+        lines = [
+            f"Sandbox run {outcome.termination_reason} "
+            f"(exit {er.exit_code if er is not None else None}, state {rs.state})."
+        ]
         if outcome.failure_note is not None:
             # The named, redacted observation: the model is told exactly WHICH failure
             # happened instead of guessing behind one blanket "unavailable".

@@ -15,7 +15,7 @@ import datetime
 import uuid
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Integer, LargeBinary, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -295,29 +295,72 @@ class ProjectArtifact(Base):
     )
 
 
-class ProjectSandboxRun(Base):
-    """A sandbox execution: links a run to a working copy + records BOUNDED,
-    NON-AUTHORITATIVE operational metadata plus the durable execution-boundary outcome.
-    ``scratch_ref``/``container_ref`` are node-local caches — NEVER recovery truth."""
+class ProjectRuntimeSession(Base):
+    """One coding RuntimeSession (open -> exec* -> close): links a chat session (and, for
+    ``scope='project'``, a working copy) to a container. BOUNDED, NON-AUTHORITATIVE
+    operational record — the container is a rebuildable cache, NEVER recovery truth.
+    ``scope='ephemeral'`` carries no project/working copy and replaces the deleted
+    ``run_code`` (ADR-048 §3). ``uq_prs_live`` allows at most one live session per working
+    copy, mirroring the single-writer lease.
 
-    __tablename__ = "project_sandbox_runs"
+    Replaces ``project_sandbox_runs`` (ADR-047 + ADR-048): ``scratch_ref`` is meaningless
+    under tar transport and ``warm_until`` was never implemented — the idle TTL is
+    ``expires_at``. The service/tool layer that drives these rows lands in Phase TR P4;
+    the table exists from the 0001 baseline so the schema never needs a second migration.
+    """
+
+    __tablename__ = "project_runtime_sessions"
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
-    working_copy_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    working_copy_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
-    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
-    base_snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
-    fence_token: Mapped[int] = mapped_column(BigInteger)
-    state: Mapped[str] = mapped_column(Text, server_default="materializing")
-    scratch_ref: Mapped[str | None] = mapped_column(Text)
+    scope: Mapped[str] = mapped_column(Text, server_default="project")
+    base_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    fence_token: Mapped[int | None] = mapped_column(BigInteger)
+    state: Mapped[str] = mapped_column(Text, server_default="opening")
     container_ref: Mapped[str | None] = mapped_column(Text)
-    warm_until: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    image: Mapped[str] = mapped_column(Text)
+    image_digest: Mapped[str | None] = mapped_column(Text)
+    capabilities: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    ingress_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    entry_count: Mapped[int | None] = mapped_column(Integer)
+    termination_reason: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ProjectExecRun(Base):
+    """One command executed inside a runtime session, with its OWN named termination
+    reason (events §2.11 ④ — the fix for backlog B-8's blanket collapse). ``run_id`` is the
+    durable model-loop run when the command was agent-driven and NULL when a human pressed
+    Run. An exec is not durably complete until ``persisted_boundary_at`` is set (overlay +
+    change set committed)."""
+
+    __tablename__ = "project_exec_runs"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    runtime_session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    seq: Mapped[int] = mapped_column(Integer)
+    command_preview: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(Text, server_default="queued")
     exit_code: Mapped[int | None] = mapped_column(Integer)
     timed_out: Mapped[bool] = mapped_column(Boolean, server_default="false")
     termination_reason: Mapped[str | None] = mapped_column(Text)
+    output_truncated: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    spill_ref: Mapped[str | None] = mapped_column(Text)
+    change_set_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
     persisted_boundary_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

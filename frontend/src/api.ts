@@ -535,9 +535,14 @@ export interface ProjectTemplate {
 }
 
 export interface SandboxRunState {
-  run_id: string;
-  state: "materializing" | "running" | "persisted" | "failed" | "timed_out";
-  warm: boolean;
+  run_id: string | null;
+  state:
+    | "opening"
+    | "ready"
+    | "executing"
+    | "closing"
+    | "closed"
+    | "failed";
   exit_code: number | null;
   timed_out: boolean;
   termination_reason: string | null;

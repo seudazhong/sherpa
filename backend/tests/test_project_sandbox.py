@@ -353,15 +353,18 @@ async def test_run_sandbox_persists_edit_delta() -> None:
                 command=None,
             )
             out = await sbx_svc.run_sandbox(s, ctx, wc, run_id=uuid.uuid4(), request=req)
-            assert out.sandbox_run.state == "persisted"
-            assert out.sandbox_run.termination_reason == "done"
-            assert out.sandbox_run.persisted_boundary_at is not None
+            # Edits-only boundary: no command ran, so there is no exec run and the named
+            # exit lives on the runtime session itself.
+            assert out.exec_run is None
+            assert out.runtime_session.state == "closed"
+            assert out.runtime_session.closed_at is not None
+            assert out.termination_reason == "done"
             # The overlay reflects the scratch delta; scratch is torn down.
             eff = await wc_svc.effective_tree(s, ctx, wc)
             assert eff["added.txt"].content_hash is not None
             assert "requirements.txt" not in eff
-            assert out.sandbox_run.scratch_ref is None
-            assert not psbx.scratch_dir_for(str(out.sandbox_run.id)).exists()
+            assert out.runtime_session.container_ref is None
+            assert not psbx.scratch_dir_for(str(out.runtime_session.id)).exists()
         finally:
             await s.rollback()
 
@@ -388,9 +391,12 @@ async def test_run_sandbox_missing_dependency_still_persists_edits(monkeypatch, 
             with caplog.at_level(logging.WARNING, logger="app.services.project_sandbox"):
                 out = await sbx_svc.run_sandbox(s, ctx, wc, run_id=uuid.uuid4(), request=req)
             # Missing dependency is an EXPLICIT named outcome; the edit is still persisted.
-            assert out.sandbox_run.termination_reason == "environment_missing_dependencies"
-            assert out.sandbox_run.exit_code == 127
-            assert out.sandbox_run.state == "persisted"
+            assert out.exec_run is not None
+            assert out.exec_run.termination_reason == "environment_missing_dependencies"
+            assert out.exec_run.exit_code == 127
+            assert out.exec_run.state == "persisted"
+            assert out.exec_run.persisted_boundary_at is not None
+            assert out.runtime_session.state == "closed"
             assert out.failure_note is not None
             assert "environment_missing_dependencies" in out.failure_note
             assert len([r for r in caplog.records if r.name == "app.services.project_sandbox"]) == 1
@@ -416,8 +422,9 @@ async def test_run_sandbox_over_bounds_persists_nothing(monkeypatch) -> None:  #
                 ],
             )
             out = await sbx_svc.run_sandbox(s, ctx, wc, run_id=uuid.uuid4(), request=req)
-            assert out.sandbox_run.state == "failed"
-            assert out.sandbox_run.termination_reason == "changeset_bounds"
+            assert out.runtime_session.state == "failed"
+            assert out.exec_run is None
+            assert out.termination_reason == "changeset_bounds"
             # No overlay persisted (never a silent partial).
             assert wc.overlay_entry_count == 0
             # The failure is still an observation, not a crash.
@@ -474,14 +481,14 @@ async def test_run_sandbox_names_each_failure_and_logs_exactly_once(monkeypatch,
                         ),
                     )
 
-                assert out.sandbox_run.termination_reason == expected
+                assert out.termination_reason == expected
                 seen.append(expected)
 
                 # Exactly ONE structured worker log line, naming the same reason.
                 records = [r for r in caplog.records if r.name == "app.services.project_sandbox"]
                 assert len(records) == 1
                 assert records[0].termination_reason == expected  # type: ignore[attr-defined]
-                assert records[0].sandbox_run_id == str(out.sandbox_run.id)  # type: ignore[attr-defined]
+                assert records[0].runtime_session_id == str(out.runtime_session.id)  # type: ignore[attr-defined]
 
                 # The redacted model observation names the reason and leaks no host detail.
                 assert out.failure_note is not None
@@ -518,7 +525,12 @@ async def test_run_sandbox_success_logs_nothing_and_has_no_note(monkeypatch, cap
                     run_id=uuid.uuid4(),
                     request=sbx_svc.SandboxRequest(command="echo hello"),
                 )
-            assert out.sandbox_run.termination_reason == "done"
+            assert out.termination_reason == "done"
+            assert out.exec_run is not None
+            assert out.exec_run.state == "persisted"
+            assert out.exec_run.seq == 1
+            assert out.exec_run.command_preview == "echo hello"
+            assert out.runtime_session.state == "closed"
             assert out.failure_note is None
             assert [r for r in caplog.records if r.name == "app.services.project_sandbox"] == []
         finally:

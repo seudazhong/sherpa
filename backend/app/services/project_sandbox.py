@@ -4,14 +4,24 @@ Ties the durable working copy (:mod:`app.services.project_workcopy`) to the one-
 scratch mechanics (:mod:`app.sandbox.project_sandbox`). One ``project_run`` boundary:
 
 1. acquire the working copy's single-writer lease → a fresh ``fence_token``;
-2. record a ``project_sandbox_runs`` row (``state='materializing'``);
+2. open a ``project_runtime_sessions`` row (``scope='project'``, ``state='opening'``);
 3. materialize ``base snapshot + persisted overlay`` into a FRESH disposable scratch tree
    (only project bytes — never a credential/snapshot/blob store/other Project/Drive/socket);
 4. apply host-side edits, then run the command in the hardened, network-disabled container
-   with **only** the scratch bind-mounted read-write (ADR-039);
+   with **only** the scratch bind-mounted read-write (ADR-039), recording it as one
+   ``project_exec_runs`` row;
 5. compute the scratch delta (bounded); **persist** it into the overlay fence-guarded +
    idempotent (the only durable effect; events §2.11 ②) and set ``persisted_boundary_at``;
-6. tear the scratch tree down (rebuildable cache — never recovery truth).
+6. tear the scratch tree down (rebuildable cache — never recovery truth) and close the
+   runtime session.
+
+The session/exec split comes from ADR-047 + ADR-048, which replaced
+``project_sandbox_runs``. **Phase TR P1 only moved the bookkeeping onto the target
+tables** so the 0001 baseline never needs a follow-up migration; the RuntimeSession
+product semantics (``runtime.open`` → ``sh.exec``* → ``runtime.close`` spanning many
+commands, tar transport, async worker-executed REST) land in P3/P4. Today one boundary
+still opens and closes exactly one session, and the bind mount of backlog B-8 is still
+there.
 
 Named termination reasons only (events §2.11 ④): every failing exit emits **one** structured
 worker log line (with the bounded raw detail, for the operator) and **one** redacted
@@ -31,7 +41,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import ProjectSandboxRun, ProjectWorkingCopy, StorageBlob
+from app.models import ProjectExecRun, ProjectRuntimeSession, ProjectWorkingCopy, StorageBlob
 from app.objectstore import build_object_store
 from app.sandbox import project_sandbox as psbx
 from app.sandbox import runner
@@ -44,6 +54,10 @@ from app.services.errors import Conflict
 logger = logging.getLogger("app.services.project_sandbox")
 
 _LIVE_STATES = ("open", "ready_for_review")
+
+#: ``project_exec_runs.command_preview`` is bounded — it is what the approval envelope and
+#: the Change Review render, never an unbounded model-supplied string.
+COMMAND_PREVIEW_MAX = 500
 
 #: One redacted, model-facing sentence per named exit (events §2.11 ④). These sentences are
 #: static: they name the reason and stay actionable, but they never carry the raw failure
@@ -83,9 +97,10 @@ def _now() -> datetime.datetime:
 
 
 def _observe_failure(
-    sr: ProjectSandboxRun,
+    rs: ProjectRuntimeSession,
     reason: str,
     *,
+    er: ProjectExecRun | None = None,
     detail: str | None = None,
     had_command: bool = False,
 ) -> str:
@@ -96,12 +111,13 @@ def _observe_failure(
         "project sandbox run failed",
         extra={
             "termination_reason": reason,
-            "sandbox_run_id": str(sr.id),
-            "project_id": str(sr.project_id),
-            "working_copy_id": str(sr.working_copy_id),
-            "run_id": str(sr.run_id),
-            "sandbox_state": sr.state,
-            "exit_code": sr.exit_code,
+            "runtime_session_id": str(rs.id),
+            "exec_run_id": str(er.id) if er is not None else None,
+            "project_id": str(rs.project_id),
+            "working_copy_id": str(rs.working_copy_id),
+            "run_id": str(er.run_id) if er is not None else None,
+            "runtime_state": rs.state,
+            "exit_code": er.exit_code if er is not None else None,
             "sandbox_kind": settings.sandbox_kind,
             "sandbox_image": settings.sandbox_image,
             "had_command": had_command,
@@ -122,13 +138,25 @@ class SandboxRequest:
 
 @dataclasses.dataclass(frozen=True)
 class SandboxOutcome:
-    sandbox_run: ProjectSandboxRun
+    #: The ``project_runtime_sessions`` row for this boundary (opened and closed by it).
+    runtime_session: ProjectRuntimeSession
     stdout: str
     stderr: str
+    #: The ``project_exec_runs`` row, present only when a command actually ran. An
+    #: edits-only boundary executes nothing, so it records no exec run.
+    exec_run: ProjectExecRun | None = None
     change_set_id: uuid.UUID | None = None
     #: The redacted observation for a failing exit (``None`` on ``done``). Callers surface it
     #: to the model / user verbatim; it never carries raw failure text.
     failure_note: str | None = None
+
+    @property
+    def termination_reason(self) -> str | None:
+        """The boundary's named exit — the exec run's when a command ran, else the
+        session's. Exactly one of them settles any given boundary."""
+        if self.exec_run is not None:
+            return self.exec_run.termination_reason
+        return self.runtime_session.termination_reason
 
 
 def _materialize_entries(
@@ -147,6 +175,47 @@ def _materialize_entries(
     ]
 
 
+def _fail(
+    rs: ProjectRuntimeSession,
+    er: ProjectExecRun | None,
+    reason: str,
+    *,
+    exit_code: int | None,
+    timed_out: bool,
+) -> None:
+    """Settle a FAILING boundary: nothing was durably persisted. The named reason lands on
+    the exec run when a command ran, and on the session otherwise — never on both, so there
+    is exactly one authoritative name per boundary."""
+    rs.state = "failed"
+    if er is None:
+        rs.termination_reason = reason
+        return
+    er.state = "failed"
+    er.termination_reason = reason
+    er.exit_code = exit_code
+    er.timed_out = timed_out
+
+
+def _settle(
+    rs: ProjectRuntimeSession,
+    er: ProjectExecRun | None,
+    reason: str,
+    *,
+    exit_code: int | None,
+    timed_out: bool,
+) -> None:
+    """Settle a boundary whose overlay WAS persisted. ``persisted_boundary_at`` is the
+    durability marker: an exec is not reported durably complete without it."""
+    if er is None:
+        rs.termination_reason = reason
+        return
+    er.state = "persisted"
+    er.termination_reason = reason
+    er.exit_code = exit_code
+    er.timed_out = timed_out
+    er.persisted_boundary_at = _now()
+
+
 async def run_sandbox(
     db: AsyncSession,
     ctx: CallerContext,
@@ -156,30 +225,33 @@ async def run_sandbox(
     request: SandboxRequest,
 ) -> SandboxOutcome:
     """Execute one bounded sandbox boundary against the working copy's one-time scratch copy
-    and durably persist the resulting overlay. Records a ``project_sandbox_runs`` row with a
-    named ``termination_reason``; a stale fence or over-bound delta is a safe named exit that
-    persists nothing. Every failing exit is logged once and returns a redacted
-    ``failure_note`` — the caller hands it to the model as an observation."""
+    and durably persist the resulting overlay. Opens one ``project_runtime_sessions`` row
+    (closed on every exit, so ``uq_prs_live`` stays satisfiable) and, when a command runs,
+    one ``project_exec_runs`` row carrying the named ``termination_reason``; a stale fence or
+    over-bound delta is a safe named exit that persists nothing. Every failing exit is logged
+    once and returns a redacted ``failure_note`` — the caller hands it to the model as an
+    observation."""
     if wc.state not in _LIVE_STATES:
         raise Conflict("working copy is not open")
 
     fence = await wc_svc.acquire_lease(db, wc, owner=f"run:{run_id}")
-    sr = ProjectSandboxRun(
+    rs = ProjectRuntimeSession(
         tenant_id=ctx.tenant_id,
         id=uuid.uuid4(),
         project_id=wc.project_id,
         working_copy_id=wc.id,
         session_id=wc.session_id,
-        run_id=run_id,
         user_id=wc.user_id,
+        scope="project",
         base_snapshot_id=wc.base_snapshot_id,
         fence_token=fence,
-        state="materializing",
+        state="opening",
+        image=settings.sandbox_image,
     )
-    db.add(sr)
+    db.add(rs)
     await db.flush()
-    run_key = str(sr.id)
-    sr.scratch_ref = str(psbx.scratch_dir_for(run_key))
+    run_key = str(rs.id)
+    er: ProjectExecRun | None = None
 
     async def _read_blob(content_hash: bytes) -> bytes:
         blob = await db.get(StorageBlob, (ctx.tenant_id, wc.user_id, content_hash))
@@ -192,16 +264,17 @@ async def run_sandbox(
         effective = await wc_svc.effective_tree(db, ctx, wc)
         try:
             manifest = await psbx.materialize(run_key, _materialize_entries(effective), _read_blob)
+            rs.entry_count = len(manifest)
             for edit in request.edits:
                 psbx.apply_edit(run_key, edit)
         except psbx.ScratchError as exc:
-            sr.state = "failed"
-            sr.termination_reason = exc.code
+            rs.state = "failed"
+            rs.termination_reason = exc.code
             await db.flush()
-            note = _observe_failure(sr, exc.code, had_command=bool(request.command))
-            return SandboxOutcome(sandbox_run=sr, stdout="", stderr="", failure_note=note)
+            note = _observe_failure(rs, exc.code, had_command=bool(request.command))
+            return SandboxOutcome(runtime_session=rs, stdout="", stderr="", failure_note=note)
 
-        sr.state = "running"
+        rs.state = "ready"
         await db.flush()
 
         reason = "done"
@@ -209,7 +282,22 @@ async def run_sandbox(
         exit_code: int | None = None
         timed_out = False
         if request.command:
+            er = ProjectExecRun(
+                tenant_id=ctx.tenant_id,
+                id=uuid.uuid4(),
+                runtime_session_id=rs.id,
+                run_id=run_id,
+                seq=1,
+                command_preview=request.command[:COMMAND_PREVIEW_MAX],
+                state="running",
+            )
+            db.add(er)
+            rs.state = "executing"
+            await db.flush()
+
+            started = _now()
             res = await psbx.run_in_scratch(run_key, request.command)
+            er.duration_ms = int((_now() - started).total_seconds() * 1000)
             stdout, stderr = res.stdout, res.stderr
             exit_code = res.exit_code
             timed_out = res.timed_out
@@ -229,24 +317,24 @@ async def run_sandbox(
         try:
             delta = psbx.compute_delta(run_key, manifest)
         except psbx.ScratchError as exc:
-            sr.state = "failed"
-            sr.termination_reason = exc.code
-            sr.exit_code = exit_code
-            sr.timed_out = timed_out
+            _fail(rs, er, exc.code, exit_code=exit_code, timed_out=timed_out)
             await db.flush()
-            note = _observe_failure(sr, exc.code, had_command=bool(request.command))
-            return SandboxOutcome(sandbox_run=sr, stdout=stdout, stderr=stderr, failure_note=note)
+            note = _observe_failure(rs, exc.code, er=er, had_command=bool(request.command))
+            return SandboxOutcome(
+                runtime_session=rs, exec_run=er, stdout=stdout, stderr=stderr, failure_note=note
+            )
 
         if delta.over_bounds:
             # Persist NOTHING on an over-bound delta (never a silent partial overlay); the
             # bounded/truncated review projection is W3.3.
-            sr.state = "failed"
-            sr.termination_reason = "changeset_bounds"
-            sr.exit_code = exit_code
-            sr.timed_out = timed_out
+            _fail(rs, er, "changeset_bounds", exit_code=exit_code, timed_out=timed_out)
             await db.flush()
-            note = _observe_failure(sr, "changeset_bounds", had_command=bool(request.command))
-            return SandboxOutcome(sandbox_run=sr, stdout=stdout, stderr=stderr, failure_note=note)
+            note = _observe_failure(
+                rs, "changeset_bounds", er=er, had_command=bool(request.command)
+            )
+            return SandboxOutcome(
+                runtime_session=rs, exec_run=er, stdout=stdout, stderr=stderr, failure_note=note
+            )
 
         # Stage changed blobs (content-addressed dedup) + build the overlay deltas.
         overlay: list[wc_svc.OverlayDelta] = []
@@ -278,16 +366,9 @@ async def run_sandbox(
 
         final_reason = reason if published else "fence_lost"
         if not published:
-            sr.state = "failed"
-        elif reason == "wall_timeout":
-            sr.state = "timed_out"
-            sr.persisted_boundary_at = _now()
+            _fail(rs, er, final_reason, exit_code=exit_code, timed_out=timed_out)
         else:
-            sr.state = "persisted"
-            sr.persisted_boundary_at = _now()
-        sr.exit_code = exit_code
-        sr.timed_out = timed_out
-        sr.termination_reason = final_reason
+            _settle(rs, er, final_reason, exit_code=exit_code, timed_out=timed_out)
         await db.flush()
 
         # One log line + one redacted observation per FAILING exit; a clean `done` stays
@@ -296,8 +377,9 @@ async def run_sandbox(
         settled_note: str | None = None
         if final_reason != "done":
             settled_note = _observe_failure(
-                sr,
+                rs,
                 final_reason,
+                er=er,
                 detail=detail if published else None,
                 had_command=bool(request.command),
             )
@@ -313,8 +395,11 @@ async def run_sandbox(
                 )
             cs = await changes_svc.build_change_set(db, ctx, wc, run_id=run_id)
             change_set_id = cs.id if cs is not None else None
+            if er is not None:
+                er.change_set_id = change_set_id
         return SandboxOutcome(
-            sandbox_run=sr,
+            runtime_session=rs,
+            exec_run=er,
             stdout=stdout,
             stderr=stderr,
             change_set_id=change_set_id,
@@ -322,10 +407,13 @@ async def run_sandbox(
         )
     finally:
         # The scratch tree is a rebuildable cache — always torn down; the durable boundary
-        # is the persisted overlay, never the container/scratch.
+        # is the persisted overlay, never the container/scratch. The session is closed on
+        # EVERY exit so `uq_prs_live` never blocks the next boundary on this working copy.
         psbx.cleanup(run_key)
-        sr.scratch_ref = None
-        sr.container_ref = None
+        rs.container_ref = None
+        if rs.state != "failed":
+            rs.state = "closed"
+        rs.closed_at = _now()
 
 
 def sweep_orphan_scratch() -> int:

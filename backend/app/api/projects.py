@@ -31,7 +31,8 @@ from app.models import (
     Project,
     ProjectArtifact,
     ProjectChangeSet,
-    ProjectSandboxRun,
+    ProjectExecRun,
+    ProjectRuntimeSession,
     ProjectSource,
     ProjectWorkingCopy,
 )
@@ -123,9 +124,13 @@ class ProjectChatCreate(BaseModel):
 
 
 class SandboxRunState(BaseModel):
-    run_id: uuid.UUID
-    state: Literal["materializing", "running", "persisted", "failed", "timed_out"]
-    warm: bool
+    """Interim projection of a working copy's latest runtime session plus its latest exec
+    run. ADR-048 replaces this response with `RuntimeSessionState` + `ExecRun` (api §10.6
+    `[target]`) in Phase TR P4; P1 only re-points it at the target tables. `warm` is gone —
+    it was never implemented in any code path (ADR-047 §7)."""
+
+    run_id: uuid.UUID | None
+    state: Literal["opening", "ready", "executing", "closing", "closed", "failed"]
     exit_code: int | None
     timed_out: bool
     termination_reason: str | None
@@ -632,24 +637,38 @@ def _artifact_out(art: ProjectArtifact) -> ArtifactOut:
 async def _sandbox_state(
     db: AsyncSession, ctx: CallerContext, wc: ProjectWorkingCopy
 ) -> SandboxRunState | None:
-    sr = await db.scalar(
-        select(ProjectSandboxRun)
+    rs = await db.scalar(
+        select(ProjectRuntimeSession)
         .where(
-            ProjectSandboxRun.tenant_id == ctx.tenant_id,
-            ProjectSandboxRun.working_copy_id == wc.id,
+            ProjectRuntimeSession.tenant_id == ctx.tenant_id,
+            ProjectRuntimeSession.working_copy_id == wc.id,
         )
-        .order_by(ProjectSandboxRun.created_at.desc())
+        .order_by(ProjectRuntimeSession.created_at.desc())
         .limit(1)
     )
-    if sr is None:
+    if rs is None:
         return None
+    er = await db.scalar(
+        select(ProjectExecRun)
+        .where(
+            ProjectExecRun.tenant_id == ctx.tenant_id,
+            ProjectExecRun.runtime_session_id == rs.id,
+        )
+        .order_by(ProjectExecRun.seq.desc())
+        .limit(1)
+    )
+    return _runtime_state(rs, er)
+
+
+def _runtime_state(rs: ProjectRuntimeSession, er: ProjectExecRun | None) -> SandboxRunState:
+    """The named exit lives on the exec run when a command ran and on the session
+    otherwise — never on both, so the UI shows exactly one reason."""
     return SandboxRunState(
-        run_id=sr.run_id,
-        state=sr.state,  # type: ignore[arg-type]
-        warm=sr.warm_until is not None,
-        exit_code=sr.exit_code,
-        timed_out=sr.timed_out,
-        termination_reason=sr.termination_reason,
+        run_id=er.run_id if er is not None else None,
+        state=rs.state,  # type: ignore[arg-type]
+        exit_code=er.exit_code if er is not None else None,
+        timed_out=er.timed_out if er is not None else False,
+        termination_reason=(er.termination_reason if er is not None else rs.termination_reason),
     )
 
 
@@ -719,15 +738,7 @@ async def create_sandbox_run(
     except ServiceError as e:
         await db.rollback()
         raise _http(e) from None
-    sr = outcome.sandbox_run
-    return SandboxRunState(
-        run_id=sr.run_id,
-        state=sr.state,  # type: ignore[arg-type]
-        warm=sr.warm_until is not None,
-        exit_code=sr.exit_code,
-        timed_out=sr.timed_out,
-        termination_reason=sr.termination_reason,
-    )
+    return _runtime_state(outcome.runtime_session, outcome.exec_run)
 
 
 @router.get("/projects/{project_id}/working-copies/{wc_id}")
