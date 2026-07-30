@@ -33,6 +33,7 @@
 | 2026-07-30 | 工具面如何在持续变大的同时保持可理解、省 token、权限安全、可发现 | ✅ **分层工具目录 + 上下文作用域可见集 + 渐进式披露**：全部工具统一 `domain.verb` 命名；旁挂 `ToolDescriptor`（namespace/toolset/version/requires/surfaces/summary）**不改窄腰 `Tool` Protocol**；`ToolsetResolver` 成为**真正的 VISIBLE 闸**（按 trust tier / surface / session kind / runtime 求解，turn 边界冻结，确定性排序，core 恒为缓存前缀真前缀）；core 常驻 ~15 个 + 一行式目录摘要 + `tools.search`/`tools.load` 两个元工具；**不做动词巨型工具**（`drive(op=…)` 会塌成 `oneOf`、削弱校验、破坏权限粒度与审批 scope）；策略引擎升级为 **args 感知** `evaluate(ctx, descriptor, args, scope)` | 新增 ADR-046（落地 backlog B-2；受 ADR-045 统领；具体化 ADR-009 的 VISIBLE 闸；扩展 ADR-008 权限代数） |
 | 2026-07-30 | 项目字节如何进出沙箱（B-8 的 bind mount 在 DooD 下结构性失败） | ✅ **改用 tar ingress/egress，彻底删除 bind mount**：`put_archive`/`get_archive` 完全不涉及任何文件系统路径语义 → 宿主守护进程无需解析 worker 容器内路径（B-8 整类问题消失）、`src=` 路径注入面消失、Windows/Linux/CI/DinD 同码同行为、可用 fake docker client 完整单测。这是对 **ADR-025/ADR-039 挂载口径的收窄性修订**（从"只挂一次性 scratch"收窄为"**只注入**一次性 scratch，**永不挂任何宿主路径**"），**不是放松**。同批交付**真自建 `sandbox-runner` 镜像**（python+pytest+ruff+`capabilities.json`），否则挂载修好也无产品价值 | 新增 ADR-047（落地 backlog B-8；受 ADR-045 统领；**收窄性修订** ADR-025/ADR-039） |
 | 2026-07-30 | file/shell 是宿主一等工具、沙箱路由工具、还是委派子 agent | ✅ **混合分层 + 显式 RuntimeSession**：`fs.*` 走**宿主侧**直接读写工作副本 overlay（无需容器、确定性、可完整单测、且严格强于旧 `project_tree`/`project_read`——后者只看 head，看不见 agent 刚写的内容）；`sh.*` **必经 RuntimeSession** 进沙箱。产品后果：**沙箱不可用只损失「跑」，不损失「改」**。`RuntimeSession` 从 v1 起就是**显式一等对象**（`runtime.open/close` + `scope=project|ephemeral`），未来「沙箱内专用 coding agent」只是加一个 sub-agent provider（`delegate.code_task(runtime_session_id, …)`），**不需重写编排**。`project_run`/`project_tree`/`project_read`/`run_code` **全部删除**；`project_sandbox_runs`（含从未实现的 `warm_until`/在 tar 下无意义的 `scratch_ref`）拆为 `project_runtime_sessions` + `project_exec_runs` | 新增 ADR-048（落地 backlog B-8 的产品面；受 ADR-045 统领；**修订** ADR-040 §决策8「不嵌 coding agent」为「v1 不嵌、接缝预留」） |
+| 2026-07-30 | 先建工具目录还是先压缩工具本身；`domain(action,…)` 横向合并是否可行；CLI agent 模式能否借鉴 | ✅ **修订 ADR-046（修订 A）**：负责人复审指出「引入渐进式披露前尚未做过廉价压缩」——实测成立（47 工具 / 17,432 B，其中**描述散文占 38%**，含从未被审视的死工具，`drive_restore` 甚至**结构性不可调用**：无任何工具吐 node id）。故 **P2 先瘦身再建目录**（删死工具 + 描述字节上限进启动强制）。但压缩有硬地板（瘦身后 ~12,137 B，仍是 6 KiB 预算的 2×，且 P4 加 11 个工具即吃回），**替代不了目录**。横向 `domain(action)` 合并**维持否决但理由收窄**：ADR-046 原理由②③被其自身 §决策6（args 感知策略）推翻，仅存①（`validate.py` 非全量 JSON-Schema 引擎，合并后 `if_version` 等条件 required 校验**消失**而非削弱）+ ④（模型对判别式联合偏弱）。新增 **§决策10：合并只沿纵向（工作流）轴**（Anthropic `get_customer_context` 判据），跨域 `list(kind)` 明确禁止。CLI 模式最大省钱来源是**预训练先验**，对自有数据域**完全不转移**；可转移的「带内发现」就是 `tools.search`/`tools.load`（GitHub MCP Server + Copilot CLI 均为「渐进披露 + 工具保持独立」的一线先例） | **修订 ADR-046**（§决策1 补注 · §决策5 收窄 · **新增 §决策10** · 基线数字更正）；新增 backlog **B-10**（瘦身 + 纵向合并候选）与 **B-11**（工具使用评测缺失，Phoenix 已具备采集基础） |
 
 ---
 
@@ -820,9 +821,17 @@
 ### ADR-046 · 工具目录 = `domain.verb` 命名空间 + ToolDescriptor/ToolsetResolver + 渐进式披露（落地 backlog B-2；受 ADR-045 统领；具体化 ADR-009 的 VISIBLE 闸；扩展 ADR-008）
 
 > **状态：已批准（2026-07-30），契约与设计先行；实现待 Phase TR 执行计划获批。**
+>
+> **修订 A（2026-07-30，负责人主持的 P2 设计复审）**：三处更正，详见 [backlog B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)。
+> ① **§决策5 的否决理由②③被本 ADR 的 §决策6 自我推翻**，已收窄（见该条的「修订」块）；
+> ② **实测基线数字更正**：19,848 B 是 **P1 前 52 工具**的值，P1 后实测 **47 工具 / 17,432 B（紧凑分隔符）/ 18,303 B（默认分隔符）**，两种口径不得混用；
+> ③ 新增 **§决策10「合并只沿纵向（工作流）轴，不沿横向（CRUD 动词）轴」** —— 这是本 ADR 原先完全缺失的判据，也是 §决策5 的正面表述。
+> 另记：命名前缀 vs 后缀（`domain.verb` vs `verb_domain`）是**实测题**，见 §决策1 补注与 [backlog B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured)。
 
 - **决策**：
   1. **统一命名 `domain.verb`**：全部工具一律 `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`（`drive.read` / `project.list` / `fs.write` / `sh.exec` / `tools.search`）。**这需要修订 [api.md §7](contracts/api.md) 的名称正则**（现为 `^[a-z][a-z0-9_]{0,63}$`，不含点）。点号在 OpenAI / Anthropic / Gemini 三家 wire 协议上都合法（`backend/app/providers/tools.py` 的三个适配器只做透传/裁剪）。clean break 之下**不存在新旧混排**，故 `ToolDescriptor` **不设 `stability`/`deprecated` 字段**。
+     - **实测动机（修订 A 补）**：47 个工具里 **28 个 `action_domain` · 15 个 `domain_action` · 4 个都不是**，且**同一个域内部就混用**（`todo_write` ↔ `list_todos`；`project_read` ↔ `list_projects`；`search_knowledge` ↔ `add_knowledge_source`），连局部模式匹配都不成立。drive 是唯一自洽的一组。
+     - **但方向本身待实测**：Anthropic《[Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)》示例用域前缀（`asana_search`/`jira_search`），却明说前缀式与后缀式命名 *"have non-trivial effects on our tool-use evaluations. Effects vary by LLM and we encourage you to choose a naming scheme according to your own evaluations."* 故 `domain.verb` 先按本 ADR 落地，**其相对 `verb_domain` 的优劣列为 [B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) E3 的一个变体去测**，不作为已证结论。
   2. **`ToolDescriptor` 旁挂，不改窄腰**：`Tool` Protocol（`backend/app/tools/base.py:68-74`）一字不改；目录元数据在**注册时**以独立 dataclass 提供：
      ```python
      @dataclass(frozen=True)
@@ -842,12 +851,31 @@
      - `tools.search(query)` → 返回匹配的 toolset id + summary + 工具数（`read_only`，allow）
      - `tools.load(toolsets[≤3])` → 本会话后续 turn 获得其完整 schema（`read_only` 语义，allow，但**记审计**）
   5. **不做动词巨型工具**（`drive(op=…)`）。理由：会把 8 个精确 JSON Schema 塌成带 `oneOf` 的巨型 schema，**削弱 `app/tools/validate.py` 的参数校验**、**破坏权限粒度**（`drive.trash` 与 `drive.read` 的 `effect_class` 不同）、**污染审批 scope**（`permission_scope="tool:drive"` 太粗）。分组 + 按需加载已拿到 token 收益的绝大部分，风险却低一个数量级。
+     - **修订 A（2026-07-30）——否决结论不变，但理由必须收窄**：
+       - **理由②③作废**（自我矛盾）。它们假定策略引擎看不见参数；而**本 ADR 的 §决策6** 恰恰把引擎升级为 args 感知 `evaluate(ctx, descriptor, args, scope)`。一旦看得见 args，`drive(action="trash")` 的 effect class 与审批 scope **可以和 `drive.trash` 一样精确**。用一条被自己下一条决策消除的理由去否决，站不住。
+       - **理由①成立，且比原文更重**。原文说 schema「塌成 `oneOf`」；实际是**连 `oneOf` 都写不了**——`app/tools/validate.py` 自述 *"Not a full JSON-Schema engine … checks required keys are present and primitive types match"*，不认 `enum`/`oneOf`/条件 `required`。合并后校验不是被削弱而是**消失**。实锤：`update_todo` 现声明 `"required": ["todo_id","if_version"]`（`app/tools/todo_tools.py:112`），create+update 一旦合并，`if_version` 无法再 required，**乐观并发的 schema 级护栏直接丢失**。
+       - **补一条新理由④**：模型对判别式联合（discriminated union）经验上偏弱；服务端换成全量 JSON-Schema 校验器也补不了模型选错的账。
+       - **因此**：否决**仅**立于①+④，并且是**可实测的**（[B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) E3）。若将来评测数据反转结论，需先换掉 `validate.py` 再重开此议。
   6. **策略引擎升级为 args 感知**：`app/permissions/policy.py` 的 `evaluate(tool)` → `evaluate(ctx, descriptor, args, scope) -> "allow"|"ask"|"deny"`，last-match 胜、`deny > ask > allow`（[ADR-008] 代数）。审批 scope 从裸 `"tool:{name}"` 升为 `"tool:{name}"` + 结构化 `scope`（如 `{"command_class":"shell","paths":["src/"]}`），使 [ADR-020] 信封能渲染**确切命令 + 目标路径**。`app/permissions/grants.py` 的 `_MATCHERS` 从只支持 `send_email` 扩到 `sh.exec`（命令白名单）与 `fs.write`（路径前缀）。
   7. **删除**：`app/tools/file_tools.py`（4 个 `file_*`）、`app/services/files.py`、`app/api/files.py` 及 `app/main.py` 的 `include_router(files_router)`、`files` 表、`app/tools/sandbox_tools.py`（`run_code`）。**保留**并建议改名 `app/files/` → `app/objectstore/`（它是对象存储适配层，Drive/Projects 都依赖，名字与被删的 files 栈重名纯属误导）。
   8. **命名统一（clean break，无别名）**：`memory_user_get`/`memory_user_list` → `memory.recall`（key 可选）；`todo_write`/`update_todo`/`complete_todo` → `todo.create`/`todo.update`（含 status）；其余按 `domain.verb` 逐一改名。旧名**直接消失**；模型若照抄历史 transcript 调用旧名，得到 `unknown tool` 观察 —— **错误即观察，不崩循环**（api.md §7），可接受。
   9. **provider 概念前向预留**：目录层统一 `ToolProvider`（`BuiltinProvider` 今天唯一实现；`RuntimeProvider` 由 [ADR-048] 引入；`McpProvider`/`SubAgentProvider` 留 roadmap）。外部 provider 的工具默认 `surfaces={"chat"}` + 全部 `ask` + **永不进 core 集**（必须显式 `tools.load`）—— 这是 roadmap #9「两遍信任 + footprint ladder」在目录层的落地。
+  10. **合并只沿纵向（工作流）轴，绝不沿横向（CRUD 动词）轴**（修订 A 新增；§决策5 的正面表述）。判据来自 Anthropic《[Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)》：
 
-- **token 预算（实测基线 19,848 B / ~4,962 token）**：
+      > By selectively implementing tools whose names reflect **natural subdivisions of tasks**, you simultaneously reduce the number of tools **and offload agentic computation from the agent's context back into the tool calls themselves**.
+
+      | 轴 | 形态 | 减少了什么 |
+      |---|---|---|
+      | **横向**（按 CRUD 动词分组） | `sherpa.list(kind)`、`todo(action=…)` | 只减工具数/字节；**offload 的 agentic computation 为零**，还多一个「kind/action 填什么」的决策。它是**分发器**不是工具 |
+      | **纵向**（按工作流分组）✅ | `schedule_event`、`search_logs`、`get_customer_context` | 工具数 **+ round trip + 中间输出占用的上下文** |
+
+      推论：**跨域的 `list(kind=…)` 明确禁止**；原文更进一步质疑 `list_*` 工具本身该不该建（*"implement a `search_contacts` … **instead of** a `list_contacts` tool"*）。Sherpa 的纵向候选（`todo.create(…, remind_at?)` / `inbox.accept(…, patch?, remind_at?)` / `today()` / `knowledge.add(query_or_path)`）记在 [B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)，**每条都需 [B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) 的评测证据才可实施**。
+
+      **一线产品旁证**：GitHub MCP Server（`list_available_toolsets`/`get_toolset_tools`/`enable_toolset`）与 GitHub Copilot CLI（31 个 MCP 工具延迟加载于一个 tool-search 工具之后，且 `browser_click`/`browser_navigate`/`browser_type` 等**仍是 24 个独立工具**）都选择「**渐进式披露 + 保持工具独立**」；未发现横向合并的一方产品先例。
+
+      **CLI 模式可借鉴的边界**：CLI agent 便宜有三源——① 一个 schema 无限动词（= 横向合并，见上，代价高）；② **预训练先验**（模型天生会 `ls`/`git`/`pytest`，教学成本为 0）；③ 带内发现（`--help`）。其中**②是最大来源且完全不转移**——`sherpa todo list` 与 `todo.list` 对模型一样陌生；③正是 `tools.search`/`tools.load`。另：沙箱内跑 `sherpa` CLI 操作自有数据被 [ADR-019]/[ADR-047] 硬阻断（凭据不进沙箱 + 断网，够不到 DB）。反向地，CLI agent 手握 shell 仍刻意保留独立的 `Read`/`Write`/`Edit`/`Glob`/`Grep`（结构化 diff、避开 shell 引号、权限分级、路径边界可强制），四条**全部适用**于 [ADR-048] 的 `fs.*` —— 即 CLI 实践**支持**而非否定 `fs.*` 独立；但 [ADR-048] 计划中的 `run.test`/`run.lint` 是 `sh.exec` 的纯语法糖（Claude Code 无 `run_test`），建议 P4 删除。
+
+- **token 预算**（原写「实测基线 19,848 B / ~4,962 token」——**修订 A 更正**：那是 **P1 前 52 工具**的值。P1 后实测 **47 工具 / 17,432 B 紧凑 / 18,303 B 默认分隔符**；下表的「相对今天」按旧基线估算，重算前只作数量级参考。另实测：普通 chat 的 core（10 工具）**今天就只有 3,627 B**，即 `TOOL_CATALOG_CORE_MAX_BYTES=6144` 是**带 2,517 B 余量的棘轮**而非冲刺目标——真正的收益来自**另外 37 个工具不发**，不是把 core 压小。描述散文占全量 **38%**（6,625 B），故 [B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation) 要求 P2 先做**瘦身**（删死工具 + 每工具描述字节上限，与名称正则同处启动强制），再建目录）：
 
   | 场景 | core | 目录摘要 | 合计 | 相对今天 |
   |---|---|---|---|---|

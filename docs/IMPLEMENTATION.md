@@ -563,8 +563,17 @@ Measured tool surface **52 → 47 tools / 19,848 → 18,397 B** — deletion, **
 
 TDD order per task: write the failing test first, then the implementation.
 
+> **P2.0 added 2026-07-30** by the owner's design review — slim the surface **before** indexing it, so the
+> catalog hides nothing that should simply be deleted. See [`backlog.md` B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)
+> and [ADR-046 修订 A](decisions.md#adr-046). **Measured baseline is 47 tools / 17,432 B (compact) — not the
+> 19,848 B quoted earlier, which was the pre-P1 52-tool figure.** Ideally run
+> [B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) **E0** (mine
+> existing Phoenix traces for per-tool call frequency) first: it is nearly free and turns the four "owner
+> decision" deletions below into measurements.
+
 | # | Task | Paths | TDD / AC |
 |---|---|---|---|
+| **P2.0** | **Slimming pass (dead tools + prose diet), before any catalog work** | `backend/app/tools/{builtin,candidate_tools,todo_tools,drive_tools,memory_tools}.py` + tests | Delete `echo` (dev leftover, and SAFE-tier) and **`drive_restore`** (structurally uncallable: needs `node_id`, and neither `drive_list` nor `drive_search` ever emits one); merge `accept_candidate` into `edit_candidate` (all fields optional), `complete_todo` into `todo.update`, `memory_user_get` into `memory.recall`. Trim every description; **new startup assertion: per-tool description ≤ `TOOL_DESCRIPTION_MAX_BYTES` (160)**, enforced next to the name regex so prose cannot refill. Test first: a too-long description raises at startup. **Owner decisions still open** before this lands: `drive_make_folder`, `list_notifications`, `reindex_knowledge_source`, `create_daily_digest`, and whether memory keeps two systems. **Record the measured before/after bytes in the commit message.** |
 | P2.1 | `ToolDescriptor` + startup validation (name regex, uniqueness, unknown `requires`, version monotonicity) | new `backend/app/tools/catalog.py`; `backend/app/tools/builtin.py` | Test first: a bad name, a dupe and an unknown `requires` each raise at startup |
 | P2.2 | Rename every tool to `domain.verb` and register with a descriptor (hard rename, no aliases) | `backend/app/tools/{builtin,candidate_tools,todo_tools,connector_tools,schedule_tools,insight_tools,memory_tools,drive_tools,knowledge_tools,project_tools}.py` + their tests | Test first: assert the full expected name set; `memory.recall` covers the old get/list; `todo.update` covers complete |
 | P2.3 | `ToolsetResolver` + profiles | new `backend/app/tools/resolver.py`; `backend/app/tools/registry.py` | Tests: (a) `resolve(general).core` is a **byte-true prefix** of the project-bound array; (b) two calls with the same profile are byte-identical; (c) `connector_analysis` → empty array |
@@ -575,9 +584,17 @@ TDD order per task: write the failing test first, then the implementation.
 | P2.8 | Typed `ToolOutputSpillReference` + retention janitor (api §7.2 debt) | `backend/app/tools/bounding.py`, worker cron | Oversized output yields the typed object in `return_display`; janitor deletes past `TOOL_OUTPUT_RETENTION_HOURS` |
 | P2.V | Full gate + agent-lane Playwright | — | Chat: "what can you do about my knowledge base?" → model calls `tools.search`, then `tools.load`, then `knowledge.search` |
 
-**P2 exit (this closes B-2):** general-chat tool JSON **≤ 6,144 bytes** (down from the measured
-19,848); core is a byte-true prefix; discovery works end-to-end in the agent lane;
-`CONNECTOR_ANALYSIS` still receives zero tools; every tool name matches `domain.verb`.
+**P2 exit (this closes B-2):** general-chat tool JSON **≤ 6,144 bytes** (measured baseline **17,432 B**
+compact / 18,303 B default separators for 47 tools — the older 19,848 B figure was the pre-P1 52-tool
+number and must not be reused); core is a byte-true prefix; discovery works end-to-end in the agent lane;
+`CONNECTOR_ANALYSIS` still receives zero tools; every tool name matches `domain.verb`; **P2.0's slimming is
+measured and recorded, and no tool ships with a description over the byte cap.**
+
+> **Not in P2** (ADR-046 §决策10): horizontal `domain(action, …)` merging stays rejected — see the amended
+> §决策5 (the surviving grounds are `validate.py`'s missing conditional-`required` support and model
+> weakness at discriminated unions, **not** the effect-class/approval-scope grounds, which §决策6 undoes).
+> Vertical (workflow) consolidation candidates are parked in [B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)
+> and need B-11 evidence first.
 
 ### TR.8 P3 — tar transport + first-party runner image (mechanical half of B-8)
 
@@ -598,16 +615,22 @@ test passes; `uv run pytest -m docker` exists and is green locally.
 
 ### TR.9 P4 — RuntimeSession + `fs`/`sh`/`run` (product half of B-8)
 
+> **P4.5 dropped 2026-07-30** ([ADR-046 §决策10](decisions.md#adr-046), from the owner's P2 design review):
+> `run.test`/`run.lint` are pure sugar over `sh.exec("pytest")` / `sh.exec("ruff check")` and CLI agents
+> ship no `run_test` tool — **−2 tools**. The capability probe that backed them stays (it is what turns a
+> missing binary into `environment_missing_dependencies` instead of a bare exit 127); it now reports through
+> `runtime.open` and `sh.exec`.
+
 | # | Task | Paths | TDD / AC |
 |---|---|---|---|
 | P4.1 | Schema: `project_runtime_sessions` + `project_exec_runs` (**fold into `0001_baseline`** — there is no second migration in a clean break) | `backend/app/models/projects.py`, `backend/migrations/versions/0001_baseline.py` | `uq_prs_live` blocks a second live session per working copy; `ck_prs_scope_binding` holds |
 | P4.2 | `runtime.open` / `runtime.close` service + tools | `backend/app/services/project_runtime.py`, `backend/app/tools/runtime_tools.py` | Open acquires lease + bumps fence, probes capabilities, records `ingress_bytes`; close persists the boundary **before** teardown |
 | P4.3 | `fs.*` host-side tools over the working-copy effective tree | `backend/app/tools/fs_tools.py`, `backend/app/services/project_workcopy.py` | **Key test: with `SANDBOX_KIND=disabled`, every `fs.*` tool still works** (the degradation guarantee); `fs.read` after `fs.write` returns the new content without any Save |
 | P4.4 | `sh.exec` with streaming + cancel | `backend/app/tools/sh_tools.py`, `backend/app/services/project_runtime.py`, `backend/app/api/projects.py` | `202` + `runtime.output` SSE frames + `POST /runtime/{rid}/cancel` settles `cancelled` **after** the persistence boundary runs |
-| P4.5 | `run.test` / `run.lint` over probed capabilities | `backend/app/tools/run_tools.py` | Missing tool → `environment_missing_dependencies` **naming what the image does have**, never a bare exit 127 |
+| ~~P4.5~~ | ~~`run.test` / `run.lint` over probed capabilities~~ | ~~`backend/app/tools/run_tools.py`~~ | **DROPPED** (see the note above). The AC moves to `sh.exec`: a missing tool → `environment_missing_dependencies` **naming what the image does have**, never a bare exit 127 |
 | P4.6 | Delete `project_run` / `project_tree` / `project_read`; rewrite REST to the runtime routes; delete `POST /projects/{id}/sandbox-runs` | `backend/app/tools/project_tools.py`, `backend/app/api/projects.py` | Route inventory shows the new routes and none of the old |
 | P4.7 | Route-inventory generator + CI step (O-13) | new `backend/scripts/route_inventory.py`, `docs/contracts/route-inventory.md`, `.github/workflows/ci.yml` | CI fails on undeclared route drift; `/files/*` and `sandbox-runs` cannot reappear |
-| P4.V | Full gate + agent-lane Playwright | — | One chat drives read → edit → `run.test` fail → edit → pass, with the approval card appearing for a non-allowlisted command |
+| P4.V | Full gate + agent-lane Playwright | — | One chat drives read → edit → `sh.exec("pytest")` fail → edit → pass, with the approval card appearing for a non-allowlisted command |
 
 **P4 exit:** the agent completes a real edit/test loop; `fs.*` provably survives a disabled sandbox;
 `sh.exec` approval preview shows the exact command and paths; the old tools and route are gone and

@@ -14,10 +14,11 @@
 | B-4 | bug/dx | [OTel tracing silently off after a stack restart](#b-4-otel-tracing-silently-off-after-a-stack-restart) | ✅ done |
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | ✅ done |
-| B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | open |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
 | B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open · 🚧 Phase TR **P0 + P1 shipped** (named exits + logging; bookkeeping on the target tables); **mount still broken** |
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
+| B-10 | design | [Tool-surface slimming: dead tools, prose diet, and *vertical* (workflow) consolidation](#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation) | open — feeds [Phase TR](IMPLEMENTATION.md) **P2** |
+| B-11 | gap | [No tool-use evaluation harness (decisions are argued, not measured)](#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) | open |
 
 Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2 + B-8 together** — triaged 2026-07-30 and found to be **one architecture problem, not two** (see both entries below). The owner approved the unified **clean-break** architecture ([ADR-045](decisions.md#adr-045) umbrella · [ADR-046](decisions.md#adr-046) tool catalog · [ADR-047](decisions.md#adr-047) tar transport · [ADR-048](decisions.md#adr-048) RuntimeSession); the execution plan is [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Neither item is fixed**: B-2 closes at the end of Phase TR **P2**, B-8 at the end of **P5**. The owner approved the Phase TR execution plan on 2026-07-30 and **P0 (the honesty pass) + P1 (baseline squash + legacy deletion, including the one-time destructive dev rebuild) are shipped**; P2–P5 have not started. P1 removed the duplicate `file_*` stack and `run_code` (**52 → 47 tools / 19,848 → 18,397 B — deletion, not the catalog**) and moved the sandbox bookkeeping onto `project_runtime_sessions`/`project_exec_runs`, but it changed **no** execution path: `project_run` still bind-mounts and still fails.
 
@@ -293,3 +294,241 @@ async def _drop_owner() -> None:            # tests/test_connections_api.py:28-3
 - A session hook creates the database, runs `alembic upgrade head`, and stamps `_sherpa_test_marker`; that marker is the **only** accepted evidence that destructive writes are allowed. `SHERPA_TEST_DB_ADOPT=1` / `SHERPA_TEST_DB_RESET=1` are the explicit escape hatches; the database is retained between runs.
 - All 20 cleanup sites now go through one guarded `drop_tenant()` with a `lock_timeout` and a single retry.
 - Result: `uv run pytest` is green **with the dev worker running** (370 passed, twice), and the dev database's row counts are unchanged across runs. The "stop the worker first" workaround is retired.
+
+---
+
+## B-10 Tool-surface slimming: dead tools, prose diet, and *vertical* (workflow) consolidation
+
+*Raised 2026-07-30 by the owner during a Phase TR P2 design review · kind: design · status: **open** — feeds [Phase TR](IMPLEMENTATION.md) **P2***
+
+**Owner's challenge.** Reviewing the P2 plan, the owner objected that *`tools.search`/`tools.load` is the
+classic answer to an oversized toolset, but we have not yet done the cheap compression that should come
+first*, and separately that (a) the naming is inconsistent and (b) same-area simple tools might merge into
+`domain(action, ...)`, borrowing from how local CLI agents avoid large tool definitions. Both challenges
+held up; the investigation below changed the plan.
+
+### Measured baseline (2026-07-30, after Phase TR P1)
+
+```
+build_default_registry().schemas("full") -> 47 tools
+  17,432 B (compact separators)  /  18,303 B (default separators)
+  descriptions 6,625 B (38%) | input_schemas 8,051 B (46%) | names+framing 2,756 B (16%)
+```
+
+> **Baseline-number correction.** ADR-046 and STATUS quote **19,848 B**; that is the **pre-P1, 52-tool**
+> figure. Any "-70%" claim must be recomputed against 17,432 B (compact) or 18,303 B (default separators),
+> and the two conventions must not be mixed. The measured general-chat core is only **3,627 B** today
+> (10 tools), i.e. `TOOL_CATALOG_CORE_MAX_BYTES = 6144` is a **ratchet with 2,517 B of headroom**, not a
+> stretch goal — the win comes from *not sending the other 37 tools*, not from squeezing the core.
+
+### Finding 1 — deletion candidates that were never audited
+
+| B | Tool | Verdict |
+|---|---|---|
+| 173 | `echo` | **delete** — dev leftover, zero product value, and it is **SAFE-tier** (visible even to untrusted-content sessions) |
+| 239 | `drive_restore` | **delete — structurally uncallable (real bug)**, see below |
+| 383 | `accept_candidate` | **merge into `edit_candidate`** — `edit` is documented as "edit fields *then accept*", so `accept` is `edit` with no fields: same effect class, same approval scope |
+| 327 | `complete_todo` | **delete** — exactly `update_todo(status="completed")` (already in ADR-046 §8) |
+| 283 | `memory_user_get` | **merge into `memory.recall`** (already in ADR-046 §8) |
+| 255 | `drive_make_folder` | **owner decision** — `drive_write` documents "folders auto-created", leaving only "create an *empty* folder" |
+| 176 | `list_notifications` | **owner decision** — its own description says "shown on the Today page", i.e. built for the human |
+| 312 | `reindex_knowledge_source` | **owner decision** — maintenance action or agent capability? |
+| 359 | `create_daily_digest` | **owner decision** — is it just `create_scheduled_task` with a fixed prompt? |
+| 2,543 | `project_tree` · `project_read` · `project_run` | already scheduled for deletion in Phase TR **P4** |
+
+Confirmed + pending + P4 = **47 -> 35 tools / -5,050 B**, before any prose work.
+
+**`drive_restore` is dead surface (bug).** Its schema requires `node_id`, but **no tool ever emits a node
+id**: `drive_list` prints `name/type/size/version` (`app/tools/drive_tools.py:105-110`) and `drive_search`
+prints `path` only (`:129-133`). The agent can never obtain a legal argument, so the tool can only be
+called with a hallucinated id — 239 B of pure liability plus a hallucination trap.
+
+### Finding 2 — descriptions are 38% of the surface and unbudgeted
+
+Worst offenders: `project_run` **641 chars**, `project_tree` 507, `search_knowledge` 398,
+`create_scheduled_task` 276, `memory_note` 243. Trimming every description to <=80 chars alone is
+17,432 -> 14,308 B (**-18%**) with no architectural change. `project_run`'s 641 chars are prose explaining
+a broken abstraction, which is independent evidence for the P4 rewrite.
+
+Also note `create_scheduled_task` encodes "**specify exactly one cadence**" in English prose — a `oneOf`
+that is not, and cannot be, enforced (see Finding 4).
+
+**Action:** enforce a per-tool description byte cap (proposal: <=160 B) at startup, next to the name regex,
+so prose cannot silently refill — the same ratchet idea as `TOOL_CATALOG_CORE_MAX_BYTES`.
+
+### Finding 3 — naming is inconsistent *within a single domain*
+
+Measured over the 47: **28 `action_domain` · 15 `domain_action` · 4 neither**. The damaging part is not the
+global split but the intra-domain mixing, which denies the model even local pattern-matching:
+
+| Domain | Evidence |
+|---|---|
+| todo | `todo_write` vs `list_todos` / `update_todo` / `complete_todo` |
+| project | `project_read`/`project_run`/`project_tree` vs `list_projects` / `create_project` |
+| knowledge | `search_knowledge` vs `add_knowledge_source` / `list_knowledge_sources` |
+| memory | `memory_user_set` vs `memory_note` (the `_user_` infix is itself inconsistent) |
+| drive | all `domain_action` — the **only** internally consistent group |
+
+ADR-046 §决策1 (`domain.verb`) already fixes this, and Anthropic's own examples use domain-prefixed names
+(`asana_search`, `jira_search`). **But** the same source warns that prefix- vs suffix-based namespacing has
+"non-trivial effects ... vary by LLM", so `domain.verb` vs `verb_domain` is an **empirical** question
+(see B-11), not a taste one.
+
+### Finding 4 — horizontal `domain(action, ...)` merging: rejected, but for corrected reasons
+
+ADR-046 §决策5 rejected verb mega-tools on three grounds. Re-checked against the code:
+
+| ADR ground | Re-check |
+|---|---|
+| ① weakens argument validation | **Holds — and is worse than stated** |
+| ② breaks per-tool `effect_class` | **Contradicted by ADR-046 §决策6 itself** |
+| ③ coarsens approval scope (`tool:drive`) | **Same contradiction** |
+
+②/③ assume the policy engine cannot see arguments — but §决策6 of the *same ADR* upgrades it to args-aware
+`evaluate(ctx, descriptor, args, scope)`. Once policy sees args, `drive(action="trash")` classifies exactly
+as precisely as `drive.trash`. **The ADR rejects mega-tools partly on a ground its own next decision
+removes**; the rejection must stand on ① plus model accuracy alone. (ADR-046 amended accordingly.)
+
+① is real and understated. `app/tools/validate.py` is self-described as *"Not a full JSON-Schema engine ...
+checks required keys are present and primitive types match"* — it honours neither `enum` nor `oneOf` nor
+conditional `required`. So the schemas would not "collapse into a `oneOf`"; the validation would simply
+**disappear**. Concretely, `update_todo` declares `"required": ["todo_id", "if_version"]`
+(`app/tools/todo_tools.py:112`); merging create+update makes `if_version` un-requirable, **deleting the
+optimistic-concurrency guard at the schema level**. Fixable by adopting a real validator, but that is a
+dependency decision, and it does not address the second cost: models are empirically weak at discriminated
+unions.
+
+### Finding 5 — the merge axis was wrong (the actual correction)
+
+An earlier draft of this review proposed merging the 9 near-empty `list_*` tools into one
+`sherpa.list(kind, ...)`. **Withdrawn.** Anthropic's
+[Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)
+consolidates on a different axis entirely:
+
+> - Instead of implementing a `list_users`, `list_events`, and `create_event` tools, consider implementing a
+>   **`schedule_event`** tool which finds availability and schedules an event.
+> - Instead of implementing a `read_logs` tool, consider implementing a **`search_logs`** tool ...
+> - Instead of implementing `get_customer_by_id`, `list_transactions`, and `list_notes` tools, implement a
+>   **`get_customer_context`** tool which compiles all of a customer's recent & relevant information at once.
+>
+> By selectively implementing tools whose names reflect **natural subdivisions of tasks**, you
+> simultaneously reduce the number of tools **and offload agentic computation from the agent's context back
+> into the tool calls themselves**.
+
+| Axis | Example | Reduces |
+|---|---|---|
+| **Horizontal** (group by CRUD verb) — `sherpa.list(kind)`, `todo(action)` | withdrawn proposal; the Hermes-style pattern | tool count / bytes only; **offloads zero agentic work** |
+| **Vertical** (group by workflow) — Anthropic's | `get_customer_context` | tool count **+ round trips + intermediate-output context** |
+
+A `list(kind)` dispatcher is not a tool, it is a router: it saves bytes while adding a "which `kind`?"
+decision. That is why it is rare in the wild. The same source goes further and questions whether `list_*`
+tools should exist at all — *"you might choose to implement a `search_contacts` ... **instead of** a
+`list_contacts` tool"*.
+
+**Corroboration from shipped products.** GitHub MCP Server (`list_available_toolsets` / `get_toolset_tools`
+/ `enable_toolset`) and GitHub Copilot CLI (31 deferred MCP tools behind a tool-search tool) both chose
+**progressive disclosure while keeping tools separate** — Copilot CLI still exposes `browser_click`,
+`browser_navigate`, `browser_type` etc. as 24 distinct tools rather than one `browser(action)`. No
+first-party precedent was found for horizontal merging.
+
+### Vertical consolidation candidates (the thing to record)
+
+Not scheduled; each needs B-11 evidence before implementation.
+
+| # | Candidate | Chain it replaces | Saves |
+|---|---|---|---|
+| V-1 | `todo.create(..., remind_at?)` | `todo_write` -> read back id -> `create_reminder(todo_id, ...)` | 1 round trip + `create_reminder`'s main use case. This *is* the `schedule_event` example |
+| V-2 | `inbox.accept(candidate_id, if_version, patch?, remind_at?)` | `accept`/`edit` choice -> todo -> reminder | 2 tools + 1 round trip |
+| V-3 | `today()` | `list_todos` + `list_candidates` + `list_notifications` + `list_activity` fired together | This *is* the `get_customer_context` example; the daily-brief workflow almost always wants all four |
+| V-4 | `knowledge.add(query_or_path)` | `drive_search` -> read back path -> `add_knowledge_source(path)` | 1 round trip |
+
+Also borrowed from CLI-agent practice: **`run.test` / `run.lint` (planned in Phase TR P4) are pure sugar
+over `sh.exec("pytest")` / `sh.exec("ruff check")`** — Claude Code ships no `run_test` tool. Recommend
+dropping both from P4 (-2 tools). Conversely, CLI agents deliberately keep `Read`/`Write`/`Edit`/`Glob`/
+`Grep` **separate** from `Bash` (structured diffs, no shell-quoting hazards, permission tiering, enforceable
+path bounds) — all four reasons apply to Sherpa's change-set projection, so **`fs.*` staying separate is
+endorsed, not contradicted, by CLI practice**.
+
+### Why "just use a CLI" does not transfer wholesale
+
+| What makes CLI agents cheap | Transfers to Sherpa's own-data domains? |
+|---|---|
+| One schema, unbounded verbs (`Bash(cmd)`) | ✅ — this is the horizontal merge, available but costly (Finding 4) |
+| **Pretrained priors** (the model already knows `ls`/`git`/`pytest`) | ❌ — **the single largest source of the saving, and it does not transfer.** Nobody on the internet has written `sherpa todo list`; it needs exactly as much teaching as `todo.list` |
+| In-band discovery (`--help`, `man`) | ✅ — this *is* `tools.search`/`tools.load` |
+
+Hard blocker on an in-sandbox `sherpa` CLI for own data: ADR-019/ADR-047 forbid credentials in the sandbox
+and the sandbox is network-disabled, so it cannot reach the database. A host-side broker would just be a
+tool call with extra steps.
+
+### Decided / open
+
+- **Decided:** add a P2.0 slimming task before P2.1 (dead-tool sweep + description byte cap + the ADR-046 §8
+  merges, reframed from "renaming" to *compression* with a measured exit target); keep `domain.verb`;
+  **do not** horizontally merge; amend ADR-046 §决策5 (done) and its baseline numbers.
+- **Open (owner):** the 4 deletion decisions above; whether memory keeps **two systems** (KV
+  `set/get/list/delete` + archival `note/search` = 6 tools / 1,966 B, forcing a "is this a fact or a note?"
+  judgement on every write); whether to schedule V-1..V-4.
+
+---
+
+## B-11 No tool-use evaluation harness (decisions are argued, not measured)
+
+*Raised 2026-07-30 alongside B-10 · kind: gap · status: **open***
+
+**Observed.** Every tool-surface decision in B-10 — which tools to delete, `domain.verb` vs `verb_domain`,
+whether to consolidate, whether progressive disclosure helps or hurts — is **empirically decidable**, and we
+decided all of them by argument. Anthropic's guidance is built around running an evaluation; we have none.
+The owner scoped this as a **second, parallel line** to the Phase TR toolset work.
+
+**Existing position is better than expected.** Phoenix is already in the stack
+(`infra/docker-compose.yml`, `--profile observability`, healthy on `:6006`), `.env` has
+`OTEL_ENABLED=true` + `OTEL_CAPTURE_MESSAGE_CONTENT=true`, and `app/observability/genai.py` already writes
+OpenInference attributes on every provider call:
+
+- `llm.tools.{i}.tool.json_schema` — **every tool schema offered, per call**
+- `llm.output_messages.0.message.tool_calls.{j}.tool_call.function.name` / `.arguments` — what was chosen
+- `gen_ai.tool.name`, `agent.tool.success` on `execute_tool` spans; token counts on `chat` spans
+
+So the measurement substrate for a baseline **already exists in production traces** — no new
+instrumentation is needed to start.
+
+### Staged plan
+
+**E0 — mine existing traces (near-zero cost; do this FIRST).** Query Phoenix spans and compute: tool-JSON
+bytes per call; **per-tool call frequency, including the never-called set**; tool error rate and invalid-
+argument rate; tool calls and round trips per turn. This alone converts several B-10 judgement calls into
+measurements — if `list_notifications` / `reindex_knowledge_source` / `drive_make_folder` are never called
+across all history, deleting them stops being an opinion; and `drive_restore` should show up as *called and
+failed* with a hallucinated id, which would be direct proof of the B-10 bug.
+
+**E1 — dataset.** Build a Phoenix Dataset of ~30-50 tasks, curated from real spans plus hand-written edge
+cases, covering the v1 workflows (inbox triage, todo+reminder, knowledge retrieval, Drive, scheduling,
+project coding). Follow the source guidance: realistic, **multi-step**, each paired with a verifiable
+outcome; avoid trivial single-call prompts; record expected tool chains as metadata **without
+over-specifying** (multiple valid paths exist).
+
+**E2 — experiment + evaluators.** Task = drive one real Sherpa run per example. Evaluators should be
+**mostly CODE, not LLM-judge** — Sherpa's own-data domain has verifiable terminal DB state (was the to-do
+created? are the fields right? was the reminder linked?), which is a structural advantage over generic agent
+evals. Reserve LLM-as-judge for answer quality/hallucination. Also score the cheap mechanical metrics: tool
+calls, round trips, tool errors, tool-JSON bytes, tokens.
+
+**E3 — A/B the tool surface.** This is where the two lines meet: each toolset design becomes one experiment
+over the same dataset — V0 today's flat 47 · V1 slimmed · V2 + `domain.verb` · V3 + catalog/progressive
+disclosure · V4 + vertical consolidation · V-alt `verb_domain` (to settle the naming question Anthropic
+says is LLM-dependent). Compare task success, tool calls, tokens, error rate.
+
+### Prerequisites and hazards
+
+- **Isolation.** Evals execute *real* runs and write real data. They must not touch the dev workspace —
+  reuse the ADR-044 harness (`<app_db>_test`, Redis db 15, synthetic owner) rather than inventing a second
+  isolation mechanism.
+- **Real model required.** The mock provider cannot evaluate tool *choice*, so evals must run against the
+  litellm proxy: budget for cost and non-determinism (pin temperature, sample repeatedly, report variance).
+  This is the opposite of the `pytest` rule (deterministic, mock-only) and must not be conflated with it.
+- **Sequencing.** The two lines are *not* fully parallel at the start: **E0 should land before the B-10
+  deletion decisions**, because it is nearly free and removes the guesswork. E1-E3 then run in parallel with
+  Phase TR P2/P3.
+- Needs an ADR before implementation (new tooling: Phoenix datasets/experiments as a dev-time dependency),
+  per AGENTS.md §1/§2.

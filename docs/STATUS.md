@@ -2,7 +2,7 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Unscheduled findings from manual testing live in [`backlog.md`](backlog.md) (B-1…B-9; **B-1 + B-3 + B-4 + B-7 fixed 2026-07-28**, **B-5 + B-6 shipped 2026-07-29**, **B-9 fixed 2026-07-29**; **B-2 / B-8 still open — architecture approved 2026-07-30, Phase TR P0 + P1 shipped, P2–P5 not started**). ✅ **B-9 is fixed ([ADR-044](decisions.md))**: `uv run pytest` now provisions and uses a dedicated `<app_db>_test` database, Redis logical db 15 and a synthetic owner, so it is safe to run **with the stack and worker up** and can no longer touch dev data. The old "stop the worker / point `DATABASE_URL` at `sherpa_test` by hand" workaround is retired.
+> Unscheduled findings from manual testing live in [`backlog.md`](backlog.md) (B-1…B-11; **B-1 + B-3 + B-4 + B-7 fixed 2026-07-28**, **B-5 + B-6 shipped 2026-07-29**, **B-9 fixed 2026-07-29**; **B-2 / B-8 still open — architecture approved 2026-07-30, Phase TR P0 + P1 shipped, P2–P5 not started**; **B-10 / B-11 opened 2026-07-30** by the owner's P2 design review — see the "P2 design review" note below). ✅ **B-9 is fixed ([ADR-044](decisions.md))**: `uv run pytest` now provisions and uses a dedicated `<app_db>_test` database, Redis logical db 15 and a synthetic owner, so it is safe to run **with the stack and worker up** and can no longer touch dev data. The old "stop the worker / point `DATABASE_URL` at `sherpa_test` by hand" workaround is retired.
 >
 > 🏗 **B-2 + B-8 are one program now.** Triage on 2026-07-30 established that the oversized flat tool surface and the always-failing `project_run` are two faces of the same defect, and the owner approved a **clean-break** unified architecture: [ADR-045](decisions.md#adr-045) (umbrella) · [ADR-046](decisions.md#adr-046) (tool catalog + resolver + progressive disclosure) · [ADR-047](decisions.md#adr-047) (tar workspace transport) · [ADR-048](decisions.md#adr-048) (RuntimeSession + `fs`/`sh`/`run`). Contracts are updated and marked `[shipped]`/`[target]`/`[deleted]`; the execution plan is [`IMPLEMENTATION.md` **Phase TR**](IMPLEMENTATION.md) (P0–P5), **approved by the owner 2026-07-30**. 🚧 **P0 (TR.5 honesty pass) and P1 (TR.6 baseline squash + legacy deletion) are shipped**; the destructive TR.3 reset **has been run** (schema is now the single `0001_baseline`). **P2–P5 have not started and neither backlog item is fixed** — P0 made the sandbox failure legible and P1 cleared the ground; neither made the sandbox work or shrank the tool surface (52 → 47 tools is deletion, not the catalog).
 >
@@ -108,6 +108,41 @@ among P1's deletions. They are **P4** ([TR.9](IMPLEMENTATION.md)), not P1, and t
 `ToolsetResolver`, `tools.search`/`tools.load`, byte budget) and **P3** replaces the bind mount with
 tar ingress/egress plus a first-party runner image. They are disjoint by file ownership (TR.4) and
 may be built in parallel; both must merge before **P4** (`RuntimeSession` + `fs`/`sh`/`run`).
+
+**⚠ P2 design review (2026-07-30, owner-led) — P2 gains a slimming step before the catalog.**
+The owner challenged the plan: *progressive disclosure is the classic answer to an oversized toolset,
+but we never did the cheap compression that should come first.* Measurement agreed, so the plan
+changed. Recorded in [`backlog.md` **B-10**](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)
+and [**B-11**](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured);
+[ADR-046](decisions.md#adr-046) amended (修订 A). Key measured findings:
+- **Baseline correction.** 19,848 B was the **pre-P1, 52-tool** number. Today: **47 tools / 17,432 B**
+  (compact) / **18,303 B** (default separators) — recompute every "−70%" claim against these. The
+  general-chat core measures **3,627 B** today, so `TOOL_CATALOG_CORE_MAX_BYTES=6144` is a **ratchet with
+  2,517 B of headroom**, not a stretch goal; the win is *not sending the other 37 tools*.
+- **Descriptions are 38%** of the surface (6,625 B; worst: `project_run` 641 chars) and unbudgeted →
+  add a per-tool description byte cap at startup, beside the name regex.
+- **Never-audited dead tools**: `echo` (dev leftover, and SAFE-tier), `accept_candidate` (a strict subset
+  of `edit_candidate`), plus 4 owner decisions. **`drive_restore` is structurally uncallable** — it needs
+  `node_id` and **no tool ever emits one** (`drive_tools.py:105-110`, `:129-133`), so the model can only
+  call it with a hallucinated id.
+- **But slimming cannot replace the catalog**: fully slimmed is ~12,137 B (still 2× the budget), and P4's
+  11 new tools eat the saving back. Compression shifts the curve once; the catalog changes its slope.
+- **Horizontal `domain(action, …)` merging stays rejected — with corrected reasons.** ADR-046's grounds ②
+  (effect-class) and ③ (approval scope) are **undone by its own §决策6** (args-aware policy). What remains
+  is ① — `app/tools/validate.py` is not a JSON-Schema engine, so merging `update_todo` would make
+  `if_version` un-requirable and **delete the optimistic-concurrency guard** — plus ④ model weakness at
+  discriminated unions.
+- **New ADR-046 §决策10: consolidate only on the *vertical* (workflow) axis**, never the horizontal (CRUD)
+  one; cross-domain `list(kind)` is forbidden. Vertical candidates (`todo.create(…, remind_at?)`,
+  `inbox.accept(…, patch?, remind_at?)`, `today()`, `knowledge.add(query_or_path)`) are parked in B-10.
+  Borrowed from CLI practice: **drop `run.test`/`run.lint` from P4** (pure sugar over `sh.exec`), and keep
+  `fs.*` separate (CLI agents keep Read/Edit out of Bash for exactly Sherpa's reasons).
+- **Methodology gap (B-11).** All of the above is empirically decidable and we decided it by argument.
+  Phoenix is already up with `OTEL_CAPTURE_MESSAGE_CONTENT=true` and already records
+  `llm.tools[].tool.json_schema` + every `tool_call` name, so a **zero-cost baseline (E0: mine existing
+  traces for per-tool call frequency, never-called tools, error rates, bytes/call)** is available now and
+  should land **before** the B-10 deletion decisions. E1–E3 (Phoenix dataset → experiment → A/B the tool
+  surface) run parallel to Phase TR and need their own ADR.
 
 **Close criteria:** B-2 closes at the end of **P2** (general-chat tool JSON ≤ 6,144 bytes, down from
 the measured 19,848; core is a byte-true cache prefix; discovery verified in the agent lane). B-8
