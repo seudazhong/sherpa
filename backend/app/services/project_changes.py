@@ -29,7 +29,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.files import build_object_store
 from app.models import (
     DriveNode,
     Project,
@@ -40,6 +39,7 @@ from app.models import (
     ProjectWorkingCopy,
     StorageBlob,
 )
+from app.objectstore import build_object_store
 from app.services import drive as drive_svc
 from app.services import project_workcopy as wc_svc
 from app.services.context import CallerContext

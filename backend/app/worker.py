@@ -653,7 +653,7 @@ async def project_import_job(ctx: dict[str, Any], tenant_id: str, project_id: st
     """Process one durable Project archive-import job (ADR-037 W2a): stage → bounded
     expand → materialize the initial immutable snapshot → atomic activate. Re-entrant;
     the project/snapshot/job rows are the recovery source of truth."""
-    from app.files import build_object_store
+    from app.objectstore import build_object_store
     from app.services import projects_import as pimp
 
     async with SessionLocal() as session:

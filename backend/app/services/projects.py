@@ -523,7 +523,7 @@ async def read_file(
     blob = await db.get(StorageBlob, (ctx.tenant_id, project.user_id, entry.content_hash))
     if blob is None:
         raise NotFound("blob missing")
-    from app.files import build_object_store
+    from app.objectstore import build_object_store
 
     data = await build_object_store().get(blob.object_key)
     return entry, data[:max_bytes]

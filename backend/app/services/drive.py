@@ -35,7 +35,6 @@ from sqlalchemy import case, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.files import build_object_store
 from app.models import (
     DriveNode,
     DriveVersion,
@@ -44,6 +43,7 @@ from app.models import (
     StorageAccount,
     StorageBlob,
 )
+from app.objectstore import build_object_store
 from app.services.context import CallerContext
 from app.services.errors import (
     Conflict,

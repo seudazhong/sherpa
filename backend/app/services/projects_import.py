@@ -20,13 +20,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.files import build_object_store
 from app.models import (
     GithubConnection,
     Project,
     ProjectImportJob,
     ProjectSource,
 )
+from app.objectstore import build_object_store
 from app.services import github_source as gh
 from app.services import projects as projects_svc
 from app.services.archive import ArchiveBounds, ArchiveEntry, ArchiveError, expand_archive

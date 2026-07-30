@@ -277,7 +277,7 @@ async def process_ingestion(
     ):
         # The backing file changed since enqueue; a newer generation will index it.
         return await _fail(source, version, job, code="file_changed", fail_source=False)
-    from app.files import build_object_store
+    from app.objectstore import build_object_store
 
     await build_object_store().put(version.snapshot_object_key, data, node.content_type)
 

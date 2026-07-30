@@ -317,7 +317,7 @@ async def sweep_orphan_snapshots(db: AsyncSession) -> int:
     """Delete immutable snapshot objects with no owning version row (removed/superseded
     sources). Content-addressed keys live under the `knowledge/` prefix; deletion is
     never inline (mirrors the Drive blob GC, ADR-030)."""
-    from app.files import build_object_store
+    from app.objectstore import build_object_store
 
     live = set(
         (await db.execute(select(KnowledgeSourceVersion.snapshot_object_key))).scalars().all()

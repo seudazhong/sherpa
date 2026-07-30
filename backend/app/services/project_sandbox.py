@@ -31,8 +31,8 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.files import build_object_store
 from app.models import ProjectSandboxRun, ProjectWorkingCopy, StorageBlob
+from app.objectstore import build_object_store
 from app.sandbox import project_sandbox as psbx
 from app.sandbox import runner
 from app.services import drive as drive_svc

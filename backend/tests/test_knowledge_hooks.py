@@ -14,8 +14,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionLocal, ping_db
-from app.files import build_object_store
 from app.models import KnowledgeSourceVersion, Tenant, User
+from app.objectstore import build_object_store
 from app.services import CallerContext, NotFound
 from app.services import drive as drive_svc
 from app.services import knowledge as ksvc

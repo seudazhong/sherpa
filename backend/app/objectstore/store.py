@@ -1,9 +1,10 @@
-"""Object storage for personal files (ADR-012; milestone 2).
+"""Object storage adapter (ADR-030 content-addressed bytes).
 
 Pluggable backend: MinIO (S3-compatible) for the running stack, and an in-memory
-backend for offline dev / tests. Object **keys are server-generated** (a uuid,
-never the user's path) to avoid traversal; the ``files`` table maps a logical
-per-user path → key. The MinIO client is synchronous, so calls run in a thread.
+backend for offline dev / tests. Object **keys are server-generated** (a uuid, never a
+user-supplied path) to avoid traversal; ``storage_blobs`` maps a content hash → key for
+Drive, Knowledge, Projects and chat attachments. The MinIO client is synchronous, so
+calls run in a thread.
 """
 
 from __future__ import annotations
