@@ -1015,17 +1015,14 @@ async def gc_unreferenced_blobs(db: AsyncSession) -> int:
 async def sweep_orphan_objects(db: AsyncSession) -> int:
     """Delete store objects that have no blob row (crash after write, before commit).
 
-    Legacy ``files`` object keys are still live during the transition (ADR-030), so
-    they are kept in the known set and never swept.
+    ``storage_blobs`` is the only object-key authority: the legacy ``files`` stack was
+    deleted outright by ADR-045/046 (clean break, no transition window).
     """
-    from app.models import File
-
     store = build_object_store()
     keys = await store.list_keys("")
     if not keys:
         return 0
     known = set((await db.execute(select(StorageBlob.object_key))).scalars().all())
-    known.update((await db.execute(select(File.object_key))).scalars().all())
     removed = 0
     for key in keys:
         # Project archive-import staging objects (ADR-037) are transient job inputs,

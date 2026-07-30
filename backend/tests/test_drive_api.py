@@ -94,32 +94,6 @@ async def test_drive_rest_end_to_end() -> None:
 
 
 @pytest.mark.asyncio
-async def test_drive_files_migrated_visible() -> None:
-    """A file created via the legacy /files surface stays downloadable there."""
-    if not await ping_db() or not await ping_redis():
-        pytest.skip("database or redis not reachable")
-    await _drop_owner()
-    transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        login = await client.post(
-            "/auth/login",
-            json={"email": settings.owner_email, "password": settings.owner_password},
-        )
-        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
-        up = await client.post(
-            "/files",
-            data={"path": "legacy/note.txt"},
-            files={"upload": ("note.txt", b"legacy bytes", "text/plain")},
-            headers=headers,
-        )
-        assert up.status_code == 201, up.text
-        fid = up.json()["id"]
-        dl = await client.get(f"/files/{fid}/content")
-        assert dl.status_code == 200
-        assert dl.content == b"legacy bytes"
-
-
-@pytest.mark.asyncio
 async def test_upload_filename_with_path_is_stored_as_base_name() -> None:
     """A directory-picked upload sends its RELATIVE PATH as the multipart filename.
 

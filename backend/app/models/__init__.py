@@ -19,7 +19,6 @@ from app.models.core import (
 from app.models.drive import DriveNode, DriveVersion, StorageAccount, StorageBlob
 from app.models.effects import ApprovalEnvelope, EffectInvocation
 from app.models.events import EventJournal, Outbox
-from app.models.files import File
 from app.models.github import GithubConnection
 from app.models.grants import PermissionGrant
 from app.models.knowledge import (
@@ -76,7 +75,6 @@ __all__ = [
     "AuditReceipt",
     "UserMemory",
     "MemoryPassage",
-    "File",
     "ChannelConfig",
     "ChannelThreadState",
     "SessionSearchEntry",
