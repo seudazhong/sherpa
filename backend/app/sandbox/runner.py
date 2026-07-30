@@ -1,27 +1,23 @@
-"""Hardened code-execution sandbox (ADR-007/025) + shared runtime failure vocabulary.
+"""Hardened runtime failure vocabulary for the code-execution sandbox (ADR-007/025).
 
-Each run executes a Python snippet in an ephemeral, **network-disabled** Docker
-container with all capabilities dropped, non-root user, read-only rootfs (+ a
-small tmpfs /tmp), and memory / pids / CPU / wall-clock caps; the container is
-removed afterwards. ``SANDBOX_KIND=disabled`` (default) returns a clear
-not-enabled result for offline dev / tests; the real docker path is exercised in
-the browser. ``_execute`` is module-level so tests can substitute a fake.
+This module owns the **named runtime termination reasons** shared by every sandbox
+entry point (today :mod:`app.sandbox.project_sandbox`; events §2.11 ④ / api §10.7).
+Every container-path failure gets its OWN name: the old blanket ``sandbox_unavailable``
+made an unreachable daemon, a missing image and a failed create indistinguishable
+(backlog B-8). The named reason travels on ``RunResult.error``; the **raw** failure text
+travels separately on ``RunResult.error_detail`` and is for the operator log only — the
+model sees a static, redacted sentence (``runtime_failure_note``), never a host path or
+exception text (ADR-019).
 
-This module also owns the **named runtime termination reasons** shared with
-:mod:`app.sandbox.project_sandbox` (events §2.11 ④ / api §10.7). Every container-path
-failure gets its OWN name: the old blanket ``sandbox_unavailable`` made an unreachable
-daemon, a missing image and a failed create indistinguishable (backlog B-8). The named
-reason travels on ``RunResult.error``; the **raw** failure text travels separately on
-``RunResult.error_detail`` and is for the operator log only — the model sees a static,
-redacted sentence (``runtime_failure_note``), never a host path or exception text (ADR-019).
+The general-purpose ``run_code`` snippet runner that used to live here is **deleted**
+(ADR-045 clean break / ADR-048 O-12): ephemeral execution is reached through
+``runtime.open(scope="ephemeral")`` + ``sh.exec``, so there is exactly one sandbox code
+path instead of two.
 """
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
-
-from app.config import settings
 
 # --- named runtime termination reasons (events §2.11 ④) ---------------------
 
@@ -82,73 +78,3 @@ def named_failure(reason: str, exc: BaseException) -> RunResult:
 def unmodelled_failure(exc: BaseException) -> RunResult:
     """``error:<class>`` — the contract's catch-all for a failure we did not model."""
     return named_failure(f"error:{type(exc).__name__}", exc)
-
-
-def _run_docker(code: str) -> RunResult:
-    import docker
-    from docker.errors import APIError, DockerException, ImageNotFound
-
-    try:
-        client = docker.from_env()
-    except DockerException as exc:
-        return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
-    except Exception as exc:  # noqa: BLE001 - classify and observe, never crash the loop
-        return unmodelled_failure(exc)
-
-    try:
-        container = client.containers.run(
-            settings.sandbox_image,
-            command=["python", "-I", "-B", "-c", code],
-            network_disabled=True,
-            mem_limit=f"{settings.sandbox_mem_mb}m",
-            pids_limit=settings.sandbox_pids_limit,
-            nano_cpus=1_000_000_000,
-            cap_drop=["ALL"],
-            security_opt=["no-new-privileges"],
-            read_only=True,
-            tmpfs={"/tmp": "size=32m,mode=1777"},
-            user="nobody",
-            working_dir="/tmp",
-            detach=True,
-        )
-    except ImageNotFound as exc:
-        return named_failure(RUNTIME_IMAGE_MISSING, exc)
-    except (APIError, DockerException) as exc:
-        return named_failure(RUNTIME_START_FAILED, exc)
-    except Exception as exc:  # noqa: BLE001
-        return unmodelled_failure(exc)
-
-    timed_out = False
-    try:
-        try:
-            res = container.wait(timeout=settings.sandbox_timeout_seconds)
-            exit_code = int(res.get("StatusCode", -1))
-        except Exception:
-            timed_out = True
-            exit_code = -1
-            try:
-                container.kill()
-            except Exception:
-                pass
-        try:
-            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", "replace")
-            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", "replace")
-        except Exception as exc:  # noqa: BLE001
-            return named_failure(RUNTIME_TRANSPORT_FAILED, exc)
-        return RunResult(stdout, stderr, exit_code, timed_out)
-    finally:
-        try:
-            container.remove(force=True)
-        except Exception:
-            pass
-
-
-async def _execute(code: str) -> RunResult:
-    return await asyncio.to_thread(_run_docker, code)
-
-
-async def run_code(code: str) -> RunResult:
-    """Run a Python snippet in the sandbox (or report a named reason why it could not)."""
-    if settings.sandbox_kind != "docker":
-        return RunResult("", "", -1, False, error=SANDBOX_DISABLED)
-    return await _execute(code)

@@ -135,12 +135,14 @@ class Settings(BaseSettings):
     otel_capture_message_content: bool = False
     otel_traces_sampler: str = "always_on"
 
-    # Code execution sandbox (ADR-007/025). "disabled" (default) keeps dev/tests
-    # offline; "docker" runs each snippet in a hardened ephemeral container
-    # (no network, dropped caps, non-root, read-only rootfs, mem/pids/time caps).
+    # Container sandbox (ADR-025/039/047). "disabled" (default) keeps dev/tests offline;
+    # "docker" runs each project command in a hardened ephemeral container (no network,
+    # dropped caps, non-root, read-only rootfs, mem/pids/time caps). The general-purpose
+    # `run_code` snippet runner is deleted (ADR-048 O-12), so SANDBOX_TIMEOUT_SECONDS —
+    # which only ever bounded that snippet — goes with it; the project wall clock is
+    # SANDBOX_RUN_TIMEOUT_SECONDS below.
     sandbox_kind: str = "disabled"
     sandbox_image: str = "python:3.11-slim"
-    sandbox_timeout_seconds: int = 10
     sandbox_mem_mb: int = 256
     sandbox_pids_limit: int = 128
 

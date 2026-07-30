@@ -1,6 +1,6 @@
 # sandbox
 
-代码执行编排。`run_code`/`bash` 工具调这里起隔离容器。
+代码执行编排。项目命令（`app/services/project_sandbox.py`）调这里起隔离容器；本目录同时是**具名终止原因**（events §2.11 ④）的唯一词表。通用 `run_code` 片段执行器已**删除**（ADR-045 clean break / ADR-048 O-12），临时执行改由 `runtime.open(scope="ephemeral")` + `sh.exec` 承载（Phase TR P4）。
 
 ## 模型（已锁定）
 - **ephemeral 每次一容器**：起容器 → 挂该 user 的 workspace 卷 → 执行 → 销毁。

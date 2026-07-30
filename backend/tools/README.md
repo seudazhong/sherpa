@@ -13,7 +13,7 @@
 
 ## 起步工具箱（信任分级）
 - SAFE：`read/glob/grep` · `todo_write` · `memory_*` · `web_fetch` · `ask_user`。
-- FULL(+)：`write/edit` · `run_code/bash`(沙箱) · `connector_*` · `task`。
+- FULL(+)：`write/edit` · `sh.exec`(沙箱，Phase TR P4) · `connector_*` · `task`。（`run_code` 与遗留 `file_*` 已在 Phase TR P1 删除。）
 
 ## 铁律
 - schema 校验后执行；错误当观察。

@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from app.sandbox.runner import RunResult, run_code
+from app.sandbox.runner import RunResult
 
-__all__ = ["run_code", "RunResult"]
+__all__ = ["RunResult"]
