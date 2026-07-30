@@ -502,6 +502,39 @@ measurements — if `list_notifications` / `reindex_knowledge_source` / `drive_m
 across all history, deleting them stops being an opinion; and `drive_restore` should show up as *called and
 failed* with a hallucinated id, which would be direct proof of the B-10 bug.
 
+> **⚠ Three corrections from actually running E0 on 2026-07-30.** The mechanism works; the assumptions did
+> not survive contact.
+>
+> **(a) There is no history to mine — Phase TR P1 destroyed it.** Phoenix persists into the *same* Postgres
+> (`phoenix` schema, `PHOENIX_SQL_DATABASE_URL` in `infra/docker-compose.yml:231`) on the *same* `pgdata`
+> volume, so P1's `docker compose down -v` wiped the trace corpus along with the app data. Measured
+> immediately after: **18 spans total (6 `execute_tool`, 8 `chat`), all dated 2026-07-30.** So E0 is not
+> "mine the past", it is **"the queries are proven; now generate a corpus"** — either by deliberate usage
+> before E1, or by folding E0's metrics into E1/E2 as reporting. **Operational note: any future destructive
+> reset nukes the eval history too** — if trace history becomes an asset, it needs to stop sharing the
+> volume's fate.
+>
+> The query shape is proven and worth keeping:
+> ```sql
+> SELECT attributes->'gen_ai'->'tool'->>'name' AS tool, count(*) AS calls,
+>        count(*) FILTER (WHERE (attributes->'agent'->'tool'->>'success')='false') AS failures
+> FROM phoenix.spans WHERE name='execute_tool' GROUP BY 1 ORDER BY 2 DESC;
+> ```
+>
+> **(b) `agent.tool.success` does NOT capture semantic failure — do not use it as the error metric.**
+> Verified on the corpus: `project_run`, the tool that **always fails** (B-8), records `status_code=UNSET`
+> and is *not* counted as a failure. That is correct behaviour, not a bug: errors from tools are
+> **observations** fed back to the model, never exceptions (AGENTS.md §4), so the tool "succeeded" at
+> returning a failure observation. **Consequence for E2: evaluators must score terminal DB state and
+> observation content, not the success flag.** A harness built on `agent.tool.success` would have scored
+> B-8 as passing.
+>
+> **(c) Tool *result* content is not on the tool span.** `capture_llm_io` runs only at the provider-call
+> boundary, so `execute_tool` spans carry no `output.value` (confirmed empty). Results are recoverable
+> indirectly from the **next** `chat` span's `llm.input_messages.{i}.message.content` where the role is
+> `tool`. Either accept that indirection in the E0/E2 queries or extend capture to the tool span — an
+> explicit decision for the B-11 ADR.
+
 **E1 — dataset.** Build a Phoenix Dataset of ~30-50 tasks, curated from real spans plus hand-written edge
 cases, covering the v1 workflows (inbox triage, todo+reminder, knowledge retrieval, Drive, scheduling,
 project coding). Follow the source guidance: realistic, **multi-step**, each paired with a verifiable
@@ -512,7 +545,11 @@ over-specifying** (multiple valid paths exist).
 **mostly CODE, not LLM-judge** — Sherpa's own-data domain has verifiable terminal DB state (was the to-do
 created? are the fields right? was the reminder linked?), which is a structural advantage over generic agent
 evals. Reserve LLM-as-judge for answer quality/hallucination. Also score the cheap mechanical metrics: tool
-calls, round trips, tool errors, tool-JSON bytes, tokens.
+calls, round trips, tool errors, tool-JSON bytes, tokens. **Per correction (b) above, "tool errors" must be
+derived from observation content or terminal state, never from `agent.tool.success`.** The self-hosted
+Phoenix already carries the full harness schema (`datasets`, `dataset_examples`, `dataset_splits`,
+`experiments`, `experiment_runs`, `code_evaluators`, `llm_evaluators`, `builtin_evaluators` in the `phoenix`
+schema), so no new datastore is needed.
 
 **E3 — A/B the tool surface.** This is where the two lines meet: each toolset design becomes one experiment
 over the same dataset — V0 today's flat 47 · V1 slimmed · V2 + `domain.verb` · V3 + catalog/progressive
@@ -527,8 +564,11 @@ says is LLM-dependent). Compare task success, tool calls, tokens, error rate.
 - **Real model required.** The mock provider cannot evaluate tool *choice*, so evals must run against the
   litellm proxy: budget for cost and non-determinism (pin temperature, sample repeatedly, report variance).
   This is the opposite of the `pytest` rule (deterministic, mock-only) and must not be conflated with it.
-- **Sequencing.** The two lines are *not* fully parallel at the start: **E0 should land before the B-10
-  deletion decisions**, because it is nearly free and removes the guesswork. E1-E3 then run in parallel with
-  Phase TR P2/P3.
+- **Sequencing.** The two lines are *not* fully parallel at the start: **E0's queries should be run before
+  the B-10 deletion decisions** — but see correction (a): the corpus was destroyed by P1, so "run E0" now
+  means *generate usage, then measure*, not *query history*. If building a corpus is too slow to gate B-10,
+  fall back to shipping the five **confirmed** deletions (which need no evidence: `echo` is a dev leftover
+  and `drive_restore` is provably uncallable) and hold the four **owner-decision** ones for E0/E1 data.
+  E1–E3 then run in parallel with Phase TR P2/P3.
 - Needs an ADR before implementation (new tooling: Phoenix datasets/experiments as a dev-time dependency),
   per AGENTS.md §1/§2.
