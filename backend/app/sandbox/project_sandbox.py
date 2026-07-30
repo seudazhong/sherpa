@@ -22,7 +22,8 @@ container runner:
 
 ``_execute_in_scratch`` is module-level so tests can substitute a fake (mirrors
 ``app.sandbox.runner``). Nothing here mutates the database; the durable overlay persist +
-``project_sandbox_runs`` bookkeeping live in :mod:`app.services.project_sandbox`.
+the ``project_runtime_sessions``/``project_exec_runs`` bookkeeping live in
+:mod:`app.services.project_sandbox`.
 """
 
 from __future__ import annotations

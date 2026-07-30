@@ -332,14 +332,15 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研�
 
 ---
 
-## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 🚧 **P0 SHIPPED · P1–P5 NOT STARTED**
+## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 🚧 **P0 + P1 SHIPPED · P2–P5 NOT STARTED**
 
 > Closes backlog **B-2** (52 flat tools) and **B-8** (`project_run` always fails) as one program.
 > Architecture approved by the owner 2026-07-30 ([ADR-045](decisions.md#adr-045) umbrella,
 > [ADR-046](decisions.md#adr-046) tool catalog, [ADR-047](decisions.md#adr-047) tar transport,
 > [ADR-048](decisions.md#adr-048) RuntimeSession). **Execution plan approved by the owner
-> 2026-07-30.** **P0 (TR.5, honesty pass) is shipped**; P1–P5 have not started, and the
-> destructive baseline reset of TR.3 has **not** been run.
+> 2026-07-30.** **P0 (TR.5, honesty pass) and P1 (TR.6, baseline squash + legacy deletion) are
+> shipped**, and the destructive baseline reset of TR.3 **has been run** (once, as designed —
+> the schema is now the single `0001_baseline`). P2–P5 have not started.
 
 ### TR.0 Owner approval checklist — defaults already approved (2026-07-30)
 
@@ -421,7 +422,7 @@ docker build -t sherpa-sandbox-runner:dev sandbox-runner/
 docker image inspect sherpa-sandbox-runner:dev --format '{{index .RepoDigests 0}}'
 ```
 
-### TR.3 Destructive reset procedure (baseline squash) — **P1 only, and only once**
+### TR.3 Destructive reset procedure (baseline squash) — **P1 only, and only once** — ✅ **RUN 2026-07-30**
 
 This **destroys the dev database, Redis and MinIO volumes**. It is approved, but it is irreversible,
 so run it deliberately.
@@ -502,7 +503,7 @@ is preserved: a runtime failure still persists the host-side edits. Gate: full `
 **Not done in P0 (by design):** the bind mount itself (P3), the async worker-executed REST lane and
 the human Run control (P4/P5). B-8 stays **open**.
 
-### TR.6 P1 — Baseline squash + legacy deletion
+### TR.6 P1 — Baseline squash + legacy deletion — ✅ **SHIPPED 2026-07-30**
 
 | # | Task | Paths | AC |
 |---|---|---|---|
@@ -526,6 +527,37 @@ records themselves plus historical ADR-025/ADR-039 "never mount" lists and the
 
 **P1 exit:** one Alembic revision; no legacy files stack; no `run_code`; no `WORKSPACE_ROOT`; the
 dev stack is rebuilt from empty and healthy.
+
+**P1 exit result (2026-07-30 — met).** Five commits, one per task. The reset was executed
+deliberately: `docker compose down -v` destroyed `pgdata`/`redisdata`/`miniodata`, and the rebuilt
+stack's `migrate` service ran `-> 0001` on an empty database. `alembic heads` shows **exactly one
+head**. The baseline was audited **mechanically, not by eye**: a normalized statement-set diff of
+`pg_dump` at 0032 vs `pg_dump` after the rebuild shows **15 statements removed — every one owned by
+`files` or `project_sandbox_runs` — and 17 added — every one owned by `project_runtime_sessions` or
+`project_exec_runs` — with no other difference**. (Postgres flattens `((A AND B) AND C)` to
+`(A AND B AND C)` when it re-parses a dumped CHECK; the audit normalizes parentheses/whitespace and
+nothing else.) Live schema vs `Base.metadata`: 52 = 52, only `alembic_version` extra.
+
+**Sequencing tension, resolved explicitly.** The baseline must remain the *only* revision and must
+never require a follow-up migration, so the ORM had to move with it: `ProjectSandboxRun` is replaced
+by `ProjectRuntimeSession` + `ProjectExecRun` (declarative definitions), and the existing W3
+bookkeeping was re-pointed at them — `run_sandbox` opens one runtime session per boundary, records a
+command as one exec run, and **closes the session on every exit** so the `uq_prs_live` partial unique
+index can never block the next boundary. This is schema/persistence alignment only. **P4 behavior is
+not implemented**: no `runtime.open`/`runtime.close`, no `sh.exec`, no tar transport, no async 202
+REST, no three-column UI, and `project_run`/`project_tree`/`project_read` still exist (their deletion
+is TR.9 P4). `project_run` still bind-mounts and still fails identically — it now records its named
+exit on the right rows. `SandboxRunState.warm` was dropped (ADR-047 §7: never implemented).
+
+**Deliberately not added to the baseline:** the immutability triggers and PL/pgSQL function sketched
+in `contracts/data-model.md` §Alembic item 1. They exist in no shipped migration and in no database;
+a squash is not the place to introduce new enforcement, which needs its own ADR and tests.
+
+Gate: `uv run pytest` **385 passed** (the ADR-044 harness created `sherpa_test` from scratch; 397 →
+385 is exactly the 12 tests deleted with the dead code), ruff + `ruff format --check` + `mypy app`
+clean, `npm run lint` + `npm run build` green, `/health` + `/readyz` ok on the rebuilt stack.
+Measured tool surface **52 → 47 tools / 19,848 → 18,397 B** — deletion, **not** the B-2 fix.
+**B-2 and B-8 both stay open.**
 
 ### TR.7 P2 — Tool catalog, resolver, discovery (closes B-2)
 

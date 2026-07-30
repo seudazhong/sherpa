@@ -9,17 +9,17 @@
 | # | Kind | Item | Status |
 | --- | --- | --- | --- |
 | B-1 | bug | [Chat header shows a stale hard-coded model](#b-1-chat-header-shows-a-stale-hard-coded-model) | ✅ done |
-| B-2 | design | [Built-in tool surface is too large (53 tools)](#b-2-built-in-tool-surface-is-too-large-53-tools) | open · 🏗 architecture approved (ADR-045/046) |
+| B-2 | design | [Built-in tool surface is too large (53 tools)](#b-2-built-in-tool-surface-is-too-large-53-tools) | open · 🚧 Phase TR **P0 + P1 shipped** (52 → 47 by deletion); catalog is P2 |
 | B-3 | bug | [The model cannot see the chat's bound project](#b-3-the-model-cannot-see-the-chats-bound-project) | ✅ done |
 | B-4 | bug/dx | [OTel tracing silently off after a stack restart](#b-4-otel-tracing-silently-off-after-a-stack-restart) | ✅ done |
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | open |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
-| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open · 🚧 Phase TR **P0 shipped** (named exits + logging); mount still broken |
+| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open · 🚧 Phase TR **P0 + P1 shipped** (named exits + logging; bookkeeping on the target tables); **mount still broken** |
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
 
-Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2 + B-8 together** — triaged 2026-07-30 and found to be **one architecture problem, not two** (see both entries below). The owner approved the unified **clean-break** architecture ([ADR-045](decisions.md#adr-045) umbrella · [ADR-046](decisions.md#adr-046) tool catalog · [ADR-047](decisions.md#adr-047) tar transport · [ADR-048](decisions.md#adr-048) RuntimeSession); the execution plan is [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Neither item is fixed**: B-2 closes at the end of Phase TR **P2**, B-8 at the end of **P5**. The owner approved the Phase TR execution plan on 2026-07-30 and **P0 (the honesty pass) is shipped**; P1–P5 have not started.
+Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2 + B-8 together** — triaged 2026-07-30 and found to be **one architecture problem, not two** (see both entries below). The owner approved the unified **clean-break** architecture ([ADR-045](decisions.md#adr-045) umbrella · [ADR-046](decisions.md#adr-046) tool catalog · [ADR-047](decisions.md#adr-047) tar transport · [ADR-048](decisions.md#adr-048) RuntimeSession); the execution plan is [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Neither item is fixed**: B-2 closes at the end of Phase TR **P2**, B-8 at the end of **P5**. The owner approved the Phase TR execution plan on 2026-07-30 and **P0 (the honesty pass) + P1 (baseline squash + legacy deletion, including the one-time destructive dev rebuild) are shipped**; P2–P5 have not started. P1 removed the duplicate `file_*` stack and `run_code` (**52 → 47 tools / 19,848 → 18,397 B — deletion, not the catalog**) and moved the sandbox bookkeeping onto `project_runtime_sessions`/`project_exec_runs`, but it changed **no** execution path: `project_run` still bind-mounts and still fails.
 
 ---
 
@@ -49,7 +49,7 @@ model=gpt-4o-mini`. 390 px overflow = 0.
 
 ## B-2 Built-in tool surface is too large (53 tools)
 
-*Reported 2026-07-28 (manual test) · kind: design · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-046](decisions.md#adr-046)); closes at the end of [Phase TR](IMPLEMENTATION.md) **P2***
+*Reported 2026-07-28 (manual test) · kind: design · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-046](decisions.md#adr-046)); Phase TR **P1 deleted the duplicate `file_*` stack and `run_code` (52 → 47 tools / 19,848 → 18,397 B)**, which is deletion, not the fix; closes at the end of [Phase TR](IMPLEMENTATION.md) **P2***
 
 **Observed.** Asked to list its tools, the assistant enumerated **53** built-ins in one flat namespace. Every chat pays the full schema cost in the cached prefix, and the model has to disambiguate near-duplicates.
 
@@ -233,7 +233,7 @@ change, not a rename — not done here.
 
 ## B-8 `project_run` always fails with `sandbox_unavailable`
 
-*Reported 2026-07-28 (manual test) · kind: bug · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-047](decisions.md#adr-047)/[ADR-048](decisions.md#adr-048)); **Phase TR P0 (named exits + logging) shipped 2026-07-30**; closes at the end of [Phase TR](IMPLEMENTATION.md) **P5***
+*Reported 2026-07-28 (manual test) · kind: bug · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-047](decisions.md#adr-047)/[ADR-048](decisions.md#adr-048)); **Phase TR P0 (named exits + logging) and P1 (baseline squash; bookkeeping moved to `project_runtime_sessions`/`project_exec_runs`) shipped 2026-07-30 — the mount is untouched and `project_run` still fails**; closes at the end of [Phase TR](IMPLEMENTATION.md) **P5***
 
 **Observed.** In a project-bound chat, "run the helloworld code" → the model calls `project_run({"command": "python main.py"})` and gets back
 `Sandbox run sandbox_unavailable (exit -1, state persisted). No file changes were produced.`
@@ -261,7 +261,7 @@ bind source path does not exist: /app/.sherpa/scratch/<run>
 **Three secondary problems found during triage (not in the original report):**
 1. **The human Run lane never existed.** `frontend/src/api.ts:1293` defines `createSandboxRun`, but it has **no call site anywhere in the frontend**. The capability matrix (`docs/11` §9) claimed UI ✅ — corrected.
 2. **Even with the mount fixed, the REST lane would still fail, for a different reason.** `app/api/projects.py::create_sandbox_run` executes `sbx_svc.run_sandbox(...)` **synchronously inside the web process**, but `SANDBOX_KIND=docker` is set **only on the worker** (`infra/docker-compose.yml:163`) and web has no Docker socket — so it defaults to `disabled`. It also blocks the HTTP request for up to 120 s, while the contract describes it as `202`. *(P0 makes this legible — the route now reports `sandbox_disabled` rather than `sandbox_unavailable` — but does not fix it; P4/P5 do.)*
-3. **The test suite is structurally blind to this.** `tests/test_project_sandbox.py` monkeypatches `_execute_in_scratch` and `tests/test_sandbox.py` patches `_execute`; **no test in the repository ever starts a container**. That is why 297 green tests plus a two-lane Playwright pass did not catch it. P0 added a fake-docker-client lane that at least exercises the real classification branches of `_run_docker`; Phase TR **P3** still adds the real-Docker lane (`uv run pytest -m docker`) and a topology matrix, or the same failure mode returns.
+3. **The test suite is structurally blind to this.** `tests/test_project_sandbox.py` monkeypatches `_execute_in_scratch` and (until Phase TR P1 deleted it with `run_code`) `tests/test_sandbox.py` patched `_execute`; **no test in the repository ever starts a container**. That is why 297 green tests plus a two-lane Playwright pass did not catch it. P0 added a fake-docker-client lane that at least exercises the real classification branches of `_run_docker`; Phase TR **P3** still adds the real-Docker lane (`uv run pytest -m docker`) and a topology matrix, or the same failure mode returns.
 
 Also settled: `project_run` / `project_tree` / `project_read` / `run_code` are **deleted** (clean break, no shim) in favour of host-side `fs.*` plus an explicit `RuntimeSession` (`runtime.open` → `sh.exec` → `runtime.close`), so that **a sandbox outage costs the ability to run code, not the ability to edit it** — today it costs both. The `project_sandbox_runs` table is redesigned into `project_runtime_sessions` + `project_exec_runs`; `warm_until` is dropped because warm containers were never implemented in any code path.
 

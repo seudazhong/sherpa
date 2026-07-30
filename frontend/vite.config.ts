@@ -24,7 +24,6 @@ export default defineConfig({
       "/schedules": target,
       "/permissions": target,
       "/activity": target,
-      "/files": target,
       "/drive": target,
       "/projects": target,
       "/providers": target,

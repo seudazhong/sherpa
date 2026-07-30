@@ -211,8 +211,8 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 | 会话库:浏览/续跑/重命名/恢复(P0) | ✅ sessions | GET/PATCH /sessions · resume-state · recover · timeline ✅ | ❌ 不给 agent | Sessions(/history)✅ | read_only/idempotent_write | allow |
 | 会话内容搜索(P1) | ✅ search | GET /sessions?query= ✅ | ❌ 不给 agent | Sessions 搜索框 ✅ | read_only | allow |
 | 个人网盘:列/建夹/上传/下载/改名·移动/版本·恢复版本/回收站·恢复(P2) | ✅ drive | /drive/* ✅ | `drive_list`/`search`/`make_folder`/`write`/`read`/`move`/`trash`/`restore` ✅（ADR-046 改名 `drive.*`） | Drive(/workspace)✅ | idempotent_write | allow |
-| ~~个人文件工作区 `file_*`（遗留 `files` 表）~~ | ❌ **删除**（Phase TR P1） | ❌ **删除** `/files/*` | ❌ **删除** `file_write`/`file_read`/`file_list`/`file_delete` | ❌（前端早已无 Files 页） | — | — |
-| ~~通用代码执行 `run_code`~~ | ❌ **删除**（Phase TR P1） | —（本就无 REST） | ❌ **删除**，由 `runtime.open(scope="ephemeral")` + `sh.exec` 取代 | — | — | — |
+| ~~个人文件工作区 `file_*`（遗留 `files` 表）~~ | ✅ **已删除**（Phase TR P1.1, 2026-07-30） | ✅ **已删除** `/files/*`（含 vite dev proxy） | ✅ **已删除** `file_write`/`file_read`/`file_list`/`file_delete` | ❌（前端早已无 Files 页；死客户端一并删除） | — | — |
+| ~~通用代码执行 `run_code`~~ | ✅ **已删除**（Phase TR P1.2, 2026-07-30） | —（本就无 REST） | ✅ **已删除**，将由 `runtime.open(scope="ephemeral")` + `sh.exec` 取代（Phase TR P4，尚未实现） | — | — | — |
 | 个人网盘:文件夹/批量上传(ADR-042, backlog B-5) | ✅ drive(复用单文件端点) | POST /drive/folders + /drive/files ✅(**无 batch 端点**) | ❌ 不给 agent(`drive_make_folder`+`drive_write` 已等价) | Drive 「Upload folder」/多选/拖拽 + 逐文件进度 ✅ | idempotent_write | allow |
 | 个人网盘:永久删除(purge) | ✅ drive | DELETE /drive/nodes/{id} ✅ | ❌ **不给 agent**(人工/审批专属) | Drive(Delete forever + 确认)✅ | non_idempotent_write | user-only |
 | Chat 附件:上传/粘贴图片 + 从 Drive 附加(ADR-043, backlog B-6) | ✅ core/attachments.py(引用解析 + 有界装配) | POST /sessions/{id}/prompt(`attachments`) + GET /sessions/{id}/messages(附件元数据) ✅ | ❌ 不给 agent(附件是人在 composer 的输入;agent 用 `drive_read` 读同一份字节) | Chat composer:Attach / From Drive 拾取器 / 粘贴 / 可删 chip / 转录缩略图 ✅ | idempotent_write | allow |
