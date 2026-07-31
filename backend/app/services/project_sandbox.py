@@ -1,7 +1,7 @@
 """Workspace Projects W3 sandbox orchestration (ADR-040 + ADR-039).
 
 Ties the durable working copy (:mod:`app.services.project_workcopy`) to the one-time
-scratch mechanics (:mod:`app.sandbox.project_sandbox`). One ``project_run`` boundary:
+scratch mechanics (:mod:`app.sandbox.runtime`). One ``project_run`` boundary:
 
 1. acquire the working copy's single-writer lease → a fresh ``fence_token``;
 2. open a ``project_runtime_sessions`` row (``scope='project'``, ``state='opening'``);
@@ -43,8 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import ProjectExecRun, ProjectRuntimeSession, ProjectWorkingCopy, StorageBlob
 from app.objectstore import build_object_store
-from app.sandbox import project_sandbox as psbx
-from app.sandbox import runner
+from app.sandbox import runtime as sbx
 from app.services import drive as drive_svc
 from app.services import project_changes as changes_svc
 from app.services import project_workcopy as wc_svc
@@ -62,9 +61,9 @@ COMMAND_PREVIEW_MAX = 500
 #: One redacted, model-facing sentence per named exit (events §2.11 ④). These sentences are
 #: static: they name the reason and stay actionable, but they never carry the raw failure
 #: text, a host path, an image reference or a credential (ADR-019) — that detail goes to the
-#: structured worker log only. The runtime-level half is shared with :mod:`app.sandbox.runner`.
+#: structured worker log only. The runtime-level half is shared with :mod:`app.sandbox.runtime`.
 FAILURE_NOTES: dict[str, str] = {
-    **runner.RUNTIME_FAILURE_NOTES,
+    **sbx.RUNTIME_FAILURE_NOTES,
     "wall_timeout": "the command exceeded the sandbox wall-clock limit and was killed",
     "environment_missing_dependencies": (
         "the command is not available in the sandbox image; the offline sandbox never installs "
@@ -89,7 +88,7 @@ FAILURE_NOTES: dict[str, str] = {
 
 def failure_note(reason: str) -> str:
     """The redacted observation for a named exit — safe to hand to the model verbatim."""
-    return f"{reason}: {FAILURE_NOTES.get(reason, runner.UNMODELLED_NOTE)}"
+    return f"{reason}: {FAILURE_NOTES.get(reason, sbx.UNMODELLED_NOTE)}"
 
 
 def _now() -> datetime.datetime:
@@ -132,7 +131,7 @@ class SandboxRequest:
     """A ``project_run`` boundary: host-side edits applied to scratch, then an optional
     shell command (run/test) executed in the hardened container."""
 
-    edits: list[psbx.ScratchEdit] = dataclasses.field(default_factory=list)
+    edits: list[sbx.ScratchEdit] = dataclasses.field(default_factory=list)
     command: str | None = None
 
 
@@ -161,9 +160,9 @@ class SandboxOutcome:
 
 def _materialize_entries(
     effective: dict[str, wc_svc.EffectiveEntry],
-) -> list[psbx.MaterializeEntry]:
+) -> list[sbx.MaterializeEntry]:
     return [
-        psbx.MaterializeEntry(
+        sbx.MaterializeEntry(
             path=e.path,
             entry_kind=e.entry_kind,
             content_hash=e.content_hash,
@@ -256,18 +255,18 @@ async def run_sandbox(
     async def _read_blob(content_hash: bytes) -> bytes:
         blob = await db.get(StorageBlob, (ctx.tenant_id, wc.user_id, content_hash))
         if blob is None:
-            raise psbx.ScratchError("blob_missing")
+            raise sbx.ScratchError("blob_missing")
         return await build_object_store().get(blob.object_key)
 
     stdout = stderr = ""
     try:
         effective = await wc_svc.effective_tree(db, ctx, wc)
         try:
-            manifest = await psbx.materialize(run_key, _materialize_entries(effective), _read_blob)
+            manifest = await sbx.materialize(run_key, _materialize_entries(effective), _read_blob)
             rs.entry_count = len(manifest)
             for edit in request.edits:
-                psbx.apply_edit(run_key, edit)
-        except psbx.ScratchError as exc:
+                sbx.apply_edit(run_key, edit)
+        except sbx.ScratchError as exc:
             rs.state = "failed"
             rs.termination_reason = exc.code
             await db.flush()
@@ -296,7 +295,7 @@ async def run_sandbox(
             await db.flush()
 
             started = _now()
-            res = await psbx.run_in_scratch(run_key, request.command)
+            res = await sbx.run_in_scratch(run_key, request.command)
             er.duration_ms = int((_now() - started).total_seconds() * 1000)
             stdout, stderr = res.stdout, res.stderr
             exit_code = res.exit_code
@@ -315,8 +314,8 @@ async def run_sandbox(
 
         # Compute the bounded delta of scratch vs the materialized base.
         try:
-            delta = psbx.compute_delta(run_key, manifest)
-        except psbx.ScratchError as exc:
+            delta = sbx.compute_delta(run_key, manifest)
+        except sbx.ScratchError as exc:
             _fail(rs, er, exc.code, exit_code=exit_code, timed_out=timed_out)
             await db.flush()
             note = _observe_failure(rs, exc.code, er=er, had_command=bool(request.command))
@@ -409,7 +408,7 @@ async def run_sandbox(
         # The scratch tree is a rebuildable cache — always torn down; the durable boundary
         # is the persisted overlay, never the container/scratch. The session is closed on
         # EVERY exit so `uq_prs_live` never blocks the next boundary on this working copy.
-        psbx.cleanup(run_key)
+        sbx.cleanup(run_key)
         rs.container_ref = None
         if rs.state != "failed":
             rs.state = "closed"
@@ -418,4 +417,4 @@ async def run_sandbox(
 
 def sweep_orphan_scratch() -> int:
     """Startup sweep of scratch trees left by crashed runs (rebuildable cache)."""
-    return psbx.sweep_orphans()
+    return sbx.sweep_orphans()

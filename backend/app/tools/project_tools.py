@@ -16,7 +16,7 @@ from typing import cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Session as SessionModel
-from app.sandbox.project_sandbox import ScratchEdit
+from app.sandbox.runtime import ScratchEdit
 from app.services import ServiceError
 from app.services import project_changes as changes_svc
 from app.services import project_sandbox as sbx_svc

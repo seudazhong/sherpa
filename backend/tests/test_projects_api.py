@@ -226,7 +226,7 @@ async def test_project_workcopy_change_review_rest_flow(tmp_path, monkeypatch) -
         pytest.skip("database or redis not reachable")
     monkeypatch.setattr(settings, "sandbox_scratch_root", str(tmp_path / "scratch"))
     await _drop_owner()
-    from app.sandbox.project_sandbox import ScratchEdit
+    from app.sandbox.runtime import ScratchEdit
     from app.services import project_sandbox as sbx_svc
     from app.services import project_workcopy as wc_svc
     from app.services.context import CallerContext

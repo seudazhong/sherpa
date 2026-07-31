@@ -1,29 +1,38 @@
-"""Workspace Projects W3 sandbox scratch mechanics (ADR-039 isolation).
+"""The single sandbox code path: named runtime exits + workspace mechanics + container run.
 
-The **one-time scratch copy** is the ONLY thing the sandbox ever touches read-write. This
-module owns the host-side, docker-free mechanics (fully testable offline) plus the hardened
-container runner:
+Phase TR P3.1 merged the two former modules (``app.sandbox.runner``, which owned the named
+termination vocabulary, and ``app.sandbox.project_sandbox``, which owned the scratch
+mechanics) into this one. ADR-048 §3 requires exactly **one** sandbox code path — `scope`
+distinguishes a project runtime from an ephemeral one — instead of the two that let the
+`run_code` runner and the project runner drift apart.
 
-* **materialize** ``base snapshot + persisted overlay`` (an effective tree of blob refs) into
-  a **fresh, disposable, node-local** scratch dir under ``SANDBOX_SCRATCH_ROOT/<run>`` — ONLY
-  project bytes are written; **never** a credential, the ``.env``, the docker socket, another
-  Project, Drive, or the blob store itself. Every path is validated to resolve inside the
-  scratch root (untrusted-input discipline; ADR-039 "the orchestrator validates the src path").
+This module owns:
+
+* the **named runtime termination reasons** shared by every sandbox entry point (events
+  §2.11 ④ / api §10.7). Every container-path failure gets its OWN name: the old blanket
+  ``sandbox_unavailable`` made an unreachable daemon, a missing image and a failed create
+  indistinguishable (backlog B-8). The named reason travels on ``RunResult.error``; the
+  **raw** failure text travels separately on ``RunResult.error_detail`` and is for the
+  operator log only — the model sees a static, redacted sentence
+  (``runtime_failure_note``), never a host path or exception text (ADR-019).
+* **materialize** ``base snapshot + persisted overlay`` (an effective tree of blob refs)
+  into a **fresh, disposable, node-local** scratch dir under ``SANDBOX_SCRATCH_ROOT/<run>``
+  — ONLY project bytes are written; **never** a credential, the ``.env``, the docker
+  socket, another Project, Drive, or the blob store itself. Every path is validated to
+  resolve inside the scratch root (untrusted-input discipline; ADR-039 "the orchestrator
+  validates the src path").
 * **apply edits** host-side (write/delete a file in scratch), path-validated.
-* **run a command** in the ADR-025 hardened, network-disabled container with ONLY the scratch
-  bind-mounted read-write (``nosuid,nodev``); ``cap_drop=ALL``, non-root, read-only rootfs +
-  tmpfs, mem/pids/cpu/wall caps, ``--rm``. Gated by ``SANDBOX_KIND`` (``disabled`` offline).
-  **Every failure exit is one of the contract-named reasons** (``sandbox_disabled``,
-  ``runtime_daemon_unreachable``, ``runtime_image_missing``, ``runtime_start_failed``,
-  ``runtime_transport_failed``, ``error:<class>``; events §2.11 ④) — never a blanket collapse.
-* **compute the delta** of scratch vs the materialized base (added/modified/deleted), bounded
-  by ``WORKING_COPY_MAX_CHANGED_FILES``/``_BYTES``.
+* **run a command** in the ADR-025 hardened, network-disabled container with ONLY the
+  scratch bind-mounted read-write (``nosuid,nodev``); ``cap_drop=ALL``, non-root, read-only
+  rootfs + tmpfs, mem/pids/cpu/wall caps, ``--rm``. Gated by ``SANDBOX_KIND``
+  (``disabled`` offline).
+* **compute the delta** of scratch vs the materialized base (added/modified/deleted),
+  bounded by ``WORKING_COPY_MAX_CHANGED_FILES``/``_BYTES``.
 * **cleanup / orphan sweep** — scratch trees are rebuildable caches, never recovery truth.
 
-``_execute_in_scratch`` is module-level so tests can substitute a fake (mirrors
-``app.sandbox.runner``). Nothing here mutates the database; the durable overlay persist +
-the ``project_runtime_sessions``/``project_exec_runs`` bookkeeping live in
-:mod:`app.services.project_sandbox`.
+``_execute_in_scratch`` is module-level so tests can substitute a fake. Nothing here mutates
+the database; the durable overlay persist + the ``project_runtime_sessions``/
+``project_exec_runs`` bookkeeping live in :mod:`app.services.project_sandbox`.
 """
 
 from __future__ import annotations
@@ -37,16 +46,67 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.config import settings
-from app.sandbox.runner import (
-    RUNTIME_DAEMON_UNREACHABLE,
-    RUNTIME_IMAGE_MISSING,
-    RUNTIME_START_FAILED,
-    RUNTIME_TRANSPORT_FAILED,
-    SANDBOX_DISABLED,
-    RunResult,
-    named_failure,
-    unmodelled_failure,
-)
+
+# --- named runtime termination reasons (events §2.11 ④) ---------------------
+
+SANDBOX_DISABLED = "sandbox_disabled"
+RUNTIME_DAEMON_UNREACHABLE = "runtime_daemon_unreachable"
+RUNTIME_IMAGE_MISSING = "runtime_image_missing"
+RUNTIME_START_FAILED = "runtime_start_failed"
+RUNTIME_TRANSPORT_FAILED = "runtime_transport_failed"
+
+#: One redacted, model-facing sentence per runtime reason. Static by construction: it names
+#: the reason and stays actionable, but carries no host path, image reference, daemon message
+#: or credential (ADR-019).
+RUNTIME_FAILURE_NOTES: dict[str, str] = {
+    SANDBOX_DISABLED: (
+        "the sandbox runtime is disabled in this deployment, so no command was executed"
+    ),
+    RUNTIME_DAEMON_UNREACHABLE: (
+        "the container runtime daemon could not be reached, so no command was executed"
+    ),
+    RUNTIME_IMAGE_MISSING: (
+        "the sandbox runner image is not available locally, and the offline sandbox never "
+        "reaches the network to pull it, so no command was executed"
+    ),
+    RUNTIME_START_FAILED: (
+        "the sandbox container could not be created or started, so no command was executed"
+    ),
+    RUNTIME_TRANSPORT_FAILED: "the sandbox container ran but its output could not be retrieved",
+}
+
+UNMODELLED_NOTE = "the sandbox failed with an unmodelled internal error"
+
+#: Operator-log detail is bounded; it never reaches the model.
+DETAIL_MAX = 500
+
+
+def runtime_failure_note(reason: str) -> str:
+    """The redacted observation for a named runtime exit — safe to hand to the model."""
+    return f"{reason}: {RUNTIME_FAILURE_NOTES.get(reason, UNMODELLED_NOTE)}"
+
+
+@dataclasses.dataclass(frozen=True)
+class RunResult:
+    stdout: str
+    stderr: str
+    exit_code: int
+    timed_out: bool
+    error: str | None = None
+    #: Bounded raw failure text for the OPERATOR log only. ``error`` carries the contract-named
+    #: reason; this carries the underlying detail (image name, daemon message, host path) that
+    #: must never be handed to the model (events §2.11 ④ + ADR-019).
+    error_detail: str | None = None
+
+
+def named_failure(reason: str, exc: BaseException) -> RunResult:
+    return RunResult("", "", -1, False, error=reason, error_detail=str(exc)[:DETAIL_MAX])
+
+
+def unmodelled_failure(exc: BaseException) -> RunResult:
+    """``error:<class>`` — the contract's catch-all for a failure we did not model."""
+    return named_failure(f"error:{type(exc).__name__}", exc)
+
 
 BlobReader = Callable[[bytes], Awaitable[bytes]]
 
@@ -249,10 +309,6 @@ def compute_delta(run_id: str, base_manifest: dict[str, bytes]) -> DeltaResult:
 
 
 # --- hardened container run (ADR-025 + one-time scratch RW mount, ADR-039) ---
-#
-# The named termination reasons + the ``named_failure``/``unmodelled_failure`` helpers are
-# shared with :mod:`app.sandbox.runner` (imported above): one vocabulary for both sandbox
-# entry points, so no caller can reinvent a blanket collapse.
 
 
 def _run_docker(scratch_dir: str, command: str) -> RunResult:

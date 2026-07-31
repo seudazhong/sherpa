@@ -20,7 +20,7 @@ from app.db import SessionLocal, ping_db
 from app.models import Session as SessionModel
 from app.models import Tenant, User
 from app.permissions.policy import evaluate
-from app.sandbox.project_sandbox import ScratchEdit
+from app.sandbox.runtime import ScratchEdit
 from app.services import drive as drive_svc
 from app.services import project_changes as changes_svc
 from app.services import project_sandbox as sbx_svc
