@@ -64,4 +64,11 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not docker'"
+markers = [
+  # Real-container lane (Phase TR P3.7). Excluded by default because CI has no Docker;
+  # run it deliberately with `uv run pytest -m docker`. It is the ONLY lane that can catch
+  # a broken container transport — every other sandbox test substitutes a fake client,
+  # which is exactly how backlog B-8 survived 297 green tests.
+  "docker: requires a reachable Docker daemon and the sherpa-sandbox-runner image",
+]

@@ -1,0 +1,242 @@
+"""The real-container lane (Phase TR P3.7) — ``uv run pytest -m docker``.
+
+Excluded from the default run because CI has no Docker daemon. **This is the only lane that
+can catch a broken container transport.** Backlog B-8 survived 297 green tests precisely
+because every sandbox test substituted a fake executor, so the bind mount that could never
+work was never executed. The same blind spot burned Phase TR P2.2 at the wire-format layer
+(mock provider, dotted tool names, all green, zero working tool calls). The standing lesson
+is the same in both cases: some contracts are only verifiable against the real thing.
+
+Every test here starts a real container from the real ``sherpa-sandbox-runner`` image with
+the real ADR-025 hardening flags, and asserts on real exit codes and real bytes.
+
+Prerequisites (both are skipped, not failed, when missing):
+    docker build -t sherpa-sandbox-runner:dev sandbox-runner
+"""
+
+from __future__ import annotations
+
+import hashlib
+
+import pytest
+
+from app.config import settings
+from app.sandbox import runtime as sbx
+from app.sandbox.transport import WorkspaceFile
+
+pytestmark = pytest.mark.docker
+
+
+@pytest.fixture(autouse=True)
+def _real_sandbox(docker_runner_image: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "sandbox_kind", "docker")
+    monkeypatch.setattr(settings, "sandbox_image", docker_runner_image)
+
+
+async def _ws(files: dict[str, bytes]) -> sbx.Workspace:
+    blobs = {hashlib.sha256(d).digest(): d for d in files.values()}
+
+    async def _read(h: bytes) -> bytes:
+        return blobs[h]
+
+    entries = [
+        sbx.MaterializeEntry(
+            path=p,
+            entry_kind="file",
+            content_hash=hashlib.sha256(d).digest(),
+            size_bytes=len(d),
+            executable=False,
+            symlink_target=None,
+        )
+        for p, d in files.items()
+    ]
+    return await sbx.materialize(entries, _read)
+
+
+async def test_real_container_returns_a_real_exit_code_and_stdout() -> None:
+    ws = await _ws({"README.md": b"# hi\n"})
+    out = await sbx.run_workspace(ws, "python -c \"print('hello from the sandbox')\"")
+    assert out.result.error is None, out.result.error_detail
+    assert out.result.exit_code == 0
+    assert "hello from the sandbox" in out.result.stdout
+
+
+async def test_real_container_reports_a_real_nonzero_exit_code() -> None:
+    ws = await _ws({"README.md": b"# hi\n"})
+    out = await sbx.run_workspace(ws, "python -c 'import sys; sys.exit(3)'")
+    assert out.result.error is None
+    assert out.result.exit_code == 3
+
+
+async def test_the_ingested_workspace_is_actually_there_and_writable() -> None:
+    ws = await _ws({"src/app.py": b"VALUE = 41\n"})
+    out = await sbx.run_workspace(
+        ws,
+        "cat src/app.py && python -c \"open('src/generated.txt','w').write('made it')\" "
+        "&& mkdir -p src/sub && echo nested > src/sub/n.txt",
+    )
+    assert out.result.error is None, out.result.error_detail
+    assert out.result.exit_code == 0, out.result.stderr
+    assert "VALUE = 41" in out.result.stdout
+    assert out.files is not None
+    assert out.files["src/generated.txt"].data == b"made it"
+    assert out.files["src/sub/n.txt"].data == b"nested\n"
+
+    delta = sbx.compute_delta(ws, out.files)
+    assert {e.path: e.change_kind for e in delta.entries} == {
+        "src/generated.txt": "added",
+        "src/sub/n.txt": "added",
+    }
+
+
+async def test_pytest_runs_for_real_and_the_failure_round_trips() -> None:
+    """The edit/test loop P4 will drive: a failing test really fails, a fixed one passes."""
+    test_src = b"from calc import add\n\n\ndef test_add():\n    assert add(2, 2) == 4\n"
+    ws = await _ws(
+        {
+            "calc.py": b"def add(a, b):\n    return a - b\n",
+            "test_calc.py": test_src,
+        }
+    )
+    out = await sbx.run_workspace(ws, "pytest -q")
+    assert out.result.error is None, out.result.error_detail
+    assert out.result.exit_code != 0
+    assert "1 failed" in out.result.stdout
+
+    sbx.apply_edit(
+        ws, sbx.ScratchEdit(path="calc.py", op="write", data=b"def add(a, b):\n    return a + b\n")
+    )
+    out2 = await sbx.run_workspace(ws, "pytest -q")
+    assert out2.result.exit_code == 0
+    assert "1 passed" in out2.result.stdout
+    # The cache settings in the runner image keep .pytest_cache out of the change set.
+    assert out2.files is not None
+    assert not any(p.startswith(".pytest_cache") for p in out2.files)
+    assert not any("__pycache__" in p for p in out2.files)
+
+
+async def test_ruff_runs_for_real() -> None:
+    ws = await _ws({"bad.py": b"import os\n"})
+    out = await sbx.run_workspace(ws, "ruff --version && ruff check --select F401 .")
+    assert out.result.error is None, out.result.error_detail
+    assert out.result.exit_code != 0
+    assert "F401" in out.result.stdout
+
+
+async def test_the_container_has_no_network() -> None:
+    """ADR-025: network_disabled. No egress, ever."""
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(
+        ws,
+        "python -c \"import socket;socket.create_connection(('1.1.1.1',53),timeout=3)\" "
+        "&& echo REACHED || echo BLOCKED",
+    )
+    assert out.result.error is None, out.result.error_detail
+    assert "BLOCKED" in out.result.stdout
+    assert "REACHED" not in out.result.stdout
+
+
+async def test_the_container_is_non_root_with_a_read_only_rootfs() -> None:
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(
+        ws, "id -u; (touch /etc/should-fail && echo ROOTFS_WRITABLE) || echo ROOTFS_READONLY"
+    )
+    assert out.result.error is None, out.result.error_detail
+    assert out.result.stdout.splitlines()[0] == "10001"
+    assert "ROOTFS_READONLY" in out.result.stdout
+
+
+async def test_no_credential_or_docker_socket_is_visible_inside() -> None:
+    """The sandbox must not be able to see the orchestrator's secrets or its socket."""
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(
+        ws,
+        "env | grep -Ei 'kek|secret|password|api_key|token' || echo NO_SECRET_ENV; "
+        "test -S /var/run/docker.sock && echo SOCKET_VISIBLE || echo NO_SOCKET",
+    )
+    assert out.result.error is None, out.result.error_detail
+    assert "NO_SECRET_ENV" in out.result.stdout
+    assert "NO_SOCKET" in out.result.stdout
+    assert "SOCKET_VISIBLE" not in out.result.stdout
+
+
+async def test_a_missing_tool_is_reported_as_a_missing_dependency_not_a_download() -> None:
+    """The image deliberately has no git and no network: exit 127, which the orchestrator
+    maps to environment_missing_dependencies."""
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(ws, "git status")
+    assert out.result.error is None
+    assert out.result.exit_code == 127
+
+
+async def test_a_missing_image_is_its_own_named_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "sandbox_image", "sherpa-sandbox-runner:does-not-exist-xyz")
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(ws, "true")
+    assert out.result.error == sbx.RUNTIME_IMAGE_MISSING
+
+
+async def test_wall_timeout_kills_a_real_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "sandbox_run_timeout_seconds", 3)
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(ws, "sleep 999")
+    assert out.result.timed_out is True
+
+
+async def test_a_credential_shaped_file_never_reaches_the_real_container() -> None:
+    canary = "sherpa-kek-canary-MDEyMzQ1Njc4OWFiY2RlZg=="
+    ws = await _ws({".env": f"KEK={canary}\n".encode(), "app.py": b"print(1)\n"})
+    out = await sbx.run_workspace(ws, "ls -a; cat .env 2>/dev/null || echo NO_ENV_FILE")
+    assert out.result.error is None, out.result.error_detail
+    assert "NO_ENV_FILE" in out.result.stdout
+    assert canary not in out.result.stdout
+    # And holding it back is not a deletion.
+    assert out.files is not None
+    delta = sbx.compute_delta(ws, out.files)
+    assert delta.entries == []
+
+
+async def test_the_container_and_its_volume_are_removed() -> None:
+    import docker
+
+    client = docker.from_env()
+    before = {c.id for c in client.containers.list(all=True)}
+    volumes_before = {v.id for v in client.volumes.list()}
+    ws = await _ws({"a.txt": b"a\n"})
+    await sbx.run_workspace(ws, "true")
+    after = {c.id for c in client.containers.list(all=True)}
+    assert after - before == set()
+    assert {v.id for v in client.volumes.list()} - volumes_before == set()
+
+
+async def test_the_orphan_sweep_only_touches_our_labelled_containers() -> None:
+    """A crashed worker leaves a labelled container; the sweep removes it and nothing else."""
+    import docker
+
+    client = docker.from_env()
+    stray = client.containers.create(
+        settings.sandbox_image, command=["/bin/sh", "-lc", "true"], labels={sbx.RUNTIME_LABEL: "1"}
+    )
+    unrelated = client.containers.create(
+        "sherpa-sandbox-runner:dev", command=["/bin/sh", "-lc", "true"]
+    )
+    try:
+        removed = sbx.sweep_orphan_containers()
+        assert removed >= 1
+        with pytest.raises(docker.errors.NotFound):
+            client.containers.get(stray.id)
+        assert client.containers.get(unrelated.id) is not None
+    finally:
+        try:
+            unrelated.remove(force=True, v=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def test_a_workspace_file_keeps_its_executable_bit_in_a_real_container() -> None:
+    ws = await _ws({"run.sh": b"#!/bin/sh\necho ran\n"})
+    ws.files["run.sh"] = WorkspaceFile(data=ws.files["run.sh"].data, executable=True)
+    out = await sbx.run_workspace(ws, "./run.sh")
+    assert out.result.error is None, out.result.error_detail
+    assert out.result.exit_code == 0
+    assert "ran" in out.result.stdout

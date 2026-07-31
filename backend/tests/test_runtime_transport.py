@@ -139,10 +139,17 @@ def test_tar_round_trip_preserves_content_and_mode_bits() -> None:
     raw = t.build(files, {"src", "deep/nested/dir"})
     back = tar_to_files(raw)
     assert back == files
-    # Every member is owned by the non-root runner uid, so implicit parents are writable.
+    # Every member is owned by the non-root runner uid, and EVERY ancestor directory is
+    # emitted explicitly — left implicit, docker creates them as root and the runner then
+    # cannot write inside them (caught by the real-container lane, not by this fake).
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
         assert {m.uid for m in tf.getmembers()} == {RUNNER_UID}
-        assert {m.name for m in tf.getmembers() if m.isdir()} == {"src", "deep/nested/dir"}
+        assert {m.name for m in tf.getmembers() if m.isdir()} == {
+            "src",
+            "deep",
+            "deep/nested",
+            "deep/nested/dir",
+        }
 
 
 async def test_command_changes_come_back_through_egress(monkeypatch) -> None:  # type: ignore[no-untyped-def]

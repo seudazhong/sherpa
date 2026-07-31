@@ -122,11 +122,17 @@ class TarTransport:
     def build(self, files: Mapping[str, WorkspaceFile], dirs: Iterable[str]) -> bytes:
         """Serialize the workspace copy. Raises ``TransportError('credential_leak')`` if a
         credential-shaped path ever reaches this point — a defensive assertion on top of the
-        caller's strip, so a future refactor cannot quietly reopen the boundary."""
+        caller's strip, so a future refactor cannot quietly reopen the boundary.
+
+        **Every ancestor directory is emitted explicitly**, owned by the runner uid. Left
+        implicit, docker's extraction creates them as root and the non-root runner then
+        cannot write inside them — a failure that only shows up in a real container, which
+        is exactly what the ``-m docker`` lane exists to catch.
+        """
         buf = io.BytesIO()
         total = 0
         with tarfile.open(fileobj=buf, mode="w") as tf:
-            for path in sorted(set(dirs)):
+            for path in sorted(_all_parents(files, dirs)):
                 if is_credential_path(path):
                     raise TransportError("credential_leak", "credential-shaped directory")
                 info = tarfile.TarInfo(path)
@@ -223,6 +229,20 @@ class TarTransport:
         except (tarfile.TarError, OSError, EOFError) as exc:
             raise TransportError("runtime_transport_failed", str(exc)) from exc
         return files
+
+
+def _all_parents(files: Mapping[str, WorkspaceFile], dirs: Iterable[str]) -> set[str]:
+    """Every directory the archive must create, including the ancestors of every file."""
+    explicit = {d.strip("/") for d in dirs if d.strip("/")}
+    out: set[str] = set(explicit)
+    for path in [*files, *explicit]:
+        parts = path.split("/")
+        depth = len(parts) if path in explicit else len(parts) - 1
+        for i in range(1, depth + 1):
+            candidate = "/".join(parts[:i])
+            if candidate:
+                out.add(candidate)
+    return out
 
 
 def _strip_work_prefix(name: str) -> str | None:

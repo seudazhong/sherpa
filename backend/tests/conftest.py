@@ -61,3 +61,30 @@ async def _dispose_engine_between_tests() -> AsyncIterator[None]:
         await redis.aclose()
     except Exception:
         pass
+
+
+@pytest.fixture
+def docker_runner_image() -> str:
+    """The real sandbox-runner image, or skip.
+
+    ``-m docker`` selects the lane; this fixture is what makes it *safe* to select on a
+    machine that has no daemon or has not built the image yet — it skips with an actionable
+    message instead of failing with a docker traceback.
+    """
+    image = settings.sandbox_image
+    try:
+        import docker
+        from docker.errors import ImageNotFound
+
+        client = docker.from_env()
+        client.ping()
+    except Exception as exc:  # noqa: BLE001 - any daemon problem is a skip, not a failure
+        pytest.skip(f"docker daemon not reachable: {exc}")
+    try:
+        client.images.get(image)
+    except ImageNotFound:
+        pytest.skip(
+            f"sandbox runner image {image!r} not built — run: "
+            "docker build -t sherpa-sandbox-runner:dev sandbox-runner"
+        )
+    return image
