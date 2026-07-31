@@ -48,7 +48,7 @@ configuring around it — there is no `src=` to get wrong.
   runner image's **anonymous volume**; the create call passes **no mount and no host path**.
   ADR-025 hardening unchanged. `mem_limit` is now named (docker `State.OOMKilled`), output is
   bounded at 1 MiB with an explicit `output_truncated`, and the orphan sweep removes
-  label-filtered **containers** (there is no scratch tree left to sweep).
+  **ownership-scoped, liveness-guarded** containers (there is no scratch tree left to sweep).
 - **P3.3 / P3.4** credential strip + assert, and the egress tar treated as untrusted input, both
   proven **end to end through the orchestration boundary**, not just in the transport.
 - **P3.5** **`sandbox-runner/`** is now a real image: non-root uid 10001, read-only-rootfs friendly,
@@ -140,6 +140,28 @@ behaviour:
    implied. Registry ports are accepted in digests without weakening the `sha256` half.
 4. **The executable-bit result is now protected by a DB test** through
    delta → overlay → change set → Save/CAS → head-snapshot row, not just a browser screenshot.
+
+**🔧 A fourth review confirmed a sweep race *by execution*, now fixed (commit pending below).**
+`uv run pytest -m docker` failed with `409 container is dead or marked for removal` while the
+live worker logged `containers_swept=1` at the same moment. The orphan sweeper filtered on the
+generic `sherpa.runtime` label and removed **every** match unconditionally, so the dev worker
+deleted a concurrently running test lane's container mid-run. Two independent guards now apply,
+and neither alone is sufficient:
+- **Ownership** — containers carry `sherpa.owner=<deployment id>` and the sweeper filters on it.
+  The id is **derived** from the data-plane identity (database URL + bucket) when
+  `SANDBOX_OWNER_ID` is unset, so the ADR-044 test harness is automatically distinct from the
+  dev worker. A configuration step nobody has to remember is the only kind that survives.
+- **Liveness** — within an owned deployment a container is reclaimed only if it is not
+  in-flight in this process **and** is older than `SANDBOX_RUN_TIMEOUT_SECONDS + 300 s`. The
+  orchestrator provably cannot hold one longer than the enforced wall clock plus the bounded
+  post-exit tail. The in-flight registry covers the `created` state, where a container waits
+  while a large workspace uploads — the exact window the 409s came from.
+Running orphans are still reclaimed (a crashed worker can leave one executing) but *eventually*,
+on the age rule, so recovery never races an active run.
+**Verified by execution, not argument:** reverting to the old sweep makes the new tests fail with
+the identical `409 ... dead or marked for removal`; with the fix, the worker's real sweeper run
+**193 times during a live lane run swept 0 containers** and the lane stayed clean, and 9
+consecutive lane runs (270 tests) spanning a live 00:57 cron tick produced zero 409/404 flakes.
 
 **🔧 A third independent review found the last P3 blocker: the *end-to-end* worker peak
 (commit `90e744b`).** The earlier fixes bounded egress in isolation; the whole persist path

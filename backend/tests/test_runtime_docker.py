@@ -16,7 +16,9 @@ Prerequisites (both are skipped, not failed, when missing):
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import time
 
 import pytest
 
@@ -234,27 +236,229 @@ async def test_the_container_and_its_volume_are_removed() -> None:
 
 
 async def test_the_orphan_sweep_only_touches_our_labelled_containers() -> None:
-    """A crashed worker leaves a labelled container; the sweep removes it and nothing else."""
+    """A crashed worker leaves a *stale* owned container; the sweep removes it and nothing
+    else. Staleness matters: the age rule is what stops the sweep racing a live run."""
     import docker
 
     client = docker.from_env()
-    stray = client.containers.create(
-        settings.sandbox_image, command=["/bin/sh", "-lc", "true"], labels={sbx.RUNTIME_LABEL: "1"}
+    stale = client.containers.create(
+        settings.sandbox_image,
+        command=["/bin/sh", "-lc", "true"],
+        labels={
+            sbx.RUNTIME_LABEL: "1",
+            sbx.OWNER_LABEL: sbx.deployment_owner_id(),
+            sbx.SESSION_LABEL: "crashed-worker",
+            sbx.STARTED_LABEL: f"{time.time() - 86400:.3f}",  # a day old
+        },
     )
-    unrelated = client.containers.create(
-        "sherpa-sandbox-runner:dev", command=["/bin/sh", "-lc", "true"]
-    )
+    unrelated = client.containers.create(settings.sandbox_image, command=["/bin/sh", "-lc", "true"])
     try:
         removed = sbx.sweep_orphan_containers()
         assert removed >= 1
         with pytest.raises(docker.errors.NotFound):
-            client.containers.get(stray.id)
+            client.containers.get(stale.id)
         assert client.containers.get(unrelated.id) is not None
     finally:
+        for c in (stale, unrelated):
+            try:
+                c.remove(force=True, v=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+async def test_the_sweep_never_removes_another_deployments_container() -> None:
+    """The confirmed production race, in the shape that actually happened.
+
+    The dev worker's maintenance cron swept **every** ``sherpa.runtime`` container, so a
+    concurrently running test lane had its container deleted mid-run and the run died with
+    ``409 container is dead or marked for removal``. Ownership scoping is what fixes it: a
+    container belonging to a different deployment id must be invisible to our sweeper —
+    even when it is stale, and even when it is stopped."""
+    import docker
+
+    client = docker.from_env()
+    foreign = client.containers.create(
+        settings.sandbox_image,
+        command=["/bin/sh", "-lc", "true"],
+        labels={
+            sbx.RUNTIME_LABEL: "1",
+            sbx.OWNER_LABEL: "some-other-deployment",
+            sbx.SESSION_LABEL: "theirs",
+            sbx.STARTED_LABEL: f"{time.time() - 86400:.3f}",
+        },
+    )
+    try:
+        sbx.sweep_orphan_containers()
+        assert client.containers.get(foreign.id) is not None, (
+            "the sweeper deleted another deployment's container — the confirmed 409 race"
+        )
+    finally:
         try:
-            unrelated.remove(force=True, v=True)
+            foreign.remove(force=True, v=True)
         except Exception:  # noqa: BLE001
             pass
+
+
+async def test_a_live_run_survives_a_concurrent_sweep() -> None:
+    """The race, end to end, with the sweeper firing *during* an actual execution.
+
+    A maintenance tick is triggered repeatedly while a real container is mid-run. The run
+    must complete normally — no 409, no lost container. Before the fix this deleted the
+    container out from under the run."""
+    import threading
+
+    stop = threading.Event()
+    sweeps: list[int] = []
+    errors: list[BaseException] = []
+
+    def sweeper() -> None:
+        while not stop.is_set():
+            try:
+                sweeps.append(sbx.sweep_orphan_containers())
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+            stop.wait(0.05)
+
+    thread = threading.Thread(target=sweeper, daemon=True)
+    thread.start()
+    try:
+        ws = await _ws({"a.txt": b"a\n"})
+        # Long enough that many sweeps land inside the run, including during tar ingress.
+        out = await sbx.run_workspace(ws, "sleep 3; echo survived")
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+
+    assert not errors, f"sweeper raised: {errors[:1]}"
+    assert sweeps, "the sweeper never ran; the test proved nothing"
+    assert out.result.error is None, out.result.error_detail
+    assert out.result.exit_code == 0
+    assert "survived" in out.result.stdout
+    assert out.files is not None
+
+
+async def test_an_in_flight_container_is_never_reclaimed_even_when_stale() -> None:
+    """Belt and braces: the in-process registry protects a container the age rule would
+    otherwise release, so a run that somehow outlives the threshold is still not deleted
+    by its own process."""
+    import docker
+
+    client = docker.from_env()
+    c = client.containers.create(
+        settings.sandbox_image,
+        command=["/bin/sh", "-lc", "true"],
+        labels={
+            sbx.RUNTIME_LABEL: "1",
+            sbx.OWNER_LABEL: sbx.deployment_owner_id(),
+            sbx.SESSION_LABEL: "held",
+            sbx.STARTED_LABEL: f"{time.time() - 86400:.3f}",
+        },
+    )
+    try:
+        sbx._IN_FLIGHT.add(c.id)
+        try:
+            sbx.sweep_orphan_containers()
+            assert client.containers.get(c.id) is not None
+        finally:
+            sbx._IN_FLIGHT.discard(c.id)
+        # Once released, the same stale container IS reclaimed.
+        sbx.sweep_orphan_containers()
+        with pytest.raises(docker.errors.NotFound):
+            client.containers.get(c.id)
+    finally:
+        try:
+            c.remove(force=True, v=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def test_a_running_orphan_is_eventually_reclaimed() -> None:
+    """Recovery must not stop at stopped containers: a crashed worker can leave one
+    *executing*. It is reclaimed once past the age threshold — eventual by design, so it
+    can never race a live run."""
+    import docker
+
+    client = docker.from_env()
+    running = client.containers.run(
+        settings.sandbox_image,
+        command=["/bin/sh", "-lc", "sleep 600"],
+        detach=True,
+        labels={
+            sbx.RUNTIME_LABEL: "1",
+            sbx.OWNER_LABEL: sbx.deployment_owner_id(),
+            sbx.SESSION_LABEL: "crashed-mid-run",
+            sbx.STARTED_LABEL: f"{time.time() - 86400:.3f}",
+        },
+    )
+    try:
+        running.reload()
+        assert running.status == "running"
+        removed = sbx.sweep_orphan_containers()
+        assert removed >= 1
+        with pytest.raises(docker.errors.NotFound):
+            client.containers.get(running.id)
+    finally:
+        try:
+            running.remove(force=True, v=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def test_a_recent_owned_container_is_spared() -> None:
+    """The other half of the age rule: a young container may still belong to a live run in
+    another process of this deployment (uploading a workspace, or having its logs and egress
+    tar read after exit), so it is not reclaimed yet."""
+    import docker
+
+    client = docker.from_env()
+    fresh = client.containers.create(
+        settings.sandbox_image,
+        command=["/bin/sh", "-lc", "true"],
+        labels={
+            sbx.RUNTIME_LABEL: "1",
+            sbx.OWNER_LABEL: sbx.deployment_owner_id(),
+            sbx.SESSION_LABEL: "just-created",
+            sbx.STARTED_LABEL: f"{time.time():.3f}",
+        },
+    )
+    try:
+        sbx.sweep_orphan_containers()
+        assert client.containers.get(fresh.id) is not None
+    finally:
+        try:
+            fresh.remove(force=True, v=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def test_a_real_run_labels_its_container_with_owner_and_session() -> None:
+    """The labels the sweeper depends on must actually be written by the real path."""
+    import docker
+
+    client = docker.from_env()
+    seen: dict[str, str] = {}
+
+    ws = await _ws({"a.txt": b"a\n"})
+
+    async def capture() -> None:
+        # Poll while the run is in flight and record the labels docker actually stored.
+        for _ in range(200):
+            for c in client.containers.list(
+                all=True, filters={"label": f"{sbx.OWNER_LABEL}={sbx.deployment_owner_id()}"}
+            ):
+                if c.id in sbx._IN_FLIGHT:
+                    seen.update(c.labels or {})
+                    return
+            await asyncio.sleep(0.05)
+
+    watcher = asyncio.create_task(capture())
+    out = await sbx.run_workspace(ws, "sleep 2; echo ok", session_label="session-xyz")
+    await watcher
+
+    assert out.result.error is None, out.result.error_detail
+    assert seen.get(sbx.OWNER_LABEL) == sbx.deployment_owner_id()
+    assert seen.get(sbx.SESSION_LABEL) == "session-xyz"
+    assert float(seen[sbx.STARTED_LABEL]) > 0
 
 
 async def test_a_workspace_file_keeps_its_executable_bit_in_a_real_container() -> None:

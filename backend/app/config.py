@@ -155,6 +155,13 @@ class Settings(BaseSettings):
     sandbox_image: str = ""
     sandbox_mem_mb: int = 1024
     sandbox_pids_limit: int = 128
+    # Which deployment owns a sandbox container, and therefore which containers the orphan
+    # sweeper may remove. Empty (the default) derives a stable id from the data-plane
+    # identity, so the ADR-044 test harness — which already has its own database — is
+    # automatically distinct from the dev worker sharing the same Docker daemon. Set this
+    # explicitly only when two deployments share one database. Sweeping without this scope
+    # was a confirmed bug: the dev worker deleted a live test container mid-run.
+    sandbox_owner_id: str = ""
 
     # Projects — Workspace W3 (ADR-040 + ADR-039) + the ADR-047 tar transport: task working
     # copy + one-time disposable copy + change review (config §1.7). The sandbox reuses the

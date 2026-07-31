@@ -53,6 +53,7 @@ import asyncio
 import dataclasses
 import hashlib
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -138,9 +139,34 @@ DETAIL_MAX = 500
 #: The bounded text is marked truncated; the typed spill reference is api §7.2 debt (P2.8).
 OUTPUT_MAX_BYTES = 1_000_000
 
-#: Every container this deployment creates carries this label, so the startup sweep can find
-#: orphans from a crashed worker without touching anybody else's containers.
+#: Every container this deployment creates carries these labels.
+#:
+#: ``RUNTIME_LABEL`` identifies a Sherpa sandbox container in general. ``OWNER_LABEL`` is the
+#: one that matters for cleanup: it names **which deployment** owns the container, and the
+#: sweeper filters on it. Sweeping on ``RUNTIME_LABEL`` alone was a confirmed bug, not a
+#: theoretical one — the dev worker's maintenance cron deleted containers belonging to a
+#: concurrently running test lane, which surfaced as
+#: ``409 container is dead or marked for removal``.
 RUNTIME_LABEL = "sherpa.runtime"
+OWNER_LABEL = "sherpa.owner"
+#: The runtime session (or ``ephemeral``) a container was created for — operator-facing
+#: identity when inspecting a leaked container.
+SESSION_LABEL = "sherpa.runtime_session"
+#: Unix seconds, by the creating process's clock, used by the age rule below.
+STARTED_LABEL = "sherpa.started_at"
+
+#: How long past the enforced wall clock a container may live before it is considered
+#: orphaned. The orchestrator holds a container for at most
+#: ``SANDBOX_RUN_TIMEOUT_SECONDS`` (enforced: `wait` kills it) plus the bounded post-exit
+#: work — reading capped logs and pulling the capped egress tar. This grace covers that tail
+#: generously, which is what makes "older than the threshold ⇒ nobody is still using it" a
+#: safe inference rather than a hopeful one.
+SWEEP_GRACE_SECONDS = 300
+
+#: Container ids this process is actively using. A container in here is NEVER swept, whatever
+#: its age or state: the sweeper and the run loop share a process, so this is exact for the
+#: common case and the age rule below is the fail-safe for everything else.
+_IN_FLIGHT: set[str] = set()
 
 
 def runtime_failure_note(reason: str) -> str:
@@ -621,7 +647,7 @@ def verify_runner_image(client: Any, ref: str) -> RunResult | None:
     return None
 
 
-def _run_docker(ws: Workspace, command: str) -> ExecOutcome:
+def _run_docker(ws: Workspace, command: str, *, session_label: str = "ephemeral") -> ExecOutcome:
     """Create → tar in → start → wait → logs → tar out → remove. No mount, no host path."""
     import docker
     from docker.errors import APIError, DockerException, ImageNotFound, NotFound
@@ -654,7 +680,16 @@ def _run_docker(ws: Workspace, command: str) -> ExecOutcome:
             read_only=True,  # rootfs read-only; only /work + /tmp are writable
             tmpfs={"/tmp": "size=64m,mode=1777,nosuid,nodev"},
             user=f"{RUNNER_UID}:{RUNNER_GID}",
-            labels={RUNTIME_LABEL: "1"},
+            labels={
+                RUNTIME_LABEL: "1",
+                # Ownership: the sweeper filters on this, so a concurrently running test
+                # lane or second deployment is invisible to our cleanup and we to theirs.
+                OWNER_LABEL: deployment_owner_id(),
+                SESSION_LABEL: session_label,
+                # Written by the creating process's clock, which is the clock the sweeper's
+                # age rule compares against.
+                STARTED_LABEL: f"{time.time():.3f}",
+            },
         )
     except ImageNotFound as exc:
         # The offline sandbox never reaches the network to pull: a missing image is its own
@@ -664,6 +699,12 @@ def _run_docker(ws: Workspace, command: str) -> ExecOutcome:
         return ExecOutcome(named_failure(RUNTIME_START_FAILED, exc))
     except Exception as exc:  # noqa: BLE001
         return ExecOutcome(unmodelled_failure(exc))
+
+    # From here until the `finally` this container is ours and in use: the sweeper must not
+    # touch it even if a maintenance tick lands mid-run. This covers the `created` state
+    # during tar ingress, which is where the observed 409s came from — a large workspace can
+    # spend a long time uploading before `start()` is ever called.
+    _IN_FLIGHT.add(container.id)
 
     transport = _transport()
     try:
@@ -750,13 +791,20 @@ def _run_docker(ws: Workspace, command: str) -> ExecOutcome:
             container.remove(force=True, v=True)
         except Exception:  # noqa: BLE001
             pass
+        # Released only after removal is attempted, so the sweeper can never see this
+        # container as unowned while we are still touching it.
+        _IN_FLIGHT.discard(container.id)
 
 
-async def _execute_workspace(ws: Workspace, command: str) -> ExecOutcome:
-    return await asyncio.to_thread(_run_docker, ws, command)
+async def _execute_workspace(
+    ws: Workspace, command: str, *, session_label: str = "ephemeral"
+) -> ExecOutcome:
+    return await asyncio.to_thread(_run_docker, ws, command, session_label=session_label)
 
 
-async def run_workspace(ws: Workspace, command: str) -> ExecOutcome:
+async def run_workspace(
+    ws: Workspace, command: str, *, session_label: str = "ephemeral"
+) -> ExecOutcome:
     """Run ``command`` in the hardened container against ONLY this disposable copy.
     ``SANDBOX_KIND != docker`` (default) reports a clear disabled result for offline dev and
     tests — and the caller still persists the host-side edits, because losing *run* must
@@ -764,34 +812,113 @@ async def run_workspace(ws: Workspace, command: str) -> ExecOutcome:
     contract-named reasons above — never a blanket collapse."""
     if settings.sandbox_kind != "docker":
         return ExecOutcome(RunResult("", "", -1, False, error=SANDBOX_DISABLED))
-    return await _execute_workspace(ws, command)
+    return await _execute_workspace(ws, command, session_label=session_label)
 
 
 # --- orphan sweep -----------------------------------------------------------
 
 
-def sweep_orphan_containers() -> int:
-    """Remove sandbox containers left behind by a crashed worker. Containers are rebuildable
-    caches — removing one never loses a persisted boundary. Returns the count removed.
+def deployment_owner_id() -> str:
+    """A stable id for **this deployment**, used to scope container cleanup.
 
-    ⚠️ **Scope caveat, stated rather than glossed:** the filter is the ``sherpa.runtime``
-    label, which is *this software's* label, **not this deployment's**. Two Sherpa workers
-    sharing one Docker daemon would sweep each other's live containers. That is out of scope
-    here (v1 is single-user self-hosted, ADR-022) but it is a real constraint, not a
-    hypothetical: it needs a per-deployment label value before any multi-worker or
-    multi-tenant deployment, which ADR-039's do-not-ship conditions already gate.
+    Requirements it has to meet, and how:
+
+    * **Stable across restarts** — otherwise a restarted worker could not recognise the
+      containers its previous life leaked, and orphans would accumulate forever.
+    * **Distinct per deployment, automatically** — including the test harness running beside
+      a live dev worker on the same Docker daemon, which is exactly the configuration that
+      produced the confirmed 409s. This is derived rather than declared: ADR-044 already
+      gives the test harness its own database, so seeding the id from the data-plane
+      identity makes tests distinct **without anyone remembering to set anything**. A
+      forgettable step would have been a worse fix than the bug.
+    * **Overridable** — ``SANDBOX_OWNER_ID`` wins when set, for anyone running two
+      deployments against one database or otherwise needing to say it explicitly.
+    """
+    explicit = (settings.sandbox_owner_id or "").strip()
+    if explicit:
+        return explicit
+    seed = f"{settings.database_url}|{settings.minio_bucket}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
+def _container_age_seconds(container: Any, *, now: float) -> float | None:
+    """Age from the label the creating process wrote, or ``None`` when unknowable.
+
+    Our own label is preferred over the daemon's ``Created`` because it is written by the
+    same clock the sweeper compares against. ``None`` means "cannot tell", and the caller
+    treats that as *not* reclaimable — an unreadable age must never license a deletion."""
+    try:
+        labels = container.labels or {}
+    except Exception:  # noqa: BLE001
+        return None
+    raw = labels.get(STARTED_LABEL)
+    if raw is None:
+        return None
+    try:
+        return max(0.0, now - float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_reclaimable(container: Any, *, now: float, threshold: float) -> bool:
+    """Whether a container owned by this deployment may be removed.
+
+    Two guards, deliberately in this order:
+
+    1. **Never touch what this process is using.** Exact, and covers the whole lifecycle —
+       including the ``created`` state, which is where a container sits while a large
+       workspace is being uploaded into it. That window is precisely where the observed
+       ``409 container is dead or marked for removal`` came from.
+    2. **Otherwise, require the container to be older than any legitimate run could be.**
+       A live run cannot exceed ``SANDBOX_RUN_TIMEOUT_SECONDS`` (the orchestrator kills it)
+       plus the bounded post-exit tail, so anything older has no orchestrator behind it.
+       This holds regardless of container state, which is why a stopped-but-recent container
+       is also spared: its creator may still be reading logs or pulling the egress tar out
+       of it.
+
+    An unknown age is treated as "not reclaimable": leaking a container costs disk, deleting
+    a live one costs a user's run.
+    """
+    try:
+        if container.id in _IN_FLIGHT:
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    age = _container_age_seconds(container, now=now)
+    if age is None:
+        return False
+    return age > threshold
+
+
+def sweep_orphan_containers() -> int:
+    """Remove sandbox containers this deployment leaked (crashed worker, killed process).
+
+    Containers are rebuildable caches — removing one never loses a persisted boundary — but
+    removing the *wrong* one aborts somebody's live run, so the filter is ownership-scoped
+    (``sherpa.owner``) and liveness-guarded (see :func:`_is_reclaimable`). Returns the count
+    removed.
+
+    **Running orphans are included**, which is required: a crashed worker can leave a
+    container executing forever. They are reclaimed once they pass the age threshold rather
+    than immediately, so recovery is *eventual* and never races an active run — with the
+    default 120 s run timeout that is about 7 minutes.
     """
     if settings.sandbox_kind != "docker":
         return 0
+    owner = deployment_owner_id()
     try:
         import docker
 
         client = docker.from_env()
-        containers = client.containers.list(all=True, filters={"label": RUNTIME_LABEL})
+        containers = client.containers.list(all=True, filters={"label": f"{OWNER_LABEL}={owner}"})
     except Exception:  # noqa: BLE001 - best-effort cache cleanup, never fatal to startup
         return 0
+    now = time.time()
+    threshold = float(settings.sandbox_run_timeout_seconds) + SWEEP_GRACE_SECONDS
     removed = 0
     for c in containers:
+        if not _is_reclaimable(c, now=now, threshold=threshold):
+            continue
         try:
             c.remove(force=True, v=True)
             removed += 1

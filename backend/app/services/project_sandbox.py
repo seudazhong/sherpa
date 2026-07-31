@@ -306,7 +306,7 @@ async def run_sandbox(
             await db.flush()
 
             started = _now()
-            outcome = await sbx.run_workspace(ws, request.command)
+            outcome = await sbx.run_workspace(ws, request.command, session_label=str(rs.id))
             res = outcome.result
             er.duration_ms = int((_now() - started).total_seconds() * 1000)
             stdout, stderr = res.stdout, res.stderr

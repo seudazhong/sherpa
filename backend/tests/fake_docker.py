@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import tarfile
+import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -94,6 +95,9 @@ class FakeSpec:
 class FakeContainer:
     def __init__(self, spec: FakeSpec) -> None:
         self._spec = spec
+        # Real containers have an id, and the runtime's in-flight registry (which is what
+        # keeps the orphan sweeper off a live run) keys on it.
+        self.id = f"fake-{uuid.uuid4().hex}"
         self.ingested: dict[str, WorkspaceFile] = {}
         self.ingested_tar: bytes = b""
         self.started = False

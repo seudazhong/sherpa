@@ -343,7 +343,7 @@ async def test_run_sandbox_missing_dependency_still_persists_edits(monkeypatch, 
         pytest.skip("database not reachable")
     monkeypatch.setattr(settings, "sandbox_kind", "docker")
 
-    async def _fake(ws: sbx.Workspace, command: str) -> sbx.ExecOutcome:
+    async def _fake(ws: sbx.Workspace, command: str, **_kw: object) -> sbx.ExecOutcome:
         return sbx.ExecOutcome(
             sbx.RunResult("", "sh: ruff: not found", 127, False), files=dict(ws.files)
         )

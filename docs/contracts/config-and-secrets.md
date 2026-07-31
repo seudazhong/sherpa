@@ -153,6 +153,7 @@ class Settings(BaseSettings):
     # concept is now the RuntimeSession idle TTL below.
     # DELETED (ADR-047): sandbox_scratch_root — tar transport has no host scratch path at all.
     sandbox_image: str = Field(default="")                                  # digest-pinned first-party runner; no default (fail closed)
+    sandbox_owner_id: str = Field(default="")                               # deployment id for orphan-sweep ownership (derived when empty)
     sandbox_runtime_idle_ttl_seconds: int = Field(default=600, ge=30)       # [target] RuntimeSession idle TTL (10m)
     sandbox_scratch_max_bytes: int = Field(default=128 * 1024 * 1024, ge=1)  # per-session tar cap, BOTH directions (128 MiB)
     working_copy_max_changed_files: int = Field(default=5000, ge=1)         # change-set bound: changed-file count
@@ -415,6 +416,7 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Projects (runtime) | `SANDBOX_RUN_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Per-exec wall-clock deadline; over ⇒ `wall_timeout`. |
 | Projects (runtime) | `SANDBOX_IMAGE` | `str` (digest) | **none — must be set** | `worker` | No | **`[shipped]` (P3)** MUST be the repository's own runner image, pinned by `docker image inspect --format '{{.Id}}'`. **Enforced fail-closed**: a tag or an empty value is refused with `runtime_image_untrusted` before any container is created. The digest **is** the trust root (an allowlist of one immutable image); the additional OCI title-label check is a **forgeable misconfiguration guard, not provenance** — signature/attestation verification is out of scope for v1. No default, so a fresh checkout fails loudly instead of running a mutable tag. |
 | Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `134217728` | No | No | Per-session tar cap (**128 MiB**), enforced in **both** directions and **before** allocation. This is a **memory budget**: peak ≈ 2× this + ~40 MiB, i.e. ~296 MiB of worker RSS against the compose worker's `mem_limit: 1g`. Raising it requires raising that limit by twice the delta. Must stay ≥ `WORKING_COPY_MAX_CHANGED_BYTES`. History: 2 GiB → 512 MiB → 128 MiB, each step forced by a measurement. |
+| Projects (runtime) | `SANDBOX_OWNER_ID` | `str` | derived | `worker` | No | **`[shipped]`** Which deployment owns a sandbox container; the orphan sweeper removes **only** containers carrying this id. Empty derives a stable id from the data-plane identity (database URL + bucket), so the ADR-044 test harness is automatically distinct from a dev worker on the same daemon. Set explicitly only when two deployments share one database. Sweeping without this scope was a confirmed defect (a live test container deleted mid-run → `409 dead or marked for removal`). |
 | Projects (runtime) | `SANDBOX_MEM_MB` | `int` ≥ 1 | `1024` | `worker` | No | Container memory cap; exceeding it is reported as the named `mem_limit` (docker `State.OOMKilled`). Raised from 256 in P3 — `pytest` + `ruff` do not fit in 256 MiB. |
 | Tools | `TOOL_CATALOG_CORE_MAX_BYTES` | `int` ≥ 1024 | `6144` | No | No | **`[target]`** Hard cap on the serialized core tool-set bytes (ADR-046); startup fails above it. Pre-ADR-046 baseline was 19,848 bytes across 52 flat tools. |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
@@ -570,13 +572,40 @@ nothing else.**
   container produced** (explicit host-side edits still persist — error is an observation, not
   data loss). The `work/` prefix `get_archive` adds is stripped **before** validation;
   validating with it attached would let a top-level escaping symlink resolve inside the root.
-- **Lifecycle + orphan sweep.** The orchestrator persists the overlay/change-set boundary
-  **before** teardown, then removes the container in a `finally` (`--rm`, `v=True`, which also
-  removes the anonymous volume). A worker-startup sweep purges containers labelled
-  `sherpa.runtime` from crashed runs **`[shipped]`**. A
-  runtime session idle for `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` is closed **`[target]`, P4**; a durable working
-  copy idle for `WORKING_COPY_IDLE_TTL_SECONDS` expires, and idle-expiry release plus
-  quota-reservation release are **one atomic transition**.
+- **Lifecycle + orphan sweep `[shipped]`.** The orchestrator persists the overlay/change-set
+  boundary **before** teardown, then removes the container in a `finally` (`--rm`, `v=True`,
+  which also removes the anonymous volume). A worker-startup sweep, and a periodic
+  maintenance tick, reclaim containers a crashed worker leaked. **Two conditions must both
+  hold before anything is removed**, because sweeping is a destructive operation aimed at
+  containers that may still be in use:
+  1. **Ownership.** The filter is `sherpa.owner=<deployment id>`, not the generic
+     `sherpa.runtime` label. Scoping on the generic label was a **confirmed defect, observed
+     in execution**: the dev worker's maintenance cron deleted a container belonging to a
+     concurrently running test lane, and the run died with `409 container is dead or marked
+     for removal`. The deployment id comes from `SANDBOX_OWNER_ID`, or is derived from the
+     data-plane identity (database URL + bucket) when that is unset — so the ADR-044 test
+     harness, which already has its own database, is **automatically** distinct from the dev
+     worker without anyone having to configure it. A step you must remember is a step that
+     will be forgotten; deriving it is what makes the fix hold.
+  2. **Liveness.** Within an owned deployment, a container is reclaimed only if it is not
+     registered in-flight by this process **and** it is older than
+     `SANDBOX_RUN_TIMEOUT_SECONDS + 300 s`. The orchestrator holds a container for at most
+     the enforced wall clock plus the bounded post-exit tail (capped log read + capped egress
+     tar), so anything older provably has no orchestrator behind it. The in-flight registry
+     covers the whole lifecycle including the `created` state, which is where a container
+     sits while a large workspace uploads into it — the window the observed 409s came from.
+     An unreadable age is treated as *not* reclaimable: leaking a container costs disk,
+     deleting a live one costs a user's run.
+
+  **Running orphans are included** — a crashed worker can leave a container executing
+  forever — but they are reclaimed on the age rule rather than on sight, so recovery is
+  *eventual* (about 7 minutes at the default timeout) and never races an active run. A
+  recent stopped container is likewise spared, because its creator may still be reading logs
+  or pulling the egress tar out of it.
+
+  A runtime session idle for `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` is closed **`[target]`, P4**;
+  a durable working copy idle for `WORKING_COPY_IDLE_TTL_SECONDS` expires, and idle-expiry
+  release plus quota-reservation release are **one atomic transition**.
 - **Resource bounds (reuse ADR-025 + change-set caps).** Keep the ADR-025 hardened
   container: `network_disabled`, `cap_drop=ALL`, `no-new-privileges`, non-root (`nobody`),
   read-only rootfs + `tmpfs /tmp`, mem/pids/cpu limits, and a wall-clock kill
