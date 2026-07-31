@@ -67,8 +67,8 @@ tmpfs/bind only; `cap_drop=ALL` + `no-new-privileges` + non-root carry the equiv
 D-3 memory 1 GiB · D-6 the single approved `project_tools.py` import line, no other P2 work ·
 D-7 Windows/DooD verified, Linux DooD/DinD/rootless **explicitly unverified**.
 
-**Gate (after the review fixes, 2026-07-31):** `uv run pytest` **474 passed** (+24 deselected) ·
-`uv run pytest -m docker` **24 passed** ·
+**Gate (after the second review's fixes, 2026-07-31):** `uv run pytest` **501 passed**
+(+24 deselected) · `uv run pytest -m docker` **24 passed** ·
 ruff + `ruff format --check` + `mypy app` clean · `alembic heads` single head `0003` (**no migration
 in P3** — `project_runtime_sessions` already carried `image_digest`/`capabilities`/`ingress_bytes`
 from the 0001 baseline) · `npm run lint` + `npm run build` green.
@@ -112,6 +112,34 @@ only ever confirm what we already believed.**
    their command was slow. docker-py surfaces a real timeout as
    `ConnectionError(ReadTimeoutError(...))`, the *same class* as an unreachable daemon, so the fix
    walks the exception chain; everything else maps to its own named reason.
+
+**🔧 A second independent review still blocked P3; four more fixes landed (commit `8810852`).**
+Each was reproduced before being changed, and each fix's test was verified to fail against the old
+behaviour:
+1. **Egress still allocated each member three times.** The first fix was not enough: `bytearray(size)`
+   + the same-size bytes object `tarfile.readinto` allocates when handed a whole-member view +
+   a final `bytes(buf)` copy. Reproduced at **3.01x** for a single 8 MiB member — the earlier
+   24×256 KiB test could not see it, because transients scale with the largest **member**, not the
+   archive. Fixed by chunk-sized `readinto` views plus **ownership transfer** of the filled buffer
+   (`transport.ByteBuffer`; the blob store converts once per file at its own boundary).
+   Measured after: **1.08x** at 8 MiB, **1.02x** at 32 MiB, and **1.13x for a real 8 MiB round trip
+   through a real container**. The test now uses the single-large-member shape and asserts the
+   *overhead does not grow* when the member quadruples — a ratio alone passes for any N once the
+   member is big enough. **PAX sparse** members were also walking through (only `GNUTYPE_SPARSE` was
+   checked); writing that test surfaced an unreported crash path — `tarfile` raises `ValueError`,
+   not `TarError`, on some malformed sparse maps, and it was escaping the sandbox boundary.
+2. **Connect timeouts were being reported as `wall_timeout`.** `requests.ConnectTimeout` subclasses
+   `Timeout` and `urllib3.ConnectTimeoutError` subclasses urllib3's `TimeoutError`, so both passed
+   the timeout test. A connect marker anywhere in the chain now wins and yields
+   `runtime_daemon_unreachable`.
+3. **The image-trust claim was overstated.** The docs said the label "proves they are the right
+   bytes". OCI labels are ordinary, **forgeable** metadata. Corrected everywhere: the
+   operator-chosen **immutable digest is the trust root** (an allowlist of one); the label is a
+   **misconfiguration guard**. **No signature or attestation is verified and none is claimed** —
+   cryptographic provenance is now recorded as explicitly **out of scope for v1** rather than
+   implied. Registry ports are accepted in digests without weakening the `sha256` half.
+4. **The executable-bit result is now protected by a DB test** through
+   delta → overlay → change set → Save/CAS → head-snapshot row, not just a browser screenshot.
 
 **❗ B-8 is still OPEN, and P3 did not move its close criterion.** No `runtime_open`/`sh_exec`/`fs_*`
 tools, no async `202`+SSE, no cancel (**P4**); **no human Run control, no streaming log, no Stop** —
@@ -646,7 +674,7 @@ Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -
 | **W2b-DESIGN (ADR-038) — Workspace Projects GitHub 一次性导入 契约与设计先行** (ADR-038 + data-model `project_sources`/`github_connections`/`source_status`/`project_import_jobs(github)` + api §10.6 501→202 + repo/ref/connection 端点 + events §2.10 create_kind=github + config `GITHUB_*`/§1.6 + 能力矩阵行 UI ⬜ + `design-workspace/github-import.html` 静态稿) | ✅ done (契约先行；研究收敛 branch/tag/commit + tarball 有界获取 + PAT 凭据 + 只读幂等无 effect_unknown；HTML well-formed；静态稿桌面+390px Playwright 无溢出；无生产代码/迁移/W2b 导航；W2b 实现待负责人审核) |
 | **W3-DESIGN/SECURITY (ADR-039 + ADR-040) — Workspace Projects 任务工作副本 + 一次性 scratch 沙箱变更评审 安全评审 + 契约与设计先行** (独立 docker.sock/隔离威胁模型 → ADR-039 + W3 产品/数据/工具/生命周期 → ADR-040 + **正式修订 ADR-025** + data-model §Projects W3 `project_working_copies`/`overlay`/`change_sets`/`entries`/`artifacts`/`sandbox_runs`/`head_generation` + api §10.7 + events §2.11 + config §1.7/`SANDBOX_*`/`WORKING_COPY_*` + 能力矩阵行 UI ⬜ + `design-workspace/w3-change-review.html` 静态稿) | ✅ done (安全评审 + 契约先行；一手来源确证 docker.sock≈宿主 root、socket-proxy 假安全、rootless/gVisor/microVM 阶梯 + 禁止上线条件、未实施缓解不写成已安全；lease/fence + head_generation CAS + 沙箱无 effect_unknown + 仅挂一次性 scratch；HTML well-formed；静态稿桌面+390px Playwright overflow=0；无生产代码/迁移/真实挂载/W3 导航；W3 实现待负责人审核) |
 | **W3 (ADR-039 + ADR-040) — Workspace Projects 任务工作副本 + 一次性 scratch 沙箱变更评审 生产实现** (migration 0030 6 张 project_* W3 表 + projects.head_generation · services/project_workcopy(lease/fence/CAS/持久/discard/expire) · app/sandbox+services/project_sandbox(硬化仅一次性 scratch 挂载·delta·孤儿扫除) · services/project_changes(有界 diff/artifacts/apply CAS/discard) · api §10.7 + project_run/project_review_changes 工具 · ChangeReview UI · worker 扫除/维护 cron · 能力矩阵 §9 UI ✅) | ✅ done (full pytest 297 green ruff/mypy 清；栈重建；真实 claude-sonnet-4.6 两栈 Playwright：agent project_run→working copy+change set；human Change Review→真实 diff→Save+checkpoint 推进 head+pinned checkpoint、Discard head 不变、390px overflow=0；验证中修复 `_wc_summary` discard MissingGreenlet + 回归测试)。⚠️ **事后更正**：其中的 agent 泳道断言只到"working copy + change set 产生"，**容器从未真正启动过**(B-8)——真正跑起来是 2026-07-31 的 P3。 |
-| **Phase TR P3 (ADR-047) — tar workspace transport + first-party runner image** (`app/sandbox/runtime.py` 合并 · 新 `app/sandbox/transport.py` **流式有界** tar ingress/egress · **删除全部 bind mount 与宿主路径** · 凭据剔除+断言+回填(不误判为删除) · egress 不可信解包 → `path_escape` · `mem_limit`/输出有界 · 容器 label 孤儿扫除 · `sandbox-runner/` Dockerfile(基础镜像按 registry digest 固定)+capabilities.json(非 root/只读 rootfs/pin python+pytest+ruff/无 git 无网络工具) · 删 `SANDBOX_SCRATCH_ROOT`+`SANDBOX_WARM_TTL_SECONDS`、`SANDBOX_MEM_MB`→1024、`SANDBOX_SCRATCH_MAX_BYTES`→512 MiB · **镜像固定 fail-closed 强制**(`runtime_image_untrusted`) · **新增真 Docker 泳道 `uv run pytest -m docker`**) | ✅ done (**无迁移**；pytest **474 passed** + `-m docker` **24 passed**，ruff/format/mypy 清，前端 lint+build 绿；栈重建 + `SANDBOX_IMAGE` 按 image ID digest 固定；三路实测：worker 容器内 DooD、真实 claude-sonnet-4.6 agent 泳道(`pytest -q` 真 exit 1 → 修复 → 真 exit 0 · `chmod +x` → `./deploy.sh` 输出 deployed · `git` 127)、human Change Review 真实 diff→Save→head_generation=2 且 `executable=t` 落库。真 Docker 泳道首跑即抓到隐式父目录 root 属主的真 bug；独立评审又抓出 4 个阻断缺陷，已于 `66ce8e6` 修复并各配"去掉修复即失败"的回归测试。**B-8 仍 OPEN**：Run 控件/流式/Stop 属 P4+P5) |
+| **Phase TR P3 (ADR-047) — tar workspace transport + first-party runner image** (`app/sandbox/runtime.py` 合并 · 新 `app/sandbox/transport.py` **流式有界** tar ingress/egress · **删除全部 bind mount 与宿主路径** · 凭据剔除+断言+回填(不误判为删除) · egress 不可信解包 → `path_escape` · `mem_limit`/输出有界 · 容器 label 孤儿扫除 · `sandbox-runner/` Dockerfile(基础镜像按 registry digest 固定)+capabilities.json(非 root/只读 rootfs/pin python+pytest+ruff/无 git 无网络工具) · 删 `SANDBOX_SCRATCH_ROOT`+`SANDBOX_WARM_TTL_SECONDS`、`SANDBOX_MEM_MB`→1024、`SANDBOX_SCRATCH_MAX_BYTES`→512 MiB · **镜像固定 fail-closed 强制**(`runtime_image_untrusted`) · **新增真 Docker 泳道 `uv run pytest -m docker`**) | ✅ done (**无迁移**；pytest **501 passed** + `-m docker` **24 passed**，ruff/format/mypy 清，前端 lint+build 绿；栈重建 + `SANDBOX_IMAGE` 按 image ID digest 固定；三路实测：worker 容器内 DooD、真实 claude-sonnet-4.6 agent 泳道(`pytest -q` 真 exit 1 → 修复 → 真 exit 0 · `chmod +x` → `./deploy.sh` 输出 deployed · `git` 127)、human Change Review 真实 diff→Save→head_generation=2 且 `executable=t` 落库。真 Docker 泳道首跑即抓到隐式父目录 root 属主的真 bug；独立评审又抓出 4 个阻断缺陷，已于 `66ce8e6` 修复并各配"去掉修复即失败"的回归测试。**B-8 仍 OPEN**：Run 控件/流式/Stop 属 P4+P5) |
 | **backlog B-12 — Drive 孤儿 GC 删掉 change-set diff 溢出对象** (P3 人工泳道发现；`sweep_orphan_objects` 只豁免 `project-import/`，把 `project-diff/` 全删；实证 `orphans=6` 后 26 秒 Change Review 500 NoSuchKey) | ✅ fixed (显式豁免前缀元组 + 回归测试**已验证去掉修复就会失败**；**保留期问题仍开放**——建议并入 api §7.2 spill janitor) |
 | **backlog B-12 — Drive 孤儿 GC 删掉 change-set diff 溢出对象** (P3 人工泳道发现；`sweep_orphan_objects` 只豁免 `project-import/`，把 `project-diff/` 全删；实证 `orphans=6` 后 26 秒 Change Review 500 NoSuchKey) | ✅ fixed (显式豁免前缀元组 + 回归测试**已验证去掉修复就会失败**；**保留期问题仍开放**——建议并入 api §7.2 spill janitor) |
 
