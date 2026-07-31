@@ -262,3 +262,46 @@ async def test_binary_entry_has_no_inline_diff() -> None:
                 )
         finally:
             await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_the_orphan_gc_does_not_delete_change_set_diff_spills() -> None:
+    """Regression for backlog B-12, found during Phase TR P3 human-lane verification.
+
+    Change-set unified diffs are spilled to the object store under ``project-diff/`` and have
+    no ``storage_blobs`` row, so the Drive orphan GC deleted them on its next cron tick. The
+    entry row kept its ``diff_object_key`` while the object was gone, so every diff in Change
+    Review rendered "(could not load diff)" and the API returned 500 NoSuchKey. Observed live:
+    `cron:drive_maintenance ● 'gc=0 orphans=6'`, 26 seconds before the panel was opened.
+    """
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            _project, _sid, wc = await _open_wc(s, ctx)
+            await sbx_svc.run_sandbox(
+                s,
+                ctx,
+                wc,
+                run_id=uuid.uuid4(),
+                request=sbx_svc.SandboxRequest(
+                    edits=[ScratchEdit(path="calc.py", op="write", data=b"def add(a, b):\n")]
+                ),
+            )
+            cs = await changes_svc.build_change_set(s, ctx, wc, run_id=uuid.uuid4())
+            assert cs is not None
+            entries, _ = await changes_svc.get_change_set_entries(s, ctx, cs)
+            spilled = [e for e in entries if e.diff_object_key]
+            assert spilled, "expected at least one spilled diff to protect"
+
+            swept = await drive_svc.sweep_orphan_objects(s)
+
+            # The GC may legitimately remove unrelated orphans; it must not touch these.
+            for e in spilled:
+                diff = await changes_svc.get_entry_diff(
+                    s, ctx, project_id=wc.project_id, cs_id=cs.id, entry_id=e.id
+                )
+                assert "def add" in diff, f"diff spill was swept (removed={swept})"
+        finally:
+            await s.rollback()

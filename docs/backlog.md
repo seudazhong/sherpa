@@ -19,6 +19,7 @@
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
 | B-10 | design | [Tool-surface slimming: dead tools, prose diet, and *vertical* (workflow) consolidation](#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation) | open — feeds [Phase TR](IMPLEMENTATION.md) **P2** |
 | B-11 | gap | [No tool-use evaluation harness (decisions are argued, not measured)](#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) | open |
+| B-12 | bug | [The Drive orphan GC deletes change-set diff spills](#b-12-the-drive-orphan-gc-deletes-change-set-diff-spills) | ✅ fixed 2026-07-31 (retention question still open) |
 
 Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2 + B-8 together** — triaged 2026-07-30 and found to be **one architecture problem, not two** (see both entries below). The owner approved the unified **clean-break** architecture ([ADR-045](decisions.md#adr-045) umbrella · [ADR-046](decisions.md#adr-046) tool catalog · [ADR-047](decisions.md#adr-047) tar transport · [ADR-048](decisions.md#adr-048) RuntimeSession); the execution plan is [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Neither item is fixed**: B-2 closes at the end of Phase TR **P2**, B-8 at the end of **P5**. The owner approved the Phase TR execution plan on 2026-07-30 and **P0 (the honesty pass) + P1 (baseline squash + legacy deletion, including the one-time destructive dev rebuild) are shipped**; P2–P5 have not started. P1 removed the duplicate `file_*` stack and `run_code` (**52 → 47 tools / 19,848 → 18,397 B — deletion, not the catalog**) and moved the sandbox bookkeeping onto `project_runtime_sessions`/`project_exec_runs`, but it changed **no** execution path: `project_run` still bind-mounts and still fails.
 
@@ -581,3 +582,61 @@ says is LLM-dependent). Compare task success, tool calls, tokens, error rate.
   E1–E3 then run in parallel with Phase TR P2/P3.
 - Needs an ADR before implementation (new tooling: Phoenix datasets/experiments as a dev-time dependency),
   per AGENTS.md §1/§2.
+
+---
+
+## B-12 The Drive orphan GC deletes change-set diff spills
+
+*Raised 2026-07-31 during Phase TR **P3** human-lane verification · kind: bug · status: **fixed** (retention question still open)*
+
+**Observed.** With a real sandbox run finally working (P3), the Change Review panel rendered
+`(could not load diff)` for a file whose diff had been generated correctly minutes earlier, and
+`GET /projects/{id}/change-sets/{cs}/entries/{e}/diff` returned **500**:
+
+```
+minio.error.S3Error: code: NoSuchKey ... object_name:
+  project-diff/48f13add-.../a807ec02-...
+```
+
+**Root cause — pre-existing, not caused by P3.** `build_change_set` spills each per-file unified
+diff to the object store under `project-diff/{change_set_id}/{entry_id}`
+(`app/services/project_changes.py:203-204`). Those objects deliberately have **no `storage_blobs`
+row** — they are a projection, not user content. But `drive_svc.sweep_orphan_objects`
+(`app/services/drive.py`) treats `storage_blobs` as the authority for *every* key in the bucket
+and deletes anything without a row, exempting only `project-import/`. So the next
+`cron:drive_maintenance` tick deletes every live change-set diff, while the
+`project_change_set_entries.diff_object_key` column keeps pointing at the deleted object.
+
+Timeline from the live stack, which is as direct as evidence gets:
+
+```
+13:40:00  cron:drive_maintenance ● 'gc=0 orphans=6'
+13:40:26  Change Review opened → 500 NoSuchKey
+```
+
+**Why it was never seen before.** It needs a change set to survive a cron tick and *then* be
+reviewed. W3's verification built and reviewed change sets inside the same few minutes, and the
+maintenance cron happened not to land in between. P3 made a real `project_run` produce real diffs
+and the stack was restarted mid-verification, which put a sweep exactly in the gap.
+
+**Fix (shipped 2026-07-31).** `_GC_EXEMPT_PREFIXES = ("project-import/", "project-diff/")` — the
+change set owns its spills' lifecycle, exactly as the import job owns its staging objects.
+Regression test: `tests/test_project_changes.py::test_the_orphan_gc_does_not_delete_change_set_diff_spills`
+(verified to fail with the prefix removed, not merely to pass with it present).
+
+**Still open — retention.** Exempting the prefix stops the deletion but leaves the spills
+unreclaimed: `build_change_set` supersedes the prior open change set on **every** boundary and
+writes a fresh set of diff objects, so a long working session accumulates `project-diff/` objects
+that nothing ever removes. They do not charge the user's quota (no blob row), which is precisely
+why nothing notices. A real fix needs a decision:
+
+- sweep diffs belonging to `superseded`/`applied`/`discarded` change sets (needs the GC to read
+  change-set state rather than a blob table), **or**
+- give the spills a TTL like `TOOL_OUTPUT_RETENTION_HOURS` (api §7.2 has the same open debt for
+  tool-output spills — one janitor could serve both), **or**
+- stop spilling and recompute diffs on demand from the two content hashes (both blobs are already
+  content-addressed and deduped; this deletes a whole storage class and its GC problem, at the
+  cost of CPU per review).
+
+Recommend folding this into the same janitor as the api §7.2 spill retention (currently parked in
+Phase TR **P2.8**) rather than inventing a second sweeper.

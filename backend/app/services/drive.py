@@ -1012,11 +1012,24 @@ async def gc_unreferenced_blobs(db: AsyncSession) -> int:
     return removed
 
 
+#: Object-key prefixes that are NOT ``storage_blobs`` rows and must never be swept by the
+#: orphan GC. Each is owned by another lifecycle:
+#:   ``project-import/`` — transient archive-import job inputs (ADR-037); the import job owns them.
+#:   ``project-diff/``   — change-set unified-diff spills (ADR-040 §change review); the change
+#:                         set owns them. Sweeping these silently broke Change Review: the row
+#:                         kept its ``diff_object_key`` while the object was gone, so every diff
+#:                         rendered "(could not load diff)" and the API returned 500 NoSuchKey.
+#:                         Found during Phase TR P3 human-lane verification; see backlog B-12,
+#:                         which also tracks the retention question these spills still have.
+_GC_EXEMPT_PREFIXES = ("project-import/", "project-diff/")
+
+
 async def sweep_orphan_objects(db: AsyncSession) -> int:
     """Delete store objects that have no blob row (crash after write, before commit).
 
-    ``storage_blobs`` is the only object-key authority: the legacy ``files`` stack was
-    deleted outright by ADR-045/046 (clean break, no transition window).
+    ``storage_blobs`` is the only object-key authority **for blobs** — the legacy ``files``
+    stack was deleted outright by ADR-045/046 (clean break, no transition window) — but it is
+    not the authority for every object in the bucket, so the exempt prefixes above are skipped.
     """
     store = build_object_store()
     keys = await store.list_keys("")
@@ -1025,9 +1038,7 @@ async def sweep_orphan_objects(db: AsyncSession) -> int:
     known = set((await db.execute(select(StorageBlob.object_key))).scalars().all())
     removed = 0
     for key in keys:
-        # Project archive-import staging objects (ADR-037) are transient job inputs,
-        # not blob rows; the import job owns their lifecycle. Never sweep them here.
-        if key.startswith("project-import/"):
+        if key.startswith(_GC_EXEMPT_PREFIXES):
             continue
         if key not in known:
             await store.delete(key)
