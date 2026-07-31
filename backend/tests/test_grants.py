@@ -57,17 +57,17 @@ async def _seed(s: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, Run]:
 def _script() -> MockProvider:
     return MockProvider(
         script=[
-            [ToolCall(id="c1", name="send_email", args=_ARGS), Finish("tool_use")],
+            [ToolCall(id="c1", name="email.send", args=_ARGS), Finish("tool_use")],
             [TextDelta("Sent."), Finish("stop")],
         ]
     )
 
 
 def test_matcher_exact_recipient() -> None:
-    assert rule_matches("send_email", {"recipients": ["me@x.com"]}, {"to": "ME@X.com"})
-    assert not rule_matches("send_email", {"recipients": ["me@x.com"]}, {"to": "other@x.com"})
-    assert not rule_matches("send_email", {"recipients": []}, {"to": "me@x.com"})
-    assert not rule_matches("list_todos", {"recipients": ["me@x.com"]}, {"to": "me@x.com"})
+    assert rule_matches("email.send", {"recipients": ["me@x.com"]}, {"to": "ME@X.com"})
+    assert not rule_matches("email.send", {"recipients": ["me@x.com"]}, {"to": "other@x.com"})
+    assert not rule_matches("email.send", {"recipients": []}, {"to": "me@x.com"})
+    assert not rule_matches("todo.list", {"recipients": ["me@x.com"]}, {"to": "me@x.com"})
 
 
 @pytest.mark.asyncio
@@ -79,7 +79,7 @@ async def test_loop_auto_allows_with_grant() -> None:
             tid, uid, run = await _seed(s)
             ctx = CallerContext(tenant_id=tid, user_id=uid, actor="user")
             await grant_svc.create_grant(
-                s, ctx, tool_name="send_email", match_json={"recipients": ["me@x.com"]}
+                s, ctx, tool_name="email.send", match_json={"recipients": ["me@x.com"]}
             )
 
             reason = await execute_run(
@@ -99,7 +99,7 @@ async def test_loop_auto_allows_with_grant() -> None:
                     )
                 )
             ).scalar_one()
-            assert inv.effect_name == "send_email" and inv.status != "prepared"
+            assert inv.effect_name == "email.send" and inv.status != "prepared"
 
             # An audit receipt records the auto-approval.
             outcomes = (
@@ -128,7 +128,7 @@ async def test_loop_still_asks_without_matching_grant() -> None:
             ctx = CallerContext(tenant_id=tid, user_id=uid, actor="user")
             # Grant for a DIFFERENT recipient → does not match this action.
             await grant_svc.create_grant(
-                s, ctx, tool_name="send_email", match_json={"recipients": ["other@x.com"]}
+                s, ctx, tool_name="email.send", match_json={"recipients": ["other@x.com"]}
             )
 
             await execute_run(
@@ -149,18 +149,18 @@ async def test_find_matching_grant_skips_revoked() -> None:
             tid, uid, _run = await _seed(s)
             ctx = CallerContext(tenant_id=tid, user_id=uid, actor="user")
             g = await grant_svc.create_grant(
-                s, ctx, tool_name="send_email", match_json={"recipients": ["me@x.com"]}
+                s, ctx, tool_name="email.send", match_json={"recipients": ["me@x.com"]}
             )
             assert (
                 await find_matching_grant(
-                    s, tenant_id=tid, user_id=uid, tool_name="send_email", args=_ARGS
+                    s, tenant_id=tid, user_id=uid, tool_name="email.send", args=_ARGS
                 )
                 is not None
             )
             await grant_svc.revoke_grant(s, ctx, grant_id=g.id)
             assert (
                 await find_matching_grant(
-                    s, tenant_id=tid, user_id=uid, tool_name="send_email", args=_ARGS
+                    s, tenant_id=tid, user_id=uid, tool_name="email.send", args=_ARGS
                 )
                 is None
             )
@@ -177,14 +177,14 @@ async def test_grant_from_action_creates_and_merges() -> None:
         try:
             tid, uid, _run = await _seed(s)
             g1 = await grant_svc.grant_from_action(
-                s, tenant_id=tid, user_id=uid, tool_name="send_email", args={"to": "me@x.com"}
+                s, tenant_id=tid, user_id=uid, tool_name="email.send", args={"to": "me@x.com"}
             )
             assert g1 is not None and g1.created_via == "always"
             assert g1.match_json["recipients"] == ["me@x.com"]
 
             # A second `always` for a different recipient merges into the same grant.
             g2 = await grant_svc.grant_from_action(
-                s, tenant_id=tid, user_id=uid, tool_name="send_email", args={"to": "Work@Corp.com"}
+                s, tenant_id=tid, user_id=uid, tool_name="email.send", args={"to": "Work@Corp.com"}
             )
             assert g2 is not None and g2.id == g1.id
             assert set(g2.match_json["recipients"]) == {"me@x.com", "work@corp.com"}
@@ -192,7 +192,7 @@ async def test_grant_from_action_creates_and_merges() -> None:
             # A non-grantable tool derives nothing.
             assert (
                 await grant_svc.grant_from_action(
-                    s, tenant_id=tid, user_id=uid, tool_name="list_todos", args={}
+                    s, tenant_id=tid, user_id=uid, tool_name="todo.list", args={}
                 )
                 is None
             )
@@ -223,7 +223,7 @@ async def test_grants_rest_end_to_end() -> None:
 
         created = await client.post(
             "/grants",
-            json={"tool_name": "send_email", "match_json": {"recipients": ["me@x.com"]}},
+            json={"tool_name": "email.send", "match_json": {"recipients": ["me@x.com"]}},
             headers=headers,
         )
         assert created.status_code == 201, created.text
@@ -234,7 +234,7 @@ async def test_grants_rest_end_to_end() -> None:
 
         # A non-grantable tool is rejected (422).
         bad = await client.post(
-            "/grants", json={"tool_name": "list_todos", "match_json": {"x": 1}}, headers=headers
+            "/grants", json={"tool_name": "todo.list", "match_json": {"x": 1}}, headers=headers
         )
         assert bad.status_code == 422
 
@@ -254,7 +254,7 @@ async def test_grants_are_owner_only() -> None:
             agent = CallerContext(tenant_id=tid, user_id=uid, actor="agent")
             with pytest.raises(Forbidden):
                 await grant_svc.create_grant(
-                    s, agent, tool_name="send_email", match_json={"recipients": ["me@x.com"]}
+                    s, agent, tool_name="email.send", match_json={"recipients": ["me@x.com"]}
                 )
             with pytest.raises(Forbidden):
                 await grant_svc.list_grants(s, agent)

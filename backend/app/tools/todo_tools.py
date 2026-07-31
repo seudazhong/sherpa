@@ -21,12 +21,12 @@ from app.tools.base import ToolContext, ToolFlags, ToolResult
 from app.tools.validate import validate_args
 
 _ID = {"type": "string", "description": "todo id (uuid)"}
-_VER = {"type": "integer", "description": "if_version from list_todos (optimistic lock)"}
+_VER = {"type": "integer", "description": "if_version from todo.list (optimistic lock)"}
 _WRITE = ToolFlags(is_read_only=False, is_concurrency_safe=True, is_destructive=False)
 
 
 class ListTodosTool:
-    name = "list_todos"
+    name = "todo.list"
     description = "List the user's to-dos with id, title, status, due date and version. Read-only."
     input_schema: dict[str, object] = {
         "type": "object",
@@ -58,7 +58,7 @@ class ListTodosTool:
 
 
 class CreateTodoTool:
-    name = "todo_write"
+    name = "todo.create"
     description = (
         "Create a new to-do for the user. Own-data write; no approval needed. "
         "Provide a title; optionally description, due_at (ISO-8601) and priority."
@@ -93,7 +93,7 @@ class CreateTodoTool:
 
 
 class UpdateTodoTool:
-    name = "update_todo"
+    name = "todo.update"
     description = (
         "Update a to-do (title/description/status/due_at/priority). Needs todo_id + if_version. "
         "status is one of open/completed/cancelled."

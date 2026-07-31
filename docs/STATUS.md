@@ -149,7 +149,24 @@ and [**B-11**](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argu
   error-is-observation is by design — an eval built on that flag would have scored B-8 as passing;
   (c) `execute_tool` spans carry no result content. Details in B-11.
 
-**✅ Phase TR P2.0a shipped (2026-07-31) — the dead-tool sweep, the first half of the P2 slimming pass.**
+**✅ Phase TR P2.2 shipped (2026-07-31) — naming unification only.** All **42** tools renamed to a
+single `domain.verb` namespace (ADR-046 §决策1), hard rename, no aliases. The measured starting point
+was **28 `action_domain` · 15 `domain_action` · 4 neither**, mixed *inside* single domains
+(`todo_write` ↔ `list_todos`; `project_read` ↔ `list_projects`), so the model could not even
+pattern-match locally. 11 namespaces now: `core` `inbox` `todo` `connector` `schedule` `notify`
+`memory` `drive` `knowledge` `project` `email`. The names match `api.md` §7.3's target table exactly.
+Two enforcement points were widened from the old dot-less `^[a-z][a-z0-9_]{0,63}$`:
+`app/api/schemas.py::ApprovalAction.tool_name`, and the **`ck_pg_tool` CHECK** on
+`permission_grants.tool_name` — the latter only surfaced by running the suite (6 failures) and earned
+migration **`0002_tool_name_domain_verb`**, the first revision after the baseline squash (existing
+databases, including the retained ADR-044 test database, are migrated rather than rebuilt).
+Model-facing prose was renamed with the tools (`SYSTEM_PROMPT`, `session_context`, `if_version from …`
+argument descriptions, approval-card text) so no description advertises a name that no longer exists.
+Byte-neutral by design: 16,153 → **16,161 B**, still 42 tools. Gate: `uv run pytest` green,
+`alembic heads` = one head (`0002`), ruff + format + mypy clean, `npm run lint` + `npm run build` green.
+**No merging, no deletion, no redesign** — those remain open in B-10.
+
+**✅ Phase TR P2.0a shipped (2026-07-31) — the dead-tool sweep.**
 Five tools deleted that the catalog would otherwise have indexed instead of removed:
 `echo` (SAFE-tier dev leftover — SAFE is now `{get_time}` alone), **`drive_restore`** (structurally
 uncallable: it required a `node_id` and **no tool ever emitted one**, so the model could only call it with a

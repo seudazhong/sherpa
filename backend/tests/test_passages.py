@@ -69,12 +69,12 @@ async def test_passage_tools_via_registry() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            out = await reg.get("memory_note").execute(
+            out = await reg.get("memory.note").execute(
                 tctx, {"text": "The Q3 project deadline is Friday the 14th"}
             )
             assert "noted" in out.llm_content
 
-            res = await reg.get("memory_search").execute(tctx, {"query": "deadline"})
+            res = await reg.get("memory.search").execute(tctx, {"query": "deadline"})
             assert "Friday" in res.llm_content
         finally:
             await s.rollback()

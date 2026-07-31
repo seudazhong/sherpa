@@ -78,7 +78,7 @@ async def test_loop_tool_then_answer() -> None:
             tid, rid, run = await _seed(s)
             provider = MockProvider(
                 script=[
-                    [ToolCall(id="c1", name="get_time", args={}), Finish("tool_use")],
+                    [ToolCall(id="c1", name="core.get_time", args={}), Finish("tool_use")],
                     [TextDelta("It is time to work."), Finish("stop")],
                 ]
             )
@@ -132,7 +132,7 @@ async def test_loop_tool_then_answer() -> None:
                     )
                 )
             ).scalar_one()
-            assert inv.effect_name == "get_time"
+            assert inv.effect_name == "core.get_time"
             assert inv.status == "settled"
             assert inv.outcome == "succeeded"
         finally:

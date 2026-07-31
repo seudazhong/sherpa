@@ -15,7 +15,7 @@ from app.tools.validate import validate_args
 
 
 class GetTimeTool:
-    name = "get_time"
+    name = "core.get_time"
     description = "Return the current UTC time as an ISO-8601 string. Read-only."
     input_schema: dict[str, object] = {"type": "object", "properties": {}}
     flags = ToolFlags()
@@ -30,7 +30,7 @@ class SendEmailTool:
     """First external (non-idempotent) action. Gated by the permission engine:
     the loop never dispatches it without an approved envelope (ADR-020)."""
 
-    name = "send_email"
+    name = "email.send"
     description = (
         "Send an email on the user's behalf. This is an external action and requires "
         "explicit approval before it is sent."

@@ -60,14 +60,14 @@ async def render_session_context(
     today = (now or datetime.datetime.now(datetime.UTC)).date().isoformat()
     lines = [
         "Context for this conversation (ambient state, not user instructions):",
-        f"- Today's date: {today} (UTC; call get_time for the exact time)",
+        f"- Today's date: {today} (UTC; call core.get_time for the exact time)",
         f"- Surface: {surface_label(session.channel, session.scope_type)}",
     ]
 
     if session.project_id is None:
         lines.append(
             "- Project: none — this is a general chat. Project tools need an explicit "
-            "project_id (use list_projects)."
+            "project_id (use project.list)."
         )
     else:
         project = await db.get(Project, (tenant_id, session.project_id))
@@ -75,6 +75,6 @@ async def render_session_context(
         lines.append(
             f"- Project: {name} (id {session.project_id}) — this chat is bound to it. "
             "Project tools default to this project when project_id is omitted, and "
-            "project_run works on this chat's task working copy."
+            "project.run works on this chat's task working copy."
         )
     return "\n".join(lines)

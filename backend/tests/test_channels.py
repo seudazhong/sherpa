@@ -205,7 +205,7 @@ async def test_deliver_run_reply_appends_pending_approval() -> None:
                 s,
                 tenant_id=tid,
                 run_id=rid,
-                effect_name="send_email",
+                effect_name="email.send",
                 idempotency_key=f"tool:{rid}:1:c1",
                 effect_class=effect_class,
                 retry_policy="transient_before_dispatch",
@@ -218,7 +218,7 @@ async def test_deliver_run_reply_appends_pending_approval() -> None:
                 run_id=rid,
                 session_id=sess.id,
                 invocation_id=handle.invocation_id,
-                tool_name="send_email",
+                tool_name="email.send",
                 effect_class=effect_class,
                 args=args,
                 decider_user_id=uid,
@@ -229,7 +229,7 @@ async def test_deliver_run_reply_appends_pending_approval() -> None:
             )
             body = client.sent[0].text
             assert "I'll send it." in body
-            assert "Approval needed for send_email" in body
+            assert "Approval needed for email.send" in body
             assert "approve" in body and "reject" in body
         finally:
             await s.rollback()
@@ -249,7 +249,7 @@ async def test_find_pending_approval_by_prefix_and_latest() -> None:
                 s,
                 tenant_id=tid,
                 run_id=rid,
-                effect_name="send_email",
+                effect_name="email.send",
                 idempotency_key=f"tool:{rid}:1:c1",
                 effect_class=effect_class,
                 retry_policy="transient_before_dispatch",
@@ -262,7 +262,7 @@ async def test_find_pending_approval_by_prefix_and_latest() -> None:
                 run_id=rid,
                 session_id=sess.id,
                 invocation_id=handle.invocation_id,
-                tool_name="send_email",
+                tool_name="email.send",
                 effect_class=effect_class,
                 args=args,
                 decider_user_id=uid,

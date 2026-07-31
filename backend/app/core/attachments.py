@@ -219,5 +219,5 @@ async def render_attachment_content(
 
     return _placeholder(
         attachment,
-        "binary file — read it with drive_read if you need its contents",
+        "binary file — read it with drive.read if you need its contents",
     )

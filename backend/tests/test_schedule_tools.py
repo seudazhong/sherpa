@@ -110,17 +110,17 @@ async def test_schedule_tools_via_registry() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            made = await reg.get("create_reminder").execute(
+            made = await reg.get("schedule.create_reminder").execute(
                 tctx, {"todo_id": str(todo.id), "remind_at": _future().isoformat()}
             )
             assert "created reminder" in made.llm_content
 
-            dig = await reg.get("create_daily_digest").execute(
+            dig = await reg.get("schedule.create_digest").execute(
                 tctx, {"local_time": "08:30", "timezone": "UTC"}
             )
             assert "daily digest" in dig.llm_content
 
-            listing = await reg.get("list_schedules").execute(tctx, {})
+            listing = await reg.get("schedule.list").execute(tctx, {})
             assert "schedules:" in listing.llm_content
         finally:
             await s.rollback()
@@ -158,7 +158,7 @@ async def test_loop_agent_creates_digest() -> None:
                     [
                         ToolCall(
                             id="c1",
-                            name="create_daily_digest",
+                            name="schedule.create_digest",
                             args={"local_time": "09:00", "timezone": "UTC"},
                         ),
                         Finish("tool_use"),

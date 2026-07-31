@@ -346,7 +346,7 @@ async def test_text_attachment_is_bounded_and_binary_is_a_pointer() -> None:
                 budget=budget,
                 supports_vision=True,
             )
-            assert "drive_read" in str(pointer["text"])
+            assert "drive.read" in str(pointer["text"])
         finally:
             await s.rollback()
 

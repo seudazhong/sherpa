@@ -470,7 +470,7 @@ class ApprovalBound(StrictModel):
 
 
 class ApprovalAction(StrictModel):
-    tool_name: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
+    tool_name: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")]
     permission_scope: Annotated[str, Field(min_length=1, max_length=512)]
     session_id: uuid.UUID
 

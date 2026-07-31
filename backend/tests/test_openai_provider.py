@@ -48,7 +48,7 @@ async def test_text_stream_normalizes_to_deltas_and_finish() -> None:
 async def test_tool_call_stream_assembles_and_maps_stop_reason() -> None:
     body = _sse(
         '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1",'
-        '"function":{"name":"get_time","arguments":""}}]}}]}',
+        '"function":{"name":"core.get_time","arguments":""}}]}}]}',
         '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]}}]}',
         '{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
     )
@@ -57,7 +57,7 @@ async def test_tool_call_stream_assembles_and_maps_stop_reason() -> None:
     calls = [e for e in events if isinstance(e, ToolCall)]
     finishes = [e for e in events if isinstance(e, Finish)]
     assert len(calls) == 1
-    assert calls[0].id == "c1" and calls[0].name == "get_time" and calls[0].args == {}
+    assert calls[0].id == "c1" and calls[0].name == "core.get_time" and calls[0].args == {}
     assert finishes[0].stop_reason == "tool_use"
 
 

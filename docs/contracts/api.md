@@ -1004,7 +1004,7 @@ class ApprovalBound(StrictModel):
 
 
 class ApprovalAction(StrictModel):
-    tool_name: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
+    tool_name: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")]
     permission_scope: Annotated[str, Field(min_length=1, max_length=512)]
     session_id: UUID
 
@@ -1164,11 +1164,13 @@ class Tool(Protocol):                              # [shipped] — UNCHANGED by 
 Contract rules:
 
 - `name` is stable, unique, and **`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`** — a
-  `domain.verb` pair, at most 64 characters total (**`[target]`**, ADR-046 §决策1;
-  supersedes the former `^[a-z][a-z0-9_]{0,63}$`). The dot is accepted by the OpenAI,
-  Anthropic and Gemini wire formats. Because ADR-045 is a clean break there is **no alias
-  table and no deprecated-name grace period**: a removed name simply becomes an
-  `unknown tool` observation.
+  `domain.verb` pair, at most 64 characters total (**`[shipped]` 2026-07-31**, ADR-046
+  §决策1; supersedes the former `^[a-z][a-z0-9_]{0,63}$`). The dot is accepted by the
+  OpenAI, Anthropic and Gemini wire formats. The grammar is enforced in two places:
+  `app/api/schemas.py::ApprovalAction.tool_name` and the `ck_pg_tool` CHECK on
+  `permission_grants.tool_name` (widened by migration **`0002`**). Because ADR-045 is a
+  clean break there is **no alias table and no deprecated-name grace period**: a removed
+  name simply becomes an `unknown tool` observation.
 - `description` is model-visible and MUST state purpose, boundary, and important
   non-obvious failure conditions; it MUST NOT contain secrets or tenant data.
 - `input_schema` is JSON Schema Draft 2020-12. Object schemas default to

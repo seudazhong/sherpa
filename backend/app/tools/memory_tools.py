@@ -21,7 +21,7 @@ _WRITE = ToolFlags(is_read_only=False, is_concurrency_safe=True, is_destructive=
 
 
 class MemorySetTool:
-    name = "memory_user_set"
+    name = "memory.set"
     description = (
         "Remember a durable fact or preference about the user under a key "
         "(overwrites that key). Use for stable facts worth recalling in future "
@@ -48,7 +48,7 @@ class MemorySetTool:
 
 
 class MemoryGetTool:
-    name = "memory_user_get"
+    name = "memory.recall"
     description = (
         "Recall stored facts about the user. Give a key for one fact; omit key for all. Read-only."
     )
@@ -82,7 +82,7 @@ class MemoryGetTool:
 
 
 class MemoryDeleteTool:
-    name = "memory_user_delete"
+    name = "memory.delete"
     description = "Forget a stored fact about the user by key. Own-data; no approval needed."
     input_schema: dict[str, object] = {
         "type": "object",
@@ -102,11 +102,11 @@ class MemoryDeleteTool:
 
 
 class MemoryNoteTool:
-    name = "memory_note"
+    name = "memory.note"
     description = (
         "Save a longer note or passage to durable archival memory for later "
         "semantic recall (e.g. context, a decision, a summary). Retrieve later with "
-        "memory_search. Prefer memory_user_set for short structured facts. Own-data "
+        "memory.search. Prefer memory.set for short structured facts. Own-data "
         "write; no approval needed."
     )
     input_schema: dict[str, object] = {
@@ -127,7 +127,7 @@ class MemoryNoteTool:
 
 
 class MemorySearchTool:
-    name = "memory_search"
+    name = "memory.search"
     description = (
         "Search the user's archival memory (saved notes/passages) by meaning and "
         "keywords; returns the most relevant notes. Read-only."

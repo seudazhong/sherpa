@@ -24,7 +24,7 @@ from app.providers.tools import to_anthropic_tools, to_gemini_tools, to_openai_t
 
 _TOOLS = [
     {
-        "name": "get_time",
+        "name": "core.get_time",
         "description": "get the time",
         "input_schema": {
             "type": "object",
@@ -51,10 +51,10 @@ def _mock(body: str, cls, **kw):  # type: ignore[no-untyped-def]
 
 def test_tool_serializers_shapes_and_gemini_sanitize() -> None:
     oa = to_openai_tools(_TOOLS)
-    assert oa[0]["type"] == "function" and oa[0]["function"]["name"] == "get_time"
+    assert oa[0]["type"] == "function" and oa[0]["function"]["name"] == "core.get_time"
 
     an = to_anthropic_tools(_TOOLS)
-    assert an[0]["name"] == "get_time" and "input_schema" in an[0]
+    assert an[0]["name"] == "core.get_time" and "input_schema" in an[0]
 
     gm = to_gemini_tools(_TOOLS)
     decl = gm[0]["functionDeclarations"][0]
@@ -102,7 +102,9 @@ def test_anthropic_translate_system_toolresult_merge() -> None:
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [{"id": "tu1", "function": {"name": "get_time", "arguments": "{}"}}],
+                "tool_calls": [
+                    {"id": "tu1", "function": {"name": "core.get_time", "arguments": "{}"}}
+                ],
             },
             {"role": "tool", "tool_call_id": "tu1", "content": "12:00"},
             {"role": "user", "content": "thanks"},
@@ -126,7 +128,7 @@ async def test_anthropic_stream_normalizes_blocks() -> None:
         '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
         '{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}',
         '{"type":"content_block_stop","index":0}',
-        '{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu1","name":"get_time"}}',
+        '{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu1","name":"core.get_time"}}',
         '{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}',
         '{"type":"content_block_stop","index":1}',
         '{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}',
@@ -137,7 +139,7 @@ async def test_anthropic_stream_normalizes_blocks() -> None:
     assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "Hi"
     assert [e.text for e in events if isinstance(e, ReasoningDelta)] == ["hmm"]
     calls = [e for e in events if isinstance(e, ToolCall)]
-    assert calls[0].id == "tu1" and calls[0].name == "get_time" and calls[0].args == {}
+    assert calls[0].id == "tu1" and calls[0].name == "core.get_time" and calls[0].args == {}
     fin = next(e for e in events if isinstance(e, Finish))
     assert fin.stop_reason == "tool_use" and fin.input_tokens == 10 and fin.output_tokens == 5
 
@@ -154,7 +156,7 @@ def test_gemini_translate_system_and_functionresponse_name() -> None:
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
-                    {"id": "call_0", "function": {"name": "get_time", "arguments": "{}"}}
+                    {"id": "call_0", "function": {"name": "core.get_time", "arguments": "{}"}}
                 ],
             },
             {"role": "tool", "tool_call_id": "call_0", "content": "12:00"},
@@ -162,10 +164,10 @@ def test_gemini_translate_system_and_functionresponse_name() -> None:
     )
     assert system == {"parts": [{"text": "sys"}]}
     assert contents[1]["role"] == "model"
-    assert contents[1]["parts"][0]["functionCall"]["name"] == "get_time"
+    assert contents[1]["parts"][0]["functionCall"]["name"] == "core.get_time"
     # tool result → functionResponse carrying the resolved name (from id map)
     fr = contents[2]["parts"][0]["functionResponse"]
-    assert fr["name"] == "get_time" and fr["response"] == {"result": "12:00"}
+    assert fr["name"] == "core.get_time" and fr["response"] == {"result": "12:00"}
 
 
 @pytest.mark.asyncio
@@ -174,7 +176,7 @@ async def test_gemini_stream_normalizes_parts() -> None:
         '{"candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}',
         '{"candidates":[{"content":{"parts":[{"text":"lo"}]}}]}',
         '{"candidates":[{"content":{"parts":[{"text":"why","thought":true}]}}]}',
-        '{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_time","args":{}}}]},'
+        '{"candidates":[{"content":{"parts":[{"functionCall":{"name":"core.get_time","args":{}}}]},'
         '"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":4}}',
     )
     p = _mock(body, GeminiProvider, api_key="k", model="gemini-x")
@@ -182,6 +184,6 @@ async def test_gemini_stream_normalizes_parts() -> None:
     assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "Hello"
     assert [e.text for e in events if isinstance(e, ReasoningDelta)] == ["why"]
     calls = [e for e in events if isinstance(e, ToolCall)]
-    assert calls[0].id == "call_0" and calls[0].name == "get_time" and calls[0].args == {}
+    assert calls[0].id == "call_0" and calls[0].name == "core.get_time" and calls[0].args == {}
     fin = next(e for e in events if isinstance(e, Finish))
     assert fin.stop_reason == "tool_use" and fin.input_tokens == 12 and fin.output_tokens == 4

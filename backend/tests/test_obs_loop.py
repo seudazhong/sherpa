@@ -98,7 +98,7 @@ async def test_loop_emits_span_tree_tokens_and_generations(
             provider = MockProvider(
                 script=[
                     [
-                        ToolCall(id="c1", name="get_time", args={}),
+                        ToolCall(id="c1", name="core.get_time", args={}),
                         Finish("tool_use", input_tokens=100, output_tokens=10),
                     ],
                     [
@@ -140,7 +140,7 @@ async def test_loop_emits_span_tree_tokens_and_generations(
 
             # Tool span succeeded; root carries loop_count + stop_reason.
             tool_span = by_name[genai.SPAN_EXECUTE_TOOL][0]
-            assert tool_span.attributes[genai.TOOL_NAME] == "get_time"
+            assert tool_span.attributes[genai.TOOL_NAME] == "core.get_time"
             assert tool_span.attributes[genai.AGENT_TOOL_SUCCESS] is True
             assert root.attributes[genai.AGENT_STOP_REASON] == "completed"
             assert int(root.attributes[genai.AGENT_LOOP_COUNT]) == 2
@@ -311,7 +311,7 @@ async def test_content_capture_on_writes_openinference_messages(
             _tid, _rid, run = await _seed(s)
             provider = MockProvider(
                 script=[
-                    [ToolCall(id="c1", name="get_time", args={}), Finish("tool_use")],
+                    [ToolCall(id="c1", name="core.get_time", args={}), Finish("tool_use")],
                     [TextDelta("It is time to work."), Finish("stop")],
                 ]
             )
@@ -350,7 +350,7 @@ async def test_loop_logs_llm_and_tool_calls_without_otel(
             _tid, _rid, run = await _seed(s)
             provider = MockProvider(
                 script=[
-                    [ToolCall(id="c1", name="get_time", args={}), Finish("tool_use")],
+                    [ToolCall(id="c1", name="core.get_time", args={}), Finish("tool_use")],
                     [TextDelta("It is time."), Finish("stop")],
                 ]
             )
@@ -366,7 +366,7 @@ async def test_loop_logs_llm_and_tool_calls_without_otel(
             assert all(r.__dict__["provider"] == "mock" for r in llm)
             assert all("latency_ms" in r.__dict__ for r in llm)
             assert len(tools) == 1
-            assert tools[0].__dict__["tool"] == "get_time"
+            assert tools[0].__dict__["tool"] == "core.get_time"
             assert tools[0].__dict__["outcome"] == "ok"
         finally:
             await s.rollback()

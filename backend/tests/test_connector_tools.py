@@ -111,10 +111,10 @@ async def test_sync_connector_tool(monkeypatch: pytest.MonkeyPatch) -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            listing = await reg.get("list_connectors").execute(tctx, {})
+            listing = await reg.get("connector.list").execute(tctx, {})
             assert str(cid) in listing.llm_content
 
-            synced = await reg.get("sync_connector").execute(tctx, {"connector_id": str(cid)})
+            synced = await reg.get("connector.sync").execute(tctx, {"connector_id": str(cid)})
             assert "created 1 candidate" in synced.llm_content
         finally:
             await s.rollback()
@@ -152,7 +152,7 @@ async def test_loop_agent_syncs_connector(monkeypatch: pytest.MonkeyPatch) -> No
             provider = MockProvider(
                 script=[
                     [
-                        ToolCall(id="c1", name="sync_connector", args={"connector_id": str(cid)}),
+                        ToolCall(id="c1", name="connector.sync", args={"connector_id": str(cid)}),
                         Finish("tool_use"),
                     ],
                     [TextDelta("Synced."), Finish("stop")],

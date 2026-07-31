@@ -96,10 +96,10 @@ async def test_insight_tools_via_registry() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            got = await reg.get("get_settings").execute(tctx, {})
+            got = await reg.get("notify.get_settings").execute(tctx, {})
             assert "version=" in got.llm_content
 
-            updated = await reg.get("update_settings").execute(
+            updated = await reg.get("notify.update_settings").execute(
                 tctx, {"notifications_enabled": True}
             )
             assert "updated settings" in updated.llm_content
@@ -138,7 +138,9 @@ async def test_loop_agent_updates_settings() -> None:
                 script=[
                     [
                         ToolCall(
-                            id="c1", name="update_settings", args={"notifications_enabled": True}
+                            id="c1",
+                            name="notify.update_settings",
+                            args={"notifications_enabled": True},
                         ),
                         Finish("tool_use"),
                     ],

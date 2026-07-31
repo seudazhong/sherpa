@@ -80,7 +80,7 @@ async def test_loop_gates_send_email_without_executing() -> None:
             provider = MockProvider(
                 script=[
                     [
-                        ToolCall(id="c1", name="send_email", args=_ARGS),
+                        ToolCall(id="c1", name="email.send", args=_ARGS),
                         Finish("tool_use"),
                     ],
                     [TextDelta("I have requested your approval to send it."), Finish("stop")],
@@ -100,9 +100,9 @@ async def test_loop_gates_send_email_without_executing() -> None:
                 )
             ).scalar_one()
             assert env.status == "pending"
-            assert env.tool_name == "send_email"
+            assert env.tool_name == "email.send"
             assert env.effect_class == "non_idempotent_write"
-            assert env.permission_scope == "tool:send_email"
+            assert env.permission_scope == "tool:email.send"
             assert env.args_hash == args_hash(_ARGS)
             assert env.authorized_decider_user_id == uid
 
@@ -128,7 +128,7 @@ async def test_loop_gates_send_email_without_executing() -> None:
                     )
                 )
             ).scalar_one()
-            assert inv.effect_name == "send_email"
+            assert inv.effect_name == "email.send"
             assert inv.status == "prepared"  # never dispatched
             assert inv.outcome is None
         finally:
@@ -231,7 +231,7 @@ async def _seed_owner_envelope(ttl_seconds: int = 3600) -> dict[str, object]:
             s,
             tenant_id=tid,
             run_id=run.id,
-            effect_name="send_email",
+            effect_name="email.send",
             idempotency_key=f"tool:{run.id}:1:{uuid.uuid4()}",
             effect_class="non_idempotent_write",
             retry_policy="transient_before_dispatch",
@@ -244,7 +244,7 @@ async def _seed_owner_envelope(ttl_seconds: int = 3600) -> dict[str, object]:
             run_id=run.id,
             session_id=sid,
             invocation_id=handle.invocation_id,
-            tool_name="send_email",
+            tool_name="email.send",
             effect_class="non_idempotent_write",
             args=_ARGS,
             decider_user_id=uid,

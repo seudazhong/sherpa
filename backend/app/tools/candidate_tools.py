@@ -18,7 +18,7 @@ from app.tools.base import ToolContext, ToolError, ToolFlags, ToolResult
 from app.tools.validate import validate_args
 
 _ID = {"type": "string", "description": "candidate id (uuid)"}
-_VER = {"type": "integer", "description": "if_version from list_candidates (optimistic lock)"}
+_VER = {"type": "integer", "description": "if_version from inbox.list_candidates (optimistic lock)"}
 _WRITE = ToolFlags(is_read_only=False, is_concurrency_safe=True, is_destructive=False)
 
 
@@ -51,7 +51,7 @@ def _parse_due(value: object) -> datetime.datetime | None:
 
 
 class ListCandidatesTool:
-    name = "list_candidates"
+    name = "inbox.list_candidates"
     description = (
         "List the user's action candidates (proposals extracted from connected email) "
         "with their id, title, priority and version. Read-only."
@@ -84,7 +84,7 @@ class ListCandidatesTool:
 
 
 class AcceptCandidateTool:
-    name = "accept_candidate"
+    name = "inbox.accept"
     description = (
         "Accept a candidate, creating a linked to-do. Needs candidate_id + if_version. "
         "Pass any of title/description/due_at/priority to edit those fields first."
@@ -143,7 +143,7 @@ class AcceptCandidateTool:
 
 
 class DismissCandidateTool:
-    name = "dismiss_candidate"
+    name = "inbox.dismiss"
     description = "Dismiss (discard) a candidate. Needs candidate_id + if_version."
     input_schema: dict[str, object] = {
         "type": "object",
