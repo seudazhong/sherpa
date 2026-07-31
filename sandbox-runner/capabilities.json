@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "image": "sherpa-sandbox-runner",
+  "notes": "Offline coding runtime for the Sherpa sandbox (ADR-047 §决策4). Network-disabled, non-root, read-only rootfs; /work is an anonymous volume filled by tar ingress. Nothing here is installed at runtime.",
+  "shell": "/bin/sh",
+  "workdir": "/work",
+  "user": {
+    "uid": 10001,
+    "gid": 10001,
+    "name": "sherpa"
+  },
+  "tools": [
+    { "name": "python", "command": "python", "version": "3.11.9" },
+    { "name": "pytest", "command": "pytest", "version": "8.3.3" },
+    { "name": "ruff", "command": "ruff", "version": "0.6.9" }
+  ],
+  "absent": [
+    "git",
+    "curl",
+    "wget",
+    "node",
+    "npm",
+    "network access",
+    "package installation"
+  ]
+}
