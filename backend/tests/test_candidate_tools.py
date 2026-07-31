@@ -145,6 +145,39 @@ async def test_candidate_tools_via_registry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_accept_candidate_with_patch_edits_first() -> None:
+    """`accept_candidate` absorbed `edit_candidate` (Phase TR P2.0, backlog B-10):
+    passing any of title/description/due_at/priority edits before accepting."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            tid, uid = await _seed_base(s)
+            cid = await _seed_candidate(s, tid, uid)
+            reg = build_default_registry()
+            tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
+
+            out = await reg.get("accept_candidate").execute(
+                tctx,
+                {
+                    "candidate_id": str(cid),
+                    "if_version": 1,
+                    "title": "Renamed by the agent",
+                    "priority": "high",
+                },
+            )
+            assert "edited + accepted candidate" in out.llm_content
+            cand = await s.get(Candidate, (tid, cid))
+            assert cand is not None and cand.status == "edited"
+            todo = (
+                await s.execute(select(Todo).where(Todo.source_candidate_id == cid))
+            ).scalar_one()
+            assert todo.title == "Renamed by the agent" and todo.priority == "high"
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
 async def test_loop_agent_accepts_candidate() -> None:
     if not await ping_db():
         pytest.skip("database not reachable")

@@ -124,7 +124,8 @@ async def test_memory_tools_via_registry() -> None:
             got = await reg.get("memory_user_get").execute(tctx, {"key": "prefers.concise"})
             assert "yes" in got.llm_content
 
-            listed = await reg.get("memory_user_list").execute(tctx, {})
+            # key omitted -> recall everything (absorbed `memory_user_list`, B-10)
+            listed = await reg.get("memory_user_get").execute(tctx, {})
             assert "prefers.concise" in listed.llm_content
 
             await reg.get("memory_user_delete").execute(tctx, {"key": "prefers.concise"})

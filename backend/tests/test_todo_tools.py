@@ -55,9 +55,13 @@ async def test_todo_service_crud_and_errors() -> None:
             with pytest.raises(VersionConflict):
                 await todos.update_todo(s, ctx, todo_id=todo.id, if_version=999, title="x")
             with pytest.raises(NotFound):
-                await todos.complete_todo(s, ctx, todo_id=uuid.uuid4(), if_version=1)
+                await todos.update_todo(
+                    s, ctx, todo_id=uuid.uuid4(), if_version=1, status="completed"
+                )
 
-            done = await todos.complete_todo(s, ctx, todo_id=todo.id, if_version=todo.version)
+            done = await todos.update_todo(
+                s, ctx, todo_id=todo.id, if_version=todo.version, status="completed"
+            )
             assert done.status == "completed" and done.completed_at is not None
         finally:
             await s.rollback()
@@ -81,10 +85,10 @@ async def test_todo_tools_via_registry() -> None:
             listing = await reg.get("list_todos").execute(tctx, {})
             assert str(todo.id) in listing.llm_content
 
-            done = await reg.get("complete_todo").execute(
-                tctx, {"todo_id": str(todo.id), "if_version": todo.version}
+            done = await reg.get("update_todo").execute(
+                tctx, {"todo_id": str(todo.id), "if_version": todo.version, "status": "completed"}
             )
-            assert "completed todo" in done.llm_content
+            assert "updated todo" in done.llm_content
         finally:
             await s.rollback()
 

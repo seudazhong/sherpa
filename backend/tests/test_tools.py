@@ -46,8 +46,9 @@ def test_bound_text_long_truncated() -> None:
 
 def test_registry_visibility() -> None:
     reg = build_default_registry()
-    assert {t.name for t in reg.visible("safe")} == {"echo", "get_time"}
-    assert reg.is_visible("echo", "safe") is True
+    assert {t.name for t in reg.visible("safe")} == {"get_time"}
+    assert reg.is_visible("get_time", "safe") is True
+    assert reg.is_visible("send_email", "safe") is False
 
 
 def test_unknown_tool_raises() -> None:
@@ -56,11 +57,12 @@ def test_unknown_tool_raises() -> None:
         reg.get("does-not-exist")
 
 
-@pytest.mark.asyncio
-async def test_echo_executes() -> None:
-    reg = build_default_registry()
-    result = await reg.get("echo").execute(_ctx(), {"text": "hello"})
-    assert result.llm_content == "hello"
+def test_deleted_tools_are_gone() -> None:
+    """Phase TR P2.0 deletions (backlog B-10) must not reappear."""
+    names = {t.name for t in build_default_registry().visible("full")}
+    assert names.isdisjoint(
+        {"echo", "drive_restore", "complete_todo", "edit_candidate", "memory_user_list"}
+    )
 
 
 @pytest.mark.asyncio

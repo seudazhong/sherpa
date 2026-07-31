@@ -49,43 +49,36 @@ class MemorySetTool:
 
 class MemoryGetTool:
     name = "memory_user_get"
-    description = "Recall a stored fact about the user by key. Read-only."
+    description = (
+        "Recall stored facts about the user. Give a key for one fact; omit key for all. Read-only."
+    )
     input_schema: dict[str, object] = {
         "type": "object",
         "properties": {"key": _KEY},
-        "required": ["key"],
     }
     flags = ToolFlags(is_read_only=True)
 
     async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
         validate_args(self.input_schema, args)
         db, cc = require_session(ctx), to_caller(ctx)
+        key = args.get("key")
         try:
-            row = await memory.get_memory(db, cc, key=str(args["key"]))
+            if key is None:
+                rows = await memory.list_memory(db, cc)
+                if not rows:
+                    return ToolResult(llm_content="no memories stored yet")
+                body = "\n".join(f"- {r.memory_key}: {r.value_text}" for r in rows)
+                return ToolResult(llm_content="stored memories:\n" + body)
+            row = await memory.get_memory(db, cc, key=str(key))
         except ServiceError as e:
             raise as_tool_error(e) from None
         if row is None:
-            return ToolResult(llm_content=f"no memory stored for '{args['key']}'")
+            return ToolResult(llm_content=f"no memory stored for '{key}'")
         return ToolResult(llm_content=f"{row.memory_key}: {row.value_text}")
 
 
-class MemoryListTool:
-    name = "memory_user_list"
-    description = "List everything the assistant remembers about the user (key + value). Read-only."
-    input_schema: dict[str, object] = {"type": "object", "properties": {}}
-    flags = ToolFlags(is_read_only=True)
-
-    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
-        validate_args(self.input_schema, args)
-        db, cc = require_session(ctx), to_caller(ctx)
-        try:
-            rows = await memory.list_memory(db, cc)
-        except ServiceError as e:
-            raise as_tool_error(e) from None
-        if not rows:
-            return ToolResult(llm_content="no memories stored yet")
-        body = "\n".join(f"- {r.memory_key}: {r.value_text}" for r in rows)
-        return ToolResult(llm_content="stored memories:\n" + body)
+# `memory_user_list` deleted in Phase TR P2.0 (backlog B-10, ADR-046 §8): it is
+# `memory_user_get` with the key omitted. Both become `memory.recall` in P2.2.
 
 
 class MemoryDeleteTool:
@@ -166,7 +159,6 @@ def memory_tools() -> list[object]:
     return [
         MemorySetTool(),
         MemoryGetTool(),
-        MemoryListTool(),
         MemoryDeleteTool(),
         MemoryNoteTool(),
         MemorySearchTool(),

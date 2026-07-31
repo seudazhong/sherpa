@@ -1333,7 +1333,7 @@ sees is the **visible** subset chosen by the resolver (§7.5) — the two are no
 |---|---|---|---|
 | `tools` (core) | `tools.search`, `tools.load` | — | allow |
 | `core` (core) | `core.get_time` | — | allow |
-| `inbox` (core) | `inbox.list_candidates`, `inbox.accept`, `inbox.edit`, `inbox.dismiss` | — | allow |
+| `inbox` (core) | `inbox.list_candidates`, `inbox.accept`, `inbox.dismiss` | — | allow |
 | `todo` (core) | `todo.list`, `todo.create`, `todo.update` | — | allow |
 | `project` (core, project-bound) | `project.list`, `project.create`, `project.review_changes` | `project_binding` for review | allow |
 | `fs` (core, project-bound) | `fs.list`, `fs.read`, `fs.grep`, `fs.write`, `fs.edit`, `fs.delete` | `project_binding` | allow; sensitive paths `ask` |
@@ -1343,7 +1343,7 @@ sees is the **visible** subset chosen by the resolver (§7.5) — the two are no
 | `schedule` (loadable) | `schedule.create_reminder`, `schedule.create_digest`, `schedule.create_task`, `schedule.list`, `schedule.cancel` | — | allow |
 | `memory` (loadable) | `memory.set`, `memory.recall`, `memory.delete`, `memory.note`, `memory.search` | — | allow |
 | `knowledge` (loadable) | `knowledge.search`, `knowledge.list_sources`, `knowledge.add_source`, `knowledge.reindex`, `knowledge.remove_source` | — | allow; `remove_source` **`ask`** |
-| `drive` (loadable) | `drive.list`, `drive.read`, `drive.write`, `drive.search`, `drive.make_folder`, `drive.move`, `drive.trash`, `drive.restore` | — | allow |
+| `drive` (loadable) | `drive.list`, `drive.read`, `drive.write`, `drive.search`, `drive.make_folder`, `drive.move`, `drive.trash` | — | allow |
 | `connector` (loadable) | `connector.list`, `connector.sync` | `gmail_connected` for sync | allow |
 | `notify` (loadable) | `notify.list`, `notify.get_settings`, `notify.update_settings`, `notify.list_activity` | — | allow |
 | `email` (loadable) | `email.send` | — | **`ask`** (ADR-020 envelope) |
@@ -1356,6 +1356,26 @@ store, ADR-030), `run_code` (replaced by `runtime.open(scope="ephemeral")` + `sh
 `project_run`/`project_tree`/`project_read` (replaced by `fs.*` + `runtime.*` + `sh.*`;
 `fs.*` is strictly stronger because it reads the working copy's **effective tree**, so the
 agent can see what it just wrote — the old tools only saw the saved head).
+
+**Phase TR P2.0 deletions `[shipped]`** (backlog B-10, ADR-046 修订 A) — five tools the
+catalog would otherwise have indexed rather than removed:
+
+- `echo` — dev leftover with no product value, and it was SAFE-tier (visible even to
+  untrusted-content sessions). SAFE is now `{get_time}` alone.
+- `drive.restore` — **structurally uncallable**: it required a `node_id` and no tool ever
+  emitted one, so the agent could only call it with a hallucinated id. Restoring from the
+  trash is human-only in the Drive UI; the REST route and service are unchanged.
+- `complete_todo` — exactly `todo.update(status="completed")`; the service function behind
+  it was a one-line alias and is deleted too.
+- `edit_candidate` — folded into **`inbox.accept`**, which now takes an optional
+  `title`/`description`/`due_at`/`priority` patch: same effect class, same approval scope,
+  one intent. **REST keeps both `accept` and `edit` endpoints** — the Inbox UI has two
+  buttons; only the *tool* surface merges.
+- `memory_user_list` — folded into `memory.recall` (key optional), as already specified
+  above.
+
+Measured effect: **47 → 42 tools, 17,432 → 16,153 B** (compact JSON). That is deletion,
+not the catalog; §7.5 is still what closes B-2.
 
 **Still never given to the agent** (unchanged): resolving approvals, destructive purge,
 model-provider configuration, GitHub credentials/import, chat attachment creation, and

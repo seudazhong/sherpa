@@ -86,37 +86,8 @@ class ListCandidatesTool:
 class AcceptCandidateTool:
     name = "accept_candidate"
     description = (
-        "Accept a candidate as-is, creating a linked to-do. Needs candidate_id + if_version."
-    )
-    input_schema: dict[str, object] = {
-        "type": "object",
-        "properties": {"candidate_id": _ID, "if_version": _VER},
-        "required": ["candidate_id", "if_version"],
-    }
-    flags = _WRITE
-
-    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
-        validate_args(self.input_schema, args)
-        db, cc = require_session(ctx), to_caller(ctx)
-        try:
-            result = await candidates.accept_candidate(
-                db,
-                cc,
-                candidate_id=_uuid(args["candidate_id"]),
-                if_version=_int(args["if_version"]),
-            )
-        except ServiceError as e:
-            raise _to_error(e) from None
-        todo = result.todo
-        text = f"accepted candidate {result.candidate.id}; created todo {todo.id}: {todo.title}"
-        return ToolResult(llm_content=text)
-
-
-class EditCandidateTool:
-    name = "edit_candidate"
-    description = (
-        "Edit a candidate's fields then accept it, creating a linked to-do. Needs "
-        "candidate_id + if_version and at least one of title/description/due_at/priority."
+        "Accept a candidate, creating a linked to-do. Needs candidate_id + if_version. "
+        "Pass any of title/description/due_at/priority to edit those fields first."
     )
     input_schema: dict[str, object] = {
         "type": "object",
@@ -135,21 +106,40 @@ class EditCandidateTool:
     async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
         validate_args(self.input_schema, args)
         db, cc = require_session(ctx), to_caller(ctx)
+        candidate_id, if_version = _uuid(args["candidate_id"]), _int(args["if_version"])
+        title = _opt_str(args.get("title"))
+        description = _opt_str(args.get("description"))
+        due_at = _parse_due(args.get("due_at"))
+        priority = _opt_str(args.get("priority"))
+        edited = any(v is not None for v in (title, description, due_at, priority))
         try:
-            result = await candidates.edit_candidate(
-                db,
-                cc,
-                candidate_id=_uuid(args["candidate_id"]),
-                if_version=_int(args["if_version"]),
-                title=_opt_str(args.get("title")),
-                description=_opt_str(args.get("description")),
-                due_at=_parse_due(args.get("due_at")),
-                priority=_opt_str(args.get("priority")),
-            )
+            if edited:
+                result = await candidates.edit_candidate(
+                    db,
+                    cc,
+                    candidate_id=candidate_id,
+                    if_version=if_version,
+                    title=title,
+                    description=description,
+                    due_at=due_at,
+                    priority=priority,
+                )
+            else:
+                result = await candidates.accept_candidate(
+                    db, cc, candidate_id=candidate_id, if_version=if_version
+                )
         except ServiceError as e:
             raise _to_error(e) from None
-        text = f"edited + accepted candidate {result.candidate.id}; created todo {result.todo.id}"
+        verb = "edited + accepted" if edited else "accepted"
+        todo = result.todo
+        text = f"{verb} candidate {result.candidate.id}; created todo {todo.id}: {todo.title}"
         return ToolResult(llm_content=text)
+
+
+# `edit_candidate` deleted in Phase TR P2.0 (backlog B-10): it was `accept` plus an
+# optional patch — same effect class, same approval scope — so the model had to choose
+# between two tools for one intent. The capability-layer split is unchanged: the REST
+# surface still has separate accept/edit endpoints for the Inbox UI's two buttons.
 
 
 class DismissCandidateTool:
@@ -182,6 +172,5 @@ def candidate_tools() -> list[object]:
     return [
         ListCandidatesTool(),
         AcceptCandidateTool(),
-        EditCandidateTool(),
         DismissCandidateTool(),
     ]

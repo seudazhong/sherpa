@@ -19,7 +19,7 @@ from app.models import Session as SessionModel
 from app.permissions import policy
 from app.providers import Finish, MockProvider, TextDelta, ToolCall
 from app.tools import ToolFlags
-from app.tools.builtin import EchoTool, GetTimeTool, SendEmailTool
+from app.tools.builtin import GetTimeTool, SendEmailTool
 
 
 class _Dummy:
@@ -28,7 +28,6 @@ class _Dummy:
 
 
 def test_evaluate_read_only_allows() -> None:
-    assert policy.evaluate(EchoTool()) == "allow"
     assert policy.evaluate(GetTimeTool()) == "allow"
 
 
@@ -42,7 +41,7 @@ def test_evaluate_own_tenant_write_allows() -> None:
 def test_evaluate_external_action_asks() -> None:
     assert policy.evaluate(SendEmailTool()) == "ask"
     assert policy.requires_approval(SendEmailTool()) is True
-    assert policy.requires_approval(EchoTool()) is False
+    assert policy.requires_approval(GetTimeTool()) is False
 
 
 async def _seed(s: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, Run]:

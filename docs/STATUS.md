@@ -29,7 +29,7 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**Phase TR **P2** (tool catalog, TR.7) and **P3** (tar transport + runner image, TR.8) — deliberately disjoint by file ownership, so they may be built in parallel by two processes; both must merge before **P4**.**
+**Phase TR **P2** (tool catalog, TR.7) and **P3** (tar transport + runner image, TR.8) — deliberately disjoint by file ownership, so they may be built in parallel by two processes; both must merge before **P4**. ✅ **P2.0a (dead-tool sweep) shipped 2026-07-31**; P2.0b (prose diet) and P2.0c (4 owner decisions) are the next slimming steps, then P2.1.**
 
 The program is [`IMPLEMENTATION.md` **Phase TR**](IMPLEMENTATION.md): the unified,
 clean-break fix for backlog **B-2** (the 52-tool flat surface) and **B-8** (`project_run` always
@@ -142,7 +142,31 @@ and [**B-11**](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argu
   `llm.tools[].tool.json_schema` + every `tool_call` name, so a **zero-cost baseline (E0: mine existing
   traces for per-tool call frequency, never-called tools, error rates, bytes/call)** is available now and
   should land **before** the B-10 deletion decisions. E1–E3 (Phoenix dataset → experiment → A/B the tool
-  surface) run parallel to Phase TR and need their own ADR.
+  surface) run parallel to Phase TR and need their own ADR. **⚠ Running E0 on 2026-07-30 corrected three
+  assumptions**: (a) P1's `down -v` destroyed the trace corpus (Phoenix shares the `pgdata` volume) — only
+  18 spans exist, so E0 must *generate* a corpus, not mine one; (b) `agent.tool.success` does **not** catch
+  semantic failure (`project_run`, the always-fails tool, records `status_code=UNSET`), because
+  error-is-observation is by design — an eval built on that flag would have scored B-8 as passing;
+  (c) `execute_tool` spans carry no result content. Details in B-11.
+
+**✅ Phase TR P2.0a shipped (2026-07-31) — the dead-tool sweep, the first half of the P2 slimming pass.**
+Five tools deleted that the catalog would otherwise have indexed instead of removed:
+`echo` (SAFE-tier dev leftover — SAFE is now `{get_time}` alone), **`drive_restore`** (structurally
+uncallable: it required a `node_id` and **no tool ever emitted one**, so the model could only call it with a
+hallucinated id), `complete_todo` (exactly `update_todo(status="completed")` — its one-line service alias
+`todos.complete_todo` had no REST caller and went with it), `edit_candidate` (folded into
+`accept_candidate`, which now takes an optional `title`/`description`/`due_at`/`priority` patch — **REST
+keeps both endpoints**, since the Inbox UI has two buttons and only the *tool* surface merges), and
+`memory_user_list` (folded into `memory_user_get`, `key` now optional — both become `memory.recall` in
+P2.2). `SYSTEM_PROMPT` updated to stop advertising a deleted tool.
+**Measured 47 → 42 tools / 17,432 → 16,153 B compact** (18,303 → 16,948 B with default separators).
+Guard: `tests/test_tools.py::test_deleted_tools_are_gone`. Contract `api.md` §7.3 updated.
+Gate: `uv run pytest` **386 passed** (385 baseline + 2 new − 1 deleted), ruff + `ruff format --check` +
+`mypy app` clean. **This is deletion, not the catalog — B-2 still closes at the end of P2.**
+**Still open in P2.0:** the **prose diet (P2.0b)** — descriptions are still **39%** of the surface
+(6,336 B of 16,153), because the offenders (`project_run` 641 chars, `project_tree` 507,
+`search_knowledge` 398) all survived this pass; it needs `TOOL_DESCRIPTION_MAX_BYTES` enforced at startup
+or it refills. And **P2.0c**, the 4 deletions awaiting an owner decision.
 
 **Close criteria:** B-2 closes at the end of **P2** (general-chat tool JSON ≤ 6,144 bytes, down from
 the measured 19,848; core is a byte-true cache prefix; discovery verified in the agent lane). B-8

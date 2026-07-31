@@ -222,27 +222,11 @@ class DriveTrashTool:
         return ToolResult(llm_content=f"trashed {args['path']}")
 
 
-class DriveRestoreTool:
-    name = "drive_restore"
-    description = "Restore a trashed Drive file/folder by its node id. Own-data."
-    input_schema: dict[str, object] = {
-        "type": "object",
-        "properties": {"node_id": {"type": "string", "description": "the trashed node's id"}},
-        "required": ["node_id"],
-    }
-    flags = _WRITE
-
-    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
-        validate_args(self.input_schema, args)
-        db, cc = require_session(ctx), to_caller(ctx)
-        from app.tools.adapter import arg_uuid
-
-        try:
-            node = await drive.restore(db, cc, arg_uuid(args["node_id"]))
-            path = await drive.node_path(db, cc, node)
-        except ServiceError as e:
-            raise as_tool_error(e) from None
-        return ToolResult(llm_content=f"restored {path}")
+# `drive_restore` deleted in Phase TR P2.0 (backlog B-10): it required a `node_id`
+# that no tool ever emits — `DriveListTool` prints name/type/size/version and
+# `DriveSearchTool` prints paths — so the agent could only ever call it with a
+# hallucinated id. Restoring from the trash stays a human action in the Drive UI
+# (`drive.restore` in the service layer is still used by the REST route).
 
 
 def drive_tools() -> list[object]:
@@ -254,5 +238,4 @@ def drive_tools() -> list[object]:
         DriveMakeFolderTool(),
         DriveMoveTool(),
         DriveTrashTool(),
-        DriveRestoreTool(),
     ]

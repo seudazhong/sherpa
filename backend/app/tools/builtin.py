@@ -1,8 +1,8 @@
-"""Starter read-only built-in tools.
+"""Starter built-in tools.
 
-v1 ships two dependency-free read-only tools so the loop can exercise tool-calling
-before the workspace/DB-backed tools (read/glob/grep, memory, connectors) land.
-All are SAFE-tier (available even to untrusted-content sessions).
+Dependency-free built-ins registered alongside the DB-backed tool modules.
+`get_time` is SAFE-tier (available even to untrusted-content sessions);
+`send_email` is the first external, approval-gated action.
 """
 
 from __future__ import annotations
@@ -12,21 +12,6 @@ import datetime
 from app.tools.base import ToolContext, ToolFlags, ToolResult
 from app.tools.registry import ToolRegistry
 from app.tools.validate import validate_args
-
-
-class EchoTool:
-    name = "echo"
-    description = "Echo the provided text back verbatim. Read-only."
-    input_schema: dict[str, object] = {
-        "type": "object",
-        "properties": {"text": {"type": "string"}},
-        "required": ["text"],
-    }
-    flags = ToolFlags()
-
-    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
-        validate_args(self.input_schema, args)
-        return ToolResult(llm_content=str(args["text"]))
 
 
 class GetTimeTool:
@@ -78,7 +63,6 @@ class SendEmailTool:
 
 def build_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    registry.register(EchoTool(), safe=True)
     registry.register(GetTimeTool(), safe=True)
     registry.register(SendEmailTool(), safe=False)
     from app.tools.candidate_tools import candidate_tools

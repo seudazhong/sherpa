@@ -133,27 +133,11 @@ class UpdateTodoTool:
         return ToolResult(llm_content=f"updated todo {todo.id}: [{todo.status}] {todo.title}")
 
 
-class CompleteTodoTool:
-    name = "complete_todo"
-    description = "Mark a to-do complete. Needs todo_id + if_version."
-    input_schema: dict[str, object] = {
-        "type": "object",
-        "properties": {"todo_id": _ID, "if_version": _VER},
-        "required": ["todo_id", "if_version"],
-    }
-    flags = _WRITE
-
-    async def execute(self, ctx: ToolContext, args: dict[str, object]) -> ToolResult:
-        validate_args(self.input_schema, args)
-        db, cc = require_session(ctx), to_caller(ctx)
-        try:
-            todo = await todos.complete_todo(
-                db, cc, todo_id=arg_uuid(args["todo_id"]), if_version=arg_int(args["if_version"])
-            )
-        except ServiceError as e:
-            raise as_tool_error(e) from None
-        return ToolResult(llm_content=f"completed todo {todo.id}: {todo.title}")
+# `complete_todo` deleted in Phase TR P2.0 (backlog B-10): it was exactly
+# `update_todo(status="completed")` — the service function it called was a
+# one-line alias for `update_todo` — so it bought the model a second way to
+# spell one action and nothing else.
 
 
 def todo_tools() -> list[object]:
-    return [ListTodosTool(), CreateTodoTool(), UpdateTodoTool(), CompleteTodoTool()]
+    return [ListTodosTool(), CreateTodoTool(), UpdateTodoTool()]

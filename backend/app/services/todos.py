@@ -132,9 +132,3 @@ async def update_todo(
     row.updated_at = _now()
     await db.flush()
     return todo_schema(row)
-
-
-async def complete_todo(
-    db: AsyncSession, ctx: CallerContext, *, todo_id: uuid.UUID, if_version: int
-) -> TodoSchema:
-    return await update_todo(db, ctx, todo_id=todo_id, if_version=if_version, status="completed")

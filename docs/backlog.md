@@ -463,11 +463,20 @@ tool call with extra steps.
 
 ### Decided / open
 
-- **Decided:** add a P2.0 slimming task before P2.1 (dead-tool sweep + description byte cap + the ADR-046 §8
-  merges, reframed from "renaming" to *compression* with a measured exit target); keep `domain.verb`;
-  **do not** horizontally merge; amend ADR-046 §决策5 (done) and its baseline numbers.
-- **Open (owner):** the 4 deletion decisions above; whether memory keeps **two systems** (KV
-  `set/get/list/delete` + archival `note/search` = 6 tools / 1,966 B, forcing a "is this a fact or a note?"
+- **✅ Shipped 2026-07-31 (Phase TR P2.0a)** — the five confirmed deletions above are live:
+  **47 → 42 tools, 17,432 → 16,153 B compact.** `edit_candidate` folded into `accept_candidate`
+  (optional patch); `memory_user_list` folded into `memory_user_get` (optional `key`);
+  `complete_todo` gone **with its dead service alias**; `echo` and `drive_restore` gone. SAFE tier is
+  now `{get_time}` alone. Regression guard: `tests/test_tools.py::test_deleted_tools_are_gone`.
+  Contract `api.md` §7.3 updated. Gate: 386 passed, ruff + format + mypy clean.
+- **Decided:** P2.0 runs before P2.1 (slim first, index second); keep `domain.verb`;
+  **do not** horizontally merge; amend ADR-046 §决策5 (done) and its baseline numbers (done).
+- **Open (P2.0b, not started):** the prose diet. Descriptions are **still 39%** of the surface
+  (6,336 B of 16,153) — the deletions barely moved that ratio because the offenders survive.
+  Needs `TOOL_DESCRIPTION_MAX_BYTES` enforced at startup, or it refills.
+- **Open (P2.0c, owner):** the 4 deletion decisions (`drive_make_folder`, `list_notifications`,
+  `reindex_knowledge_source`, `create_daily_digest`); whether memory keeps **two systems** (KV
+  `set/get/delete` + archival `note/search` = 5 tools, forcing a "is this a fact or a note?"
   judgement on every write); whether to schedule V-1..V-4.
 
 ---
