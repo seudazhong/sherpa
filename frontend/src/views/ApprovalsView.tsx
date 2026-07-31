@@ -13,7 +13,7 @@ function expiresLabel(iso: string): { text: string; overdue: boolean } {
 }
 
 function grantLabel(g: Grant): string {
-  if (g.tool_name === "email.send") {
+  if (g.tool_name === "email_send") {
     const r = g.match_json.recipients;
     const list = Array.isArray(r) ? r.join(", ") : "";
     return `Send email to ${list}`;
@@ -70,7 +70,7 @@ export default function ApprovalsView() {
     setBusy("grant");
     setError(null);
     try {
-      await api.createGrant(csrf, "email.send", {
+      await api.createGrant(csrf, "email_send", {
         recipients: [newEmail.trim().toLowerCase()],
       });
       setNewEmail("");

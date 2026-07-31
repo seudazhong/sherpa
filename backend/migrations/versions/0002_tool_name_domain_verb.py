@@ -8,7 +8,7 @@ Every built-in tool was renamed from a mix of `action_domain` / `domain_action`
 (measured: 28 / 15 / 4 neither) to a single `domain.verb` namespace. The
 `permission_grants.tool_name` CHECK constraint still spelled the old grammar
 `^[a-z][a-z0-9_]{0,63}$`, which has no dot, so every grant insert for a renamed
-tool (`email.send`) failed with `ck_pg_tool`.
+tool (`email_send`) failed with `ck_pg_tool`.
 
 This is a genuine schema change, so it earns its own revision rather than being
 folded back into `0001_baseline` — existing databases (including the ADR-044

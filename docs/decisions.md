@@ -30,10 +30,10 @@
 | 2026-07-29 | Chat 能否上传/粘贴图片 + 从 Drive 附加文件（backlog B-6） | ✅ **字节只存 Drive**（粘贴/上传先落 `Chat uploads/`，附件只存 `drive_node_id`+`version` 引用，绝不字节复制进 `parts`）；`parts.kind` 扩为 `text\|status\|image\|file_ref`；**装配期**读字节 → user turn 变 OpenAI 形状 content 数组（纯文本 turn 仍是字符串，缓存前缀不变）；三个 provider 各自翻译（Anthropic image block / Gemini inlineData / OpenAI 直通）；**每来源 `supports_vision` 标志**，为假时图片诚实降级为文本占位而非 400；非图片文本类做有界抽取、二进制只给指针 | 新增 ADR-043（落地 backlog B-6；扩展 ADR-005/008/030；延伸 ADR-041）|
 | 2026-07-29 | 测试套件清空开发库、并与 worker 死锁（backlog B-9） | ✅ **进程级数据面隔离**，不是「把 20 处 DELETE 写好看点」：测试进程在 `app.config` 建单例**之前**改写 `DATABASE_URL`→`<应用库>_test`、`REDIS_URL`→逻辑库 15、`OWNER_EMAIL`→合成 owner；专用库由会话钩子自动建库+`alembic upgrade head`+盖**标记表**；**标记表是允许破坏性写入的唯一凭据**（fail-closed，绝不降级到应用库）；全部清场收敛到唯一入口 `drop_tenant()`（`lock_timeout` + 单次重试）。**worker 无需停机**即可跑全量 | 新增 ADR-044（落地 backlog B-9；复用 ADR-015/019/022）|
 | 2026-07-30 | backlog B-2（52 个扁平工具）与 B-8（`project_run` 必失败）是分开修还是一起修 | ✅ **一起修，且按 clean break 做**：二者是同一缺陷的两面——工具面是静态全量注入的，而"在项目里改/跑/测代码"天然需要上下文相关、还会继续变大的工具集。**明确放弃向后兼容**：不做别名/弃用期、不保留历史工具名、不保留 `/files` 遗留栈、不保留 `project_run` 行为、**不做任何数据迁移**；32 条 alembic revision **squash 成单一 baseline**，开发库与卷**销毁重建**（现有数据全部是可抛弃的测试数据，负责人已确认）。本批次**只做 ADR + 契约与设计先行**（无生产代码/迁移/前端/基础设施改动） | 新增 ADR-045（伞；统领 046/047/048；**取代** ADR-023 的工具面落地口径、**取代** ADR-040 §决策8 的执行器口径）|
-| 2026-07-30 | 工具面如何在持续变大的同时保持可理解、省 token、权限安全、可发现 | ✅ **分层工具目录 + 上下文作用域可见集 + 渐进式披露**：全部工具统一 `domain.verb` 命名；旁挂 `ToolDescriptor`（namespace/toolset/version/requires/surfaces/summary）**不改窄腰 `Tool` Protocol**；`ToolsetResolver` 成为**真正的 VISIBLE 闸**（按 trust tier / surface / session kind / runtime 求解，turn 边界冻结，确定性排序，core 恒为缓存前缀真前缀）；core 常驻 ~15 个 + 一行式目录摘要 + `tools.search`/`tools.load` 两个元工具；**不做动词巨型工具**（`drive(op=…)` 会塌成 `oneOf`、削弱校验、破坏权限粒度与审批 scope）；策略引擎升级为 **args 感知** `evaluate(ctx, descriptor, args, scope)` | 新增 ADR-046（落地 backlog B-2；受 ADR-045 统领；具体化 ADR-009 的 VISIBLE 闸；扩展 ADR-008 权限代数） |
+| 2026-07-30 | 工具面如何在持续变大的同时保持可理解、省 token、权限安全、可发现 | ✅ **分层工具目录 + 上下文作用域可见集 + 渐进式披露**：全部工具统一 `domain.verb` 命名；旁挂 `ToolDescriptor`（namespace/toolset/version/requires/surfaces/summary）**不改窄腰 `Tool` Protocol**；`ToolsetResolver` 成为**真正的 VISIBLE 闸**（按 trust tier / surface / session kind / runtime 求解，turn 边界冻结，确定性排序，core 恒为缓存前缀真前缀）；core 常驻 ~15 个 + 一行式目录摘要 + `tools_search`/`tools_load` 两个元工具；**不做动词巨型工具**（`drive(op=…)` 会塌成 `oneOf`、削弱校验、破坏权限粒度与审批 scope）；策略引擎升级为 **args 感知** `evaluate(ctx, descriptor, args, scope)` | 新增 ADR-046（落地 backlog B-2；受 ADR-045 统领；具体化 ADR-009 的 VISIBLE 闸；扩展 ADR-008 权限代数） |
 | 2026-07-30 | 项目字节如何进出沙箱（B-8 的 bind mount 在 DooD 下结构性失败） | ✅ **改用 tar ingress/egress，彻底删除 bind mount**：`put_archive`/`get_archive` 完全不涉及任何文件系统路径语义 → 宿主守护进程无需解析 worker 容器内路径（B-8 整类问题消失）、`src=` 路径注入面消失、Windows/Linux/CI/DinD 同码同行为、可用 fake docker client 完整单测。这是对 **ADR-025/ADR-039 挂载口径的收窄性修订**（从"只挂一次性 scratch"收窄为"**只注入**一次性 scratch，**永不挂任何宿主路径**"），**不是放松**。同批交付**真自建 `sandbox-runner` 镜像**（python+pytest+ruff+`capabilities.json`），否则挂载修好也无产品价值 | 新增 ADR-047（落地 backlog B-8；受 ADR-045 统领；**收窄性修订** ADR-025/ADR-039） |
-| 2026-07-30 | file/shell 是宿主一等工具、沙箱路由工具、还是委派子 agent | ✅ **混合分层 + 显式 RuntimeSession**：`fs.*` 走**宿主侧**直接读写工作副本 overlay（无需容器、确定性、可完整单测、且严格强于旧 `project_tree`/`project_read`——后者只看 head，看不见 agent 刚写的内容）；`sh.*` **必经 RuntimeSession** 进沙箱。产品后果：**沙箱不可用只损失「跑」，不损失「改」**。`RuntimeSession` 从 v1 起就是**显式一等对象**（`runtime.open/close` + `scope=project|ephemeral`），未来「沙箱内专用 coding agent」只是加一个 sub-agent provider（`delegate.code_task(runtime_session_id, …)`），**不需重写编排**。`project_run`/`project_tree`/`project_read`/`run_code` **全部删除**；`project_sandbox_runs`（含从未实现的 `warm_until`/在 tar 下无意义的 `scratch_ref`）拆为 `project_runtime_sessions` + `project_exec_runs` | 新增 ADR-048（落地 backlog B-8 的产品面；受 ADR-045 统领；**修订** ADR-040 §决策8「不嵌 coding agent」为「v1 不嵌、接缝预留」） |
-| 2026-07-30 | 先建工具目录还是先压缩工具本身；`domain(action,…)` 横向合并是否可行；CLI agent 模式能否借鉴 | ✅ **修订 ADR-046（修订 A）**：负责人复审指出「引入渐进式披露前尚未做过廉价压缩」——实测成立（47 工具 / 17,432 B，其中**描述散文占 38%**，含从未被审视的死工具，`drive_restore` 甚至**结构性不可调用**：无任何工具吐 node id）。故 **P2 先瘦身再建目录**（删死工具 + 描述字节上限进启动强制）。但压缩有硬地板（瘦身后 ~12,137 B，仍是 6 KiB 预算的 2×，且 P4 加 11 个工具即吃回），**替代不了目录**。横向 `domain(action)` 合并**维持否决但理由收窄**：ADR-046 原理由②③被其自身 §决策6（args 感知策略）推翻，仅存①（`validate.py` 非全量 JSON-Schema 引擎，合并后 `if_version` 等条件 required 校验**消失**而非削弱）+ ④（模型对判别式联合偏弱）。新增 **§决策10：合并只沿纵向（工作流）轴**（Anthropic `get_customer_context` 判据），跨域 `list(kind)` 明确禁止。CLI 模式最大省钱来源是**预训练先验**，对自有数据域**完全不转移**；可转移的「带内发现」就是 `tools.search`/`tools.load`（GitHub MCP Server + Copilot CLI 均为「渐进披露 + 工具保持独立」的一线先例） | **修订 ADR-046**（§决策1 补注 · §决策5 收窄 · **新增 §决策10** · 基线数字更正）；新增 backlog **B-10**（瘦身 + 纵向合并候选）与 **B-11**（工具使用评测缺失，Phoenix 已具备采集基础） |
+| 2026-07-30 | file/shell 是宿主一等工具、沙箱路由工具、还是委派子 agent | ✅ **混合分层 + 显式 RuntimeSession**：`fs.*` 走**宿主侧**直接读写工作副本 overlay（无需容器、确定性、可完整单测、且严格强于旧 `project_tree`/`project_read`——后者只看 head，看不见 agent 刚写的内容）；`sh.*` **必经 RuntimeSession** 进沙箱。产品后果：**沙箱不可用只损失「跑」，不损失「改」**。`RuntimeSession` 从 v1 起就是**显式一等对象**（`runtime_open/close` + `scope=project|ephemeral`），未来「沙箱内专用 coding agent」只是加一个 sub-agent provider（`delegate.code_task(runtime_session_id, …)`），**不需重写编排**。`project_run`/`project_tree`/`project_read`/`run_code` **全部删除**；`project_sandbox_runs`（含从未实现的 `warm_until`/在 tar 下无意义的 `scratch_ref`）拆为 `project_runtime_sessions` + `project_exec_runs` | 新增 ADR-048（落地 backlog B-8 的产品面；受 ADR-045 统领；**修订** ADR-040 §决策8「不嵌 coding agent」为「v1 不嵌、接缝预留」） |
+| 2026-07-30 | 先建工具目录还是先压缩工具本身；`domain(action,…)` 横向合并是否可行；CLI agent 模式能否借鉴 | ✅ **修订 ADR-046（修订 A）**：负责人复审指出「引入渐进式披露前尚未做过廉价压缩」——实测成立（47 工具 / 17,432 B，其中**描述散文占 38%**，含从未被审视的死工具，`drive_restore` 甚至**结构性不可调用**：无任何工具吐 node id）。故 **P2 先瘦身再建目录**（删死工具 + 描述字节上限进启动强制）。但压缩有硬地板（瘦身后 ~12,137 B，仍是 6 KiB 预算的 2×，且 P4 加 11 个工具即吃回），**替代不了目录**。横向 `domain(action)` 合并**维持否决但理由收窄**：ADR-046 原理由②③被其自身 §决策6（args 感知策略）推翻，仅存①（`validate.py` 非全量 JSON-Schema 引擎，合并后 `if_version` 等条件 required 校验**消失**而非削弱）+ ④（模型对判别式联合偏弱）。新增 **§决策10：合并只沿纵向（工作流）轴**（Anthropic `get_customer_context` 判据），跨域 `list(kind)` 明确禁止。CLI 模式最大省钱来源是**预训练先验**，对自有数据域**完全不转移**；可转移的「带内发现」就是 `tools_search`/`tools_load`（GitHub MCP Server + Copilot CLI 均为「渐进披露 + 工具保持独立」的一线先例） | **修订 ADR-046**（§决策1 补注 · §决策5 收窄 · **新增 §决策10** · 基线数字更正）；新增 backlog **B-10**（瘦身 + 纵向合并候选）与 **B-11**（工具使用评测缺失，Phoenix 已具备采集基础） |
 
 ---
 
@@ -181,7 +181,7 @@
 - **理由**：REST 与 Tool 各写一遍业务逻辑必然漂移、双倍 bug、权限不一致；共享 service 让"UI 能做 = agent 能做"成为结构性保证。
 - **落地缺口（→ [docs/11](11-agent-tool-surface.md) + IMPLEMENTATION M-tools）**：`Tool.execute` 需注入 `ToolContext`（当前 `base.py` 缺）；ALLOWED 策略引擎需实现（当前仅 VISIBLE 闸 + 极简 ask）；输出 spill 需落地（api.md §7.2）；候选/待办/连接器/日程/通知/活动均需补 service 抽取 + 工具（`create_todo`/`create_schedule`/日程 REST 连 REST 都缺）。
 - **来源**：用户输入「我认为 agent 肯定要有能力自主控制用户在 UI 上能看到的一切功能」；对齐 api.md §7、docs/05。
-> **落地口径修订（2026-07-30，见 [ADR-045](#adr-045)/[ADR-046](#adr-046)）**：**原则不变**（单一能力层 + REST/Tool 双适配、共享 `CallerContext` 与四道闸、按能力纵切）。修订的是**工具面的呈现方式**：从「所有已注册工具平铺发给每个会话」改为「**分层工具目录 + 上下文作用域可见集 + 渐进式披露**」（`domain.verb` 命名、`ToolDescriptor` 旁挂、`ToolsetResolver` 落地 VISIBLE 闸、`tools.search`/`tools.load`）。"UI 能做 = agent 能做"仍是结构性保证 —— 只是 agent **按上下文取用**而非一次全拿。上文§落地缺口中「`Tool.execute` 需注入 `ToolContext`」**已完成**（`app/tools/base.py:74`）；「ALLOWED 策略引擎」由 [ADR-046] §决策6 升级为 **args 感知**；「输出 spill」的类型化 `ToolOutputSpillReference`（api §7.2）仍**未落地**，排在 Phase TR。
+> **落地口径修订（2026-07-30，见 [ADR-045](#adr-045)/[ADR-046](#adr-046)）**：**原则不变**（单一能力层 + REST/Tool 双适配、共享 `CallerContext` 与四道闸、按能力纵切）。修订的是**工具面的呈现方式**：从「所有已注册工具平铺发给每个会话」改为「**分层工具目录 + 上下文作用域可见集 + 渐进式披露**」（`domain.verb` 命名、`ToolDescriptor` 旁挂、`ToolsetResolver` 落地 VISIBLE 闸、`tools_search`/`tools_load`）。"UI 能做 = agent 能做"仍是结构性保证 —— 只是 agent **按上下文取用**而非一次全拿。上文§落地缺口中「`Tool.execute` 需注入 `ToolContext`」**已完成**（`app/tools/base.py:74`）；「ALLOWED 策略引擎」由 [ADR-046] §决策6 升级为 **args 感知**；「输出 spill」的类型化 `ToolOutputSpillReference`（api §7.2）仍**未落地**，排在 Phase TR。
 
 ### ADR-024 · M3 抽取质量门推迟出 v1（折入 post-v1 评估飞轮）
 - **决策（用户确认 2026-07-21）**：v1 收尾 **不含** M3 抽取精度质量门（goldens + 50–100 封脱敏邮件精度基准 + 回归数据集）。**v1 收尾 = 上下文忠实性修复（跨-run 工具历史 bug）+ 审批闭环**。评估 harness 折入 **post-v1 里程碑 #11（评估飞轮增强）**。
@@ -829,16 +829,30 @@
 > 另记：命名前缀 vs 后缀（`domain.verb` vs `verb_domain`）是**实测题**，见 §决策1 补注与 [backlog B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured)。
 
 - **决策**：
-  1. **统一命名 `domain.verb`**：全部工具一律 `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`（`drive.read` / `project.list` / `fs.write` / `sh.exec` / `tools.search`）。**这需要修订 [api.md §7](contracts/api.md) 的名称正则**（现为 `^[a-z][a-z0-9_]{0,63}$`，不含点）。点号在 OpenAI / Anthropic / Gemini 三家 wire 协议上都合法（`backend/app/providers/tools.py` 的三个适配器只做透传/裁剪）。clean break 之下**不存在新旧混排**，故 `ToolDescriptor` **不设 `stability`/`deprecated` 字段**。
+  1. **统一命名 `domain_verb`**：全部工具一律 `^[a-z][a-z0-9]*_[a-z][a-z0-9_]*$`（`drive_read` / `project_list` / `fs_write` / `sh_exec` / `tools_search`）。
+
+     > **⚠️ 修订 B（2026-07-31）——本条原文的 `domain.verb`（点号）是错的，已被实测推翻。**
+     > 原文理由是"点号在 OpenAI / Anthropic / Gemini 三家 wire 协议上都合法（`providers/tools.py` 的三个适配器只做透传/裁剪）"。**那是一条从未实测的断言。** 点号版本已实现并提交，**全套单测保持绿**——测试用 mock provider，结构上不可能看见 wire 层拒绝——但**线上栈随即完全无法调用任何工具**。litellm 代理后面的 GitHub Copilot 返回：
+     >
+     > ```
+     > 400 Invalid 'tools[0].name': string does not match pattern.
+     >     Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'.
+     > ```
+     >
+     > 即：**适配器透传确实没问题，但真实后端有自己的名称正则，不含点。** 改用下划线后同一条 prompt 实测通过（journal 出现 `tool-call`/`tool-result`，工具名 `core_get_time`；provider 零错误）。下划线还恰好**与 Anthropic 官方示例一致**（`asana_search` / `jira_search` / `calendar_create_event`）。
+     >
+     > **教训（对未来任何工具面改动都成立）**：工具**名称语法属于 wire 契约**，`uv run pytest` **永远验不了**它——mock provider 让这类回归 100% 静默通过。任何改动名称语法的变更**必须对真实 provider 冒烟**。缺口记在 [B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured)。
+
+     正则在两处强制：`app/api/schemas.py::ApprovalAction.tool_name`，以及 `permission_grants.tool_name` 上的 `ck_pg_tool` CHECK（migration **`0003`**；`0002` 曾短暂持有点号版本）。正则只保证**两段式形状**，无法证明前缀是已注册命名空间——那由 `ToolDescriptor.namespace` 在 P2.1 强制。clean break 之下**不存在新旧混排**，故 `ToolDescriptor` **不设 `stability`/`deprecated` 字段**。
      - **实测动机（修订 A 补）**：47 个工具里 **28 个 `action_domain` · 15 个 `domain_action` · 4 个都不是**，且**同一个域内部就混用**（`todo_write` ↔ `list_todos`；`project_read` ↔ `list_projects`；`search_knowledge` ↔ `add_knowledge_source`），连局部模式匹配都不成立。drive 是唯一自洽的一组。
-     - **但方向本身待实测**：Anthropic《[Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)》示例用域前缀（`asana_search`/`jira_search`），却明说前缀式与后缀式命名 *"have non-trivial effects on our tool-use evaluations. Effects vary by LLM and we encourage you to choose a naming scheme according to your own evaluations."* 故 `domain.verb` 先按本 ADR 落地，**其相对 `verb_domain` 的优劣列为 [B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) E3 的一个变体去测**，不作为已证结论。
+     - **但方向本身待实测**：Anthropic《[Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)》示例用域前缀（`asana_search`/`jira_search`），却明说前缀式与后缀式命名 *"have non-trivial effects on our tool-use evaluations. Effects vary by LLM and we encourage you to choose a naming scheme according to your own evaluations."* 故 `domain_verb` 先按本 ADR 落地，**其相对 `verb_domain` 的优劣列为 [B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) E3 的一个变体去测**，不作为已证结论。
   2. **`ToolDescriptor` 旁挂，不改窄腰**：`Tool` Protocol（`backend/app/tools/base.py:68-74`）一字不改；目录元数据在**注册时**以独立 dataclass 提供：
      ```python
      @dataclass(frozen=True)
      class ToolDescriptor:
          tool: Tool
          namespace: str            # core|inbox|todo|schedule|memory|knowledge|drive|project|fs|sh|run|tools
-         toolset: str              # 目录条目 id，如 "knowledge" / "fs.edit"
+         toolset: str              # 目录条目 id，如 "knowledge" / "fs_edit"
          version: int              # 破坏性 schema 变更 ⇒ 升版（clean break 下无并存期）
          requires: frozenset[str]  # "project_binding" | "runtime_session" | "gmail_connected"
          surfaces: frozenset[str]  # "chat" | "scheduled_task"（"connector_analysis" 恒为空集）
@@ -846,20 +860,20 @@
      ```
   3. **`ToolsetResolver` = 真正的 VISIBLE 闸**（[api.md §7.1](contracts/api.md) 第 2 闸的落地）。输入 profile `(trust_tier, surface, session_kind, runtime, loaded_toolsets)`，输出 `core` / `catalog` / `loaded`。**两条硬约束**：
      - **确定性排序 + core 恒为真前缀**：按 `(namespace, name)` 排序，`core` 永远在数组最前 —— 于是 `resolve(general).core` 在字节层面是 `resolve(project_bound)` 工具数组的**真前缀**，加载新工具集只让**尾部**失配。这是 [docs/04](04-core-loop.md) 不变量⑤（前缀字节稳定 + 动态数据在尾部）在工具数组上的落地。
-     - **turn 边界冻结**：可见集在 turn 开始时定死、turn 内不变（[ADR-009] 原文）；`tools.load` 的效果**在下一个 turn 生效**，并写一条 `toolset.resolved` 事件。
+     - **turn 边界冻结**：可见集在 turn 开始时定死、turn 内不变（[ADR-009] 原文）；`tools_load` 的效果**在下一个 turn 生效**，并写一条 `toolset.resolved` 事件。
   4. **渐进式披露**：`core` 常驻约 15 个 + **一行式目录摘要**渲染进 system 消息的能力层（位于全局前缀之后、per-user 记忆与 per-session ambient 之前，保持 `loop.py:483-491` 的分层顺序）+ 两个元工具（合计 <500 B）：
-     - `tools.search(query)` → 返回匹配的 toolset id + summary + 工具数（`read_only`，allow）
-     - `tools.load(toolsets[≤3])` → 本会话后续 turn 获得其完整 schema（`read_only` 语义，allow，但**记审计**）
-  5. **不做动词巨型工具**（`drive(op=…)`）。理由：会把 8 个精确 JSON Schema 塌成带 `oneOf` 的巨型 schema，**削弱 `app/tools/validate.py` 的参数校验**、**破坏权限粒度**（`drive.trash` 与 `drive.read` 的 `effect_class` 不同）、**污染审批 scope**（`permission_scope="tool:drive"` 太粗）。分组 + 按需加载已拿到 token 收益的绝大部分，风险却低一个数量级。
+     - `tools_search(query)` → 返回匹配的 toolset id + summary + 工具数（`read_only`，allow）
+     - `tools_load(toolsets[≤3])` → 本会话后续 turn 获得其完整 schema（`read_only` 语义，allow，但**记审计**）
+  5. **不做动词巨型工具**（`drive(op=…)`）。理由：会把 8 个精确 JSON Schema 塌成带 `oneOf` 的巨型 schema，**削弱 `app/tools/validate.py` 的参数校验**、**破坏权限粒度**（`drive_trash` 与 `drive_read` 的 `effect_class` 不同）、**污染审批 scope**（`permission_scope="tool:drive"` 太粗）。分组 + 按需加载已拿到 token 收益的绝大部分，风险却低一个数量级。
      - **修订 A（2026-07-30）——否决结论不变，但理由必须收窄**：
-       - **理由②③作废**（自我矛盾）。它们假定策略引擎看不见参数；而**本 ADR 的 §决策6** 恰恰把引擎升级为 args 感知 `evaluate(ctx, descriptor, args, scope)`。一旦看得见 args，`drive(action="trash")` 的 effect class 与审批 scope **可以和 `drive.trash` 一样精确**。用一条被自己下一条决策消除的理由去否决，站不住。
+       - **理由②③作废**（自我矛盾）。它们假定策略引擎看不见参数；而**本 ADR 的 §决策6** 恰恰把引擎升级为 args 感知 `evaluate(ctx, descriptor, args, scope)`。一旦看得见 args，`drive(action="trash")` 的 effect class 与审批 scope **可以和 `drive_trash` 一样精确**。用一条被自己下一条决策消除的理由去否决，站不住。
        - **理由①成立，且比原文更重**。原文说 schema「塌成 `oneOf`」；实际是**连 `oneOf` 都写不了**——`app/tools/validate.py` 自述 *"Not a full JSON-Schema engine … checks required keys are present and primitive types match"*，不认 `enum`/`oneOf`/条件 `required`。合并后校验不是被削弱而是**消失**。实锤：`update_todo` 现声明 `"required": ["todo_id","if_version"]`（`app/tools/todo_tools.py:112`），create+update 一旦合并，`if_version` 无法再 required，**乐观并发的 schema 级护栏直接丢失**。
        - **补一条新理由④**：模型对判别式联合（discriminated union）经验上偏弱；服务端换成全量 JSON-Schema 校验器也补不了模型选错的账。
        - **因此**：否决**仅**立于①+④，并且是**可实测的**（[B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) E3）。若将来评测数据反转结论，需先换掉 `validate.py` 再重开此议。
-  6. **策略引擎升级为 args 感知**：`app/permissions/policy.py` 的 `evaluate(tool)` → `evaluate(ctx, descriptor, args, scope) -> "allow"|"ask"|"deny"`，last-match 胜、`deny > ask > allow`（[ADR-008] 代数）。审批 scope 从裸 `"tool:{name}"` 升为 `"tool:{name}"` + 结构化 `scope`（如 `{"command_class":"shell","paths":["src/"]}`），使 [ADR-020] 信封能渲染**确切命令 + 目标路径**。`app/permissions/grants.py` 的 `_MATCHERS` 从只支持 `send_email` 扩到 `sh.exec`（命令白名单）与 `fs.write`（路径前缀）。
+  6. **策略引擎升级为 args 感知**：`app/permissions/policy.py` 的 `evaluate(tool)` → `evaluate(ctx, descriptor, args, scope) -> "allow"|"ask"|"deny"`，last-match 胜、`deny > ask > allow`（[ADR-008] 代数）。审批 scope 从裸 `"tool:{name}"` 升为 `"tool:{name}"` + 结构化 `scope`（如 `{"command_class":"shell","paths":["src/"]}`），使 [ADR-020] 信封能渲染**确切命令 + 目标路径**。`app/permissions/grants.py` 的 `_MATCHERS` 从只支持 `send_email` 扩到 `sh_exec`（命令白名单）与 `fs_write`（路径前缀）。
   7. **删除**：`app/tools/file_tools.py`（4 个 `file_*`）、`app/services/files.py`、`app/api/files.py` 及 `app/main.py` 的 `include_router(files_router)`、`files` 表、`app/tools/sandbox_tools.py`（`run_code`）。**保留**并建议改名 `app/files/` → `app/objectstore/`（它是对象存储适配层，Drive/Projects 都依赖，名字与被删的 files 栈重名纯属误导）。
-  8. **命名统一（clean break，无别名）**：`memory_user_get`/`memory_user_list` → `memory.recall`（key 可选）；`todo_write`/`update_todo`/`complete_todo` → `todo.create`/`todo.update`（含 status）；其余按 `domain.verb` 逐一改名。旧名**直接消失**；模型若照抄历史 transcript 调用旧名，得到 `unknown tool` 观察 —— **错误即观察，不崩循环**（api.md §7），可接受。
-  9. **provider 概念前向预留**：目录层统一 `ToolProvider`（`BuiltinProvider` 今天唯一实现；`RuntimeProvider` 由 [ADR-048] 引入；`McpProvider`/`SubAgentProvider` 留 roadmap）。外部 provider 的工具默认 `surfaces={"chat"}` + 全部 `ask` + **永不进 core 集**（必须显式 `tools.load`）—— 这是 roadmap #9「两遍信任 + footprint ladder」在目录层的落地。
+  8. **命名统一（clean break，无别名）**：`memory_user_get`/`memory_user_list` → `memory_recall`（key 可选）；`todo_write`/`update_todo`/`complete_todo` → `todo_create`/`todo_update`（含 status）；其余按 `domain.verb` 逐一改名。旧名**直接消失**；模型若照抄历史 transcript 调用旧名，得到 `unknown tool` 观察 —— **错误即观察，不崩循环**（api.md §7），可接受。
+  9. **provider 概念前向预留**：目录层统一 `ToolProvider`（`BuiltinProvider` 今天唯一实现；`RuntimeProvider` 由 [ADR-048] 引入；`McpProvider`/`SubAgentProvider` 留 roadmap）。外部 provider 的工具默认 `surfaces={"chat"}` + 全部 `ask` + **永不进 core 集**（必须显式 `tools_load`）—— 这是 roadmap #9「两遍信任 + footprint ladder」在目录层的落地。
   10. **合并只沿纵向（工作流）轴，绝不沿横向（CRUD 动词）轴**（修订 A 新增；§决策5 的正面表述）。判据来自 Anthropic《[Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)》：
 
       > By selectively implementing tools whose names reflect **natural subdivisions of tasks**, you simultaneously reduce the number of tools **and offload agentic computation from the agent's context back into the tool calls themselves**.
@@ -869,11 +883,11 @@
       | **横向**（按 CRUD 动词分组） | `sherpa.list(kind)`、`todo(action=…)` | 只减工具数/字节；**offload 的 agentic computation 为零**，还多一个「kind/action 填什么」的决策。它是**分发器**不是工具 |
       | **纵向**（按工作流分组）✅ | `schedule_event`、`search_logs`、`get_customer_context` | 工具数 **+ round trip + 中间输出占用的上下文** |
 
-      推论：**跨域的 `list(kind=…)` 明确禁止**；原文更进一步质疑 `list_*` 工具本身该不该建（*"implement a `search_contacts` … **instead of** a `list_contacts` tool"*）。Sherpa 的纵向候选（`todo.create(…, remind_at?)` / `inbox.accept(…, patch?, remind_at?)` / `today()` / `knowledge.add(query_or_path)`）记在 [B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)，**每条都需 [B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) 的评测证据才可实施**。
+      推论：**跨域的 `list(kind=…)` 明确禁止**；原文更进一步质疑 `list_*` 工具本身该不该建（*"implement a `search_contacts` … **instead of** a `list_contacts` tool"*）。Sherpa 的纵向候选（`todo_create(…, remind_at?)` / `inbox_accept(…, patch?, remind_at?)` / `today()` / `knowledge_add(query_or_path)`）记在 [B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)，**每条都需 [B-11](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) 的评测证据才可实施**。
 
       **一线产品旁证**：GitHub MCP Server（`list_available_toolsets`/`get_toolset_tools`/`enable_toolset`）与 GitHub Copilot CLI（31 个 MCP 工具延迟加载于一个 tool-search 工具之后，且 `browser_click`/`browser_navigate`/`browser_type` 等**仍是 24 个独立工具**）都选择「**渐进式披露 + 保持工具独立**」；未发现横向合并的一方产品先例。
 
-      **CLI 模式可借鉴的边界**：CLI agent 便宜有三源——① 一个 schema 无限动词（= 横向合并，见上，代价高）；② **预训练先验**（模型天生会 `ls`/`git`/`pytest`，教学成本为 0）；③ 带内发现（`--help`）。其中**②是最大来源且完全不转移**——`sherpa todo list` 与 `todo.list` 对模型一样陌生；③正是 `tools.search`/`tools.load`。另：沙箱内跑 `sherpa` CLI 操作自有数据被 [ADR-019]/[ADR-047] 硬阻断（凭据不进沙箱 + 断网，够不到 DB）。反向地，CLI agent 手握 shell 仍刻意保留独立的 `Read`/`Write`/`Edit`/`Glob`/`Grep`（结构化 diff、避开 shell 引号、权限分级、路径边界可强制），四条**全部适用**于 [ADR-048] 的 `fs.*` —— 即 CLI 实践**支持**而非否定 `fs.*` 独立；但 [ADR-048] 计划中的 `run.test`/`run.lint` 是 `sh.exec` 的纯语法糖（Claude Code 无 `run_test`），建议 P4 删除。
+      **CLI 模式可借鉴的边界**：CLI agent 便宜有三源——① 一个 schema 无限动词（= 横向合并，见上，代价高）；② **预训练先验**（模型天生会 `ls`/`git`/`pytest`，教学成本为 0）；③ 带内发现（`--help`）。其中**②是最大来源且完全不转移**——`sherpa todo list` 与 `todo_list` 对模型一样陌生；③正是 `tools_search`/`tools_load`。另：沙箱内跑 `sherpa` CLI 操作自有数据被 [ADR-019]/[ADR-047] 硬阻断（凭据不进沙箱 + 断网，够不到 DB）。反向地，CLI agent 手握 shell 仍刻意保留独立的 `Read`/`Write`/`Edit`/`Glob`/`Grep`（结构化 diff、避开 shell 引号、权限分级、路径边界可强制），四条**全部适用**于 [ADR-048] 的 `fs.*` —— 即 CLI 实践**支持**而非否定 `fs.*` 独立；但 [ADR-048] 计划中的 `run_test`/`run_lint` 是 `sh_exec` 的纯语法糖（Claude Code 无 `run_test`），建议 P4 删除。
 
 - **token 预算**（原写「实测基线 19,848 B / ~4,962 token」——**修订 A 更正**：那是 **P1 前 52 工具**的值。P1 后实测 **47 工具 / 17,432 B 紧凑 / 18,303 B 默认分隔符**；下表的「相对今天」按旧基线估算，重算前只作数量级参考。另实测：普通 chat 的 core（10 工具）**今天就只有 3,627 B**，即 `TOOL_CATALOG_CORE_MAX_BYTES=6144` 是**带 2,517 B 余量的棘轮**而非冲刺目标——真正的收益来自**另外 37 个工具不发**，不是把 core 压小。描述散文占全量 **38%**（6,625 B），故 [B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation) 要求 P2 先做**瘦身**（删死工具 + 每工具描述字节上限，与名称正则同处启动强制），再建目录）：
 
@@ -888,9 +902,9 @@
 
 - **不变式**：`CONNECTOR_ANALYSIS` 永远零工具（`surfaces` 不含它，[ADR-009] 不弱化）；解决审批、破坏性 purge、model provider 配置、GitHub 凭据、Save/checkpoint/Discard 仍**不给 agent**（[docs/11](11-agent-tool-surface.md) §12 边界不变）；工具错误仍是观察不是异常。
 
-- **验收关键**：普通 chat 的工具 JSON ≤ **6 KiB**（回归断言 `TOOL_CATALOG_CORE_MAX_BYTES`）；`resolve(general).core` 是 `resolve(project_bound)` 的**字节级真前缀**（断言）；同一 profile 连调两次**字节相同**；mock provider 脚本证明 `tools.search → tools.load → 下一 turn 调用成功`；`CONNECTOR_ANALYSIS` 仍零工具；名称正则 + 唯一性 + 版本单调断言通过；`toolset.resolved` 事件记录 core 摘要 / 加载集 / `tools_offered` / `catalog_bytes`。
+- **验收关键**：普通 chat 的工具 JSON ≤ **6 KiB**（回归断言 `TOOL_CATALOG_CORE_MAX_BYTES`）；`resolve(general).core` 是 `resolve(project_bound)` 的**字节级真前缀**（断言）；同一 profile 连调两次**字节相同**；mock provider 脚本证明 `tools_search → tools_load → 下一 turn 调用成功`；`CONNECTOR_ANALYSIS` 仍零工具；名称正则 + 唯一性 + 版本单调断言通过；`toolset.resolved` 事件记录 core 摘要 / 加载集 / `tools_offered` / `catalog_bytes`。
 
-- **来源**：backlog B-2；实测 `app/tools/registry.py` + `app/core/loop.py:527`；[ADR-045] §根因；[ADR-008]/[ADR-009]/[ADR-020]/[ADR-023]/[ADR-034]；负责人拍板 O-1（点号命名）、O-2（不做动词巨型工具）、O-7（模型可自主 `tools.load`）。
+- **来源**：backlog B-2；实测 `app/tools/registry.py` + `app/core/loop.py:527`；[ADR-045] §根因；[ADR-008]/[ADR-009]/[ADR-020]/[ADR-023]/[ADR-034]；负责人拍板 O-1（点号命名）、O-2（不做动词巨型工具）、O-7（模型可自主 `tools_load`）。
 
 ---
 
@@ -924,9 +938,9 @@
   6. **演进路径**：v1 = tar；**v1.5 = 具名卷**（触发条件：项目 > ~50 MB，或需要同一 runtime session 跨多次 exec 复用工作区而 tar 全量进出成为瓶颈）；**v2 = 持久远程 runner**（roadmap，[ADR-039] 禁止上线条件的正解）。
   7. **删除 `warm` 概念**：`sandbox_warm_ttl_seconds` / `SandboxRunState.warm` / `project_sandbox_runs.warm_until` **从未实现**，且语义应由 [ADR-048] 的 `RuntimeSession` TTL 承载。三处一并删除，不做兼容。
 
-- **权衡（明说）**：tar 对大项目有拷贝成本。缓解 = **同一 runtime session 内多次 `sh.exec` 只做一次 ingress**（这正是 [ADR-048] 让 `RuntimeSession` 成为显式一等对象的性能理由之一）；超出后按 §决策6 升级到具名卷。
+- **权衡（明说）**：tar 对大项目有拷贝成本。缓解 = **同一 runtime session 内多次 `sh_exec` 只做一次 ingress**（这正是 [ADR-048] 让 `RuntimeSession` 成为显式一等对象的性能理由之一）；超出后按 §决策6 升级到具名卷。
 
-- **验收关键**：`app/sandbox/` 中不再出现 `type="bind"`；`sandbox-runner/Dockerfile` 存在且构建产物含 pytest/ruff + `capabilities.json`；`sh.exec("pytest -q")` 在 **Windows + Docker Desktop 真栈**上返回真实 exit code 与 stdout；Docker 拓扑矩阵（Win+DooD / Linux+DooD / DinD / 无 Docker / rootless）全绿；**凭据 canary**：把假 KEK 放进项目树，断言它不出现在 tar / overlay / change set / artifact / 日志 / prompt / 工具结果；tar 解包拒绝 zip-slip / 硬链接 / 设备节点 / 逃逸 symlink；`config §1.7` 与本 ADR 与 [ADR-025] 修订三者口径一致。
+- **验收关键**：`app/sandbox/` 中不再出现 `type="bind"`；`sandbox-runner/Dockerfile` 存在且构建产物含 pytest/ruff + `capabilities.json`；`sh_exec("pytest -q")` 在 **Windows + Docker Desktop 真栈**上返回真实 exit code 与 stdout；Docker 拓扑矩阵（Win+DooD / Linux+DooD / DinD / 无 Docker / rootless）全绿；**凭据 canary**：把假 KEK 放进项目树，断言它不出现在 tar / overlay / change set / artifact / 日志 / prompt / 工具结果；tar 解包拒绝 zip-slip / 硬链接 / 设备节点 / 逃逸 symlink；`config §1.7` 与本 ADR 与 [ADR-025] 修订三者口径一致。
 
 - **取代/延伸关系**：**收窄性修订** [ADR-025]（2026-07-27 修订段）与 [ADR-039] §决策1 的挂载口径；**不改** [ADR-039] 的威胁模型、方案比较表与**禁止上线条件**；复用 [ADR-030] 内容寻址 blob、[ADR-016]/[ADR-017] 持久语义、[ADR-019] 密钥边界、[ADR-009] 不可信内容边界。
 
@@ -949,32 +963,32 @@
 
 - **决策**：
   1. **分层**：
-     - `fs.list` / `fs.read` / `fs.grep` / `fs.write` / `fs.edit` / `fs.delete` → **宿主侧**，直接读写工作副本的 **effective tree**（`base snapshot + overlay`，即 `app/services/project_workcopy.py::effective_tree` 的语义）。**无需容器**、确定性、可完整单测。这**严格强于**被删的 `project_tree`/`project_read` —— 后者只看 head，**看不见 agent 自己刚写的内容**（既有缺陷）。
-     - `sh.exec` → **必经 `RuntimeSession`** 进沙箱（tar 进 → exec → tar 出 → fence 持久）。
-     - `run.test` / `run.lint` → `sh.exec` 的语义糖 + 能力探测（给模型稳定的高层动作，避免它自己拼命令）。
+     - `fs_list` / `fs_read` / `fs_grep` / `fs_write` / `fs_edit` / `fs_delete` → **宿主侧**，直接读写工作副本的 **effective tree**（`base snapshot + overlay`，即 `app/services/project_workcopy.py::effective_tree` 的语义）。**无需容器**、确定性、可完整单测。这**严格强于**被删的 `project_tree`/`project_read` —— 后者只看 head，**看不见 agent 自己刚写的内容**（既有缺陷）。
+     - `sh_exec` → **必经 `RuntimeSession`** 进沙箱（tar 进 → exec → tar 出 → fence 持久）。
+     - `run_test` / `run_lint` → `sh_exec` 的语义糖 + 能力探测（给模型稳定的高层动作，避免它自己拼命令）。
   2. **产品后果（本设计最重要的判断之一）**：**沙箱不可用时只损失「跑」，不损失「改」。** 今天沙箱一挂，"让 Sherpa 改代码"整体归零。
-  3. **`RuntimeSession` 从 v1 起就是显式一等对象**：`runtime.open(scope)` → 物化 + 起容器 → 返回 `runtime_session_id` + `capabilities` + TTL；`sh.exec(runtime_session_id, command)`；`runtime.close(runtime_session_id)` → 持久边界 + 拆容器。`scope ∈ {project, ephemeral}`：`project` 挂工作副本；`ephemeral` 空工作区，**取代被删的 `run_code`**（O-12）—— 从此只有**一套**沙箱代码（`app/sandbox/runner.py` 与 `project_sandbox.py` 合并为 `app/sandbox/runtime.py`）。
-  4. **未来沙箱内专用 coding agent 的接缝（零重写）**：以 **sub-agent 适配器**形态出现（[api.md §7.4](contracts/api.md) 早已契约保留）：`delegate.code_task(runtime_session_id, goal, max_steps, budget_tokens)`。它拿到**同一个** `runtime_session_id`、在同一容器里跑、每步仍产出 change set 进**同一个 overlay**、预算/取消/审计走**同一条路**（子 agent 共享父预算，[docs/09](09-roadmap.md) 生产就绪清单）。**唯一前置** = `RuntimeSession` 必须从一开始就是显式可传递对象，而不是 `project_run` 那种"每次调用内部临时起一个容器"的隐式生命周期。**这就是 v1 就要引入 `runtime.open/close` 的根本原因。** 本条**修订 [ADR-040] §决策8**（"不嵌 coding agent" → "v1 不嵌，接缝预留"）。
+  3. **`RuntimeSession` 从 v1 起就是显式一等对象**：`runtime_open(scope)` → 物化 + 起容器 → 返回 `runtime_session_id` + `capabilities` + TTL；`sh_exec(runtime_session_id, command)`；`runtime_close(runtime_session_id)` → 持久边界 + 拆容器。`scope ∈ {project, ephemeral}`：`project` 挂工作副本；`ephemeral` 空工作区，**取代被删的 `run_code`**（O-12）—— 从此只有**一套**沙箱代码（`app/sandbox/runner.py` 与 `project_sandbox.py` 合并为 `app/sandbox/runtime.py`）。
+  4. **未来沙箱内专用 coding agent 的接缝（零重写）**：以 **sub-agent 适配器**形态出现（[api.md §7.4](contracts/api.md) 早已契约保留）：`delegate.code_task(runtime_session_id, goal, max_steps, budget_tokens)`。它拿到**同一个** `runtime_session_id`、在同一容器里跑、每步仍产出 change set 进**同一个 overlay**、预算/取消/审计走**同一条路**（子 agent 共享父预算，[docs/09](09-roadmap.md) 生产就绪清单）。**唯一前置** = `RuntimeSession` 必须从一开始就是显式可传递对象，而不是 `project_run` 那种"每次调用内部临时起一个容器"的隐式生命周期。**这就是 v1 就要引入 `runtime_open/close` 的根本原因。** 本条**修订 [ADR-040] §决策8**（"不嵌 coding agent" → "v1 不嵌，接缝预留"）。
   5. **策略**（[ADR-046] §决策6 的 args 感知引擎之上）：
-     - `fs.*` 读 = `read_only`/allow；`fs.write`/`fs.edit`/`fs.delete` = `idempotent_write`/**allow**（写的是**待评审 overlay**，不是 head；推进 head 永远人工，[ADR-040] §决策6 不变），但 `.env*` / `.github/workflows/**` / `*.pem` / `*.key` / `id_*` **强制 `ask`**（O-4）。
-     - `sh.exec` = `non_idempotent_write`/**`ask`**，配**平台安全命令白名单 grants** 自动放行（`pytest`/`ruff`/`python -m`/`ls`/`cat` 等只读或已知安全命令），使常见开发循环不被审批打断，同时保住 `rm -rf`、写 CI 配置一类的闸（O-3）。审批预览**必须**显示确切命令 + 目标路径。
-     - `runtime.open`/`runtime.close` = `idempotent_write`/allow。
+     - `fs.*` 读 = `read_only`/allow；`fs_write`/`fs_edit`/`fs_delete` = `idempotent_write`/**allow**（写的是**待评审 overlay**，不是 head；推进 head 永远人工，[ADR-040] §决策6 不变），但 `.env*` / `.github/workflows/**` / `*.pem` / `*.key` / `id_*` **强制 `ask`**（O-4）。
+     - `sh_exec` = `non_idempotent_write`/**`ask`**，配**平台安全命令白名单 grants** 自动放行（`pytest`/`ruff`/`python -m`/`ls`/`cat` 等只读或已知安全命令），使常见开发循环不被审批打断，同时保住 `rm -rf`、写 CI 配置一类的闸（O-3）。审批预览**必须**显示确切命令 + 目标路径。
+     - `runtime_open`/`runtime_close` = `idempotent_write`/allow。
   6. **删除与重设计**：
      - **删除工具**：`project_run`、`project_tree`、`project_read`（`app/tools/project_tools.py`）、`run_code`（`app/tools/sandbox_tools.py`）。**无 shim、无别名**（[ADR-045] §clean break 表已论证：`app/core/history.py` 不查注册表，删除零成本）。
-     - **保留工具**：`project.list` / `project.create` / `project.review_changes`（改名到 `domain.verb`）。
+     - **保留工具**：`project_list` / `project_create` / `project_review_changes`（改名到 `domain.verb`）。
      - **重设计表**：`project_sandbox_runs` → **`project_runtime_sessions`**（session 级：scope / image / capabilities / fence / TTL / state）+ **`project_exec_runs`**（每条命令：command / exit_code / termination_reason / 耗时 / 日志引用）。`scratch_ref` 在 tar 传输下无意义、`container_ref` 归入 session、`warm_until` 从未实现（[ADR-047] §决策7）。
      - **REST 重设计**：`POST /projects/{id}/sandbox-runs`（web 内同步、阻塞 120s）→ `POST /projects/{id}/runtime`（**202**）+ `POST /runtime/{rid}/exec`（**202** + SSE 流式 stdout/stderr）+ `POST /runtime/{rid}/cancel` + `DELETE /runtime/{rid}`，**全部由 worker 执行**（O-9）。
   7. **具名 termination（每个出口都必须具名）** —— 修正 B-8 的错误塌缩：
      `done | cancelled | wall_timeout | mem_limit | pids_limit | output_limit | environment_missing_dependencies | changeset_bounds | path_escape | fence_lost | runtime_start_failed | runtime_image_missing | runtime_daemon_unreachable | runtime_transport_failed | sandbox_disabled | error:<class>`。
      每条失败**写一行 worker 结构化日志 + 一条脱敏的工具观察** —— 模型和用户永远不必猜是哪种失败。
-  8. **流式与取消**：`sh.exec` 期间向事件总线发 `runtime.output` 增量帧（`durability: debug`，有界、可丢，**不进 append-only journal 的正确性路径** —— 符合 [ADR-016]「pub/sub 永不是正确性关键」）。取消 = 现有 run 取消信号 → 编排方 `container.kill()` → `termination_reason="cancelled"`。
+  8. **流式与取消**：`sh_exec` 期间向事件总线发 `runtime.output` 增量帧（`durability: debug`，有界、可丢，**不进 append-only journal 的正确性路径** —— 符合 [ADR-016]「pub/sub 永不是正确性关键」）。取消 = 现有 run 取消信号 → 编排方 `container.kill()` → `termination_reason="cancelled"`。
   9. **/Project UX（O-8）**：Project-bound Chat 使用**三栏工作台**（左文件树 / 中对话 / 右「Changes · Runs · Artifacts」）。人工泳道必须补齐 **Run 控件 + 流式日志面板 + Stop**（今天 `frontend/src/api.ts:1293` 的 `createSandboxRun` 是死代码）；文件树**可编辑**，人的手改与 agent 的手改**落进同一个 overlay**、一起评审。**Plan 对象后置到 v1.5**（目录层预留 `ui.*` 类工具，O-10）。
   10. **不变**：真相源层级（snapshot head → overlay → scratch/容器为可丢缓存）、single-writer lease + 单调 fence、`head_generation` CAS Save（`409 head_moved`）、Save/checkpoint/Discard **人工专属**、change set 有界 + 显式 `truncated`、artifacts 默认 `ephemeral` 不计配额、无包安装、无开网 —— [ADR-040] 这些决策**全部保留**。
 
-- **验收关键**：agent 泳道完成一个真实循环（读代码 → 改 → 跑测试 → 看到失败 → 再改 → 通过）；**沙箱强制关闭时 `fs.*` 全部仍可用**（降级不瘫痪）；`sh.exec("rm -rf /work")` 触发审批且预览含确切命令；每个失败注入映射到唯一具名 `termination_reason` 并在 UI 与模型观察里可区分；人工泳道能点 Run、看到流式日志、能 Stop；能力矩阵（docs/11 §9）相关行 UI 单元格**经真实点击验证**后才置 ✅。
+- **验收关键**：agent 泳道完成一个真实循环（读代码 → 改 → 跑测试 → 看到失败 → 再改 → 通过）；**沙箱强制关闭时 `fs.*` 全部仍可用**（降级不瘫痪）；`sh_exec("rm -rf /work")` 触发审批且预览含确切命令；每个失败注入映射到唯一具名 `termination_reason` 并在 UI 与模型观察里可区分；人工泳道能点 Run、看到流式日志、能 Stop；能力矩阵（docs/11 §9）相关行 UI 单元格**经真实点击验证**后才置 ✅。
 
 - **取代/延伸关系**：**修订** [ADR-040] §决策8（执行器口径）与其 REST/工具面（§能力面）；**受** [ADR-045] 统领、依赖 [ADR-047] 传输与 [ADR-046] 目录；**不改** [ADR-040] 的真相源层级 / lease+fence / head-gen CAS / 人工评审闸 / 无包安装无开网；**不改** [ADR-039] 隔离前提与禁止上线条件；**不改** [ADR-020] 审批信封（只是把 scope 变结构化）。
 
-- **来源**：backlog B-8；实测 `app/tools/project_tools.py`、`app/services/project_workcopy.py`、`app/api/projects.py::create_sandbox_run`、`frontend/src/{api.ts,components/ChangeReview.tsx,views/ProjectsView.tsx}`；[ADR-040] §决策8/§能力面；负责人拍板 O-3（`sh.exec` ask + 平台安全命令 grants）、O-4（fs 写 allow，敏感路径 ask）、O-8（三栏 UI）、O-9（异步 202）、O-10（Plan 后置）、O-12（`run_code` 一并删）。
+- **来源**：backlog B-8；实测 `app/tools/project_tools.py`、`app/services/project_workcopy.py`、`app/api/projects.py::create_sandbox_run`、`frontend/src/{api.ts,components/ChangeReview.tsx,views/ProjectsView.tsx}`；[ADR-040] §决策8/§能力面；负责人拍板 O-3（`sh_exec` ask + 平台安全命令 grants）、O-4（fs 写 allow，敏感路径 ask）、O-8（三栏 UI）、O-9（异步 202）、O-10（Plan 后置）、O-12（`run_code` 一并删）。
 
 ---

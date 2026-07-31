@@ -38,19 +38,19 @@ async def test_project_tools_roundtrip() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            created = await reg.get("project.create").execute(
+            created = await reg.get("project_create").execute(
                 tctx, {"name": "Agent proj", "template_id": "python-basic"}
             )
             assert "Agent proj" in created.llm_content
             pid = created.llm_content.split("id ")[-1].rstrip(").")
 
-            listing = await reg.get("project.list").execute(tctx, {})
+            listing = await reg.get("project_list").execute(tctx, {})
             assert "Agent proj" in listing.llm_content
 
-            tree = await reg.get("project.tree").execute(tctx, {"project_id": pid})
+            tree = await reg.get("project_tree").execute(tctx, {"project_id": pid})
             assert "main.py" in tree.llm_content
 
-            read = await reg.get("project.read").execute(
+            read = await reg.get("project_read").execute(
                 tctx, {"project_id": pid, "path": "main.py"}
             )
             assert "hello, sherpa" in read.llm_content
@@ -78,7 +78,7 @@ async def test_project_tree_tool_marks_truncated_page(monkeypatch) -> None:  # t
                 )
 
             monkeypatch.setattr("app.tools.project_tools.svc.get_tree", fake_partial)
-            out = await reg.get("project.tree").execute(tctx, {"project_id": str(pid)})
+            out = await reg.get("project_tree").execute(tctx, {"project_id": str(pid)})
             # A truncated page must NOT read as a complete tree.
             assert "PARTIAL" in out.llm_content
             assert "not proof" in out.llm_content.lower()
@@ -91,7 +91,7 @@ async def test_project_tree_tool_marks_truncated_page(monkeypatch) -> None:  # t
                 )
 
             monkeypatch.setattr("app.tools.project_tools.svc.get_tree", fake_full)
-            out2 = await reg.get("project.tree").execute(tctx, {"project_id": str(pid)})
+            out2 = await reg.get("project_tree").execute(tctx, {"project_id": str(pid)})
             assert "complete listing" in out2.llm_content
             assert "PARTIAL" not in out2.llm_content
         finally:
@@ -102,12 +102,12 @@ def test_project_tools_are_allow_policy() -> None:
     reg = build_default_registry()
     # W2a own-data tools + the W3 sandbox/review tools all classify as allow.
     for name in (
-        "project.list",
-        "project.create",
-        "project.tree",
-        "project.read",
-        "project.run",
-        "project.review_changes",
+        "project_list",
+        "project_create",
+        "project_tree",
+        "project_read",
+        "project_run",
+        "project_review_changes",
     ):
         assert evaluate(reg.get(name)) == "allow", name
     # Save-to-head, push (W4), and destructive delete are NOT agent tools.
@@ -154,14 +154,14 @@ async def test_project_run_and_review_tools(tmp_path, monkeypatch) -> None:  # t
             tctx = ToolContext(
                 tenant_id=tid, user_id=uid, session_id=sid, run_id=uuid.uuid4(), session=s
             )
-            run = await reg.get("project.run").execute(
+            run = await reg.get("project_run").execute(
                 tctx,
                 {"writes": [{"path": "notes.txt", "content": "hello from the agent\n"}]},
             )
             assert "Pending changes" in run.llm_content
             assert "+1" in run.llm_content
             # Review lists the staged change; Save stays a human action.
-            review = await reg.get("project.review_changes").execute(tctx, {})
+            review = await reg.get("project_review_changes").execute(tctx, {})
             assert "notes.txt" in review.llm_content
             assert "user" in review.llm_content.lower()
         finally:

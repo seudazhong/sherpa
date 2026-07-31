@@ -17,7 +17,7 @@ from app.tools.validate import validate_args
 
 
 class ListConnectorsTool:
-    name = "connector.list"
+    name = "connector_list"
     description = (
         "List the user's connected accounts (e.g. Gmail) with id, account and status. Read-only."
     )
@@ -38,10 +38,10 @@ class ListConnectorsTool:
 
 
 class SyncConnectorTool:
-    name = "connector.sync"
+    name = "connector_sync"
     description = (
         "Sync a connected account now and analyze new items into action candidates. "
-        "Needs connector_id (from connector.list). Own-data read; no approval needed."
+        "Needs connector_id (from connector_list). Own-data read; no approval needed."
     )
     input_schema: dict[str, object] = {
         "type": "object",

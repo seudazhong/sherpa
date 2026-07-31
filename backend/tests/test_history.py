@@ -141,7 +141,7 @@ async def test_assembled_history_carries_tool_use() -> None:
                 run=run1,
                 provider=MockProvider(
                     script=[
-                        [ToolCall(id="c1", name="core.get_time", args={}), Finish("tool_use")],
+                        [ToolCall(id="c1", name="core_get_time", args={}), Finish("tool_use")],
                         [TextDelta("It is 3pm."), Finish("stop")],
                     ]
                 ),
@@ -152,7 +152,7 @@ async def test_assembled_history_carries_tool_use() -> None:
             history = await assemble_provider_history(s, tid, sid)
 
             # The prior tool call is present as an assistant tool_calls entry...
-            assert "core.get_time" in _tool_call_names(history)
+            assert "core_get_time" in _tool_call_names(history)
             # ...followed by a role:tool result (protocol-valid pairing)...
             tool_msgs = [m for m in history if m.get("role") == "tool"]
             assert any(m.get("tool_call_id") == "c1" for m in tool_msgs)
@@ -180,7 +180,7 @@ async def test_second_run_provider_sees_prior_tool_use() -> None:
                 run=run1,
                 provider=MockProvider(
                     script=[
-                        [ToolCall(id="c1", name="core.get_time", args={}), Finish("tool_use")],
+                        [ToolCall(id="c1", name="core_get_time", args={}), Finish("tool_use")],
                         [TextDelta("It is 3pm."), Finish("stop")],
                     ]
                 ),
@@ -200,7 +200,7 @@ async def test_second_run_provider_sees_prior_tool_use() -> None:
             )
 
             first_call = recording.calls[0]
-            assert "core.get_time" in _tool_call_names(first_call), (
+            assert "core_get_time" in _tool_call_names(first_call), (
                 "run 2's model call must include run 1's tool_use — otherwise the "
                 "model 'forgets' it called the tool"
             )

@@ -77,15 +77,15 @@ async def test_todo_tools_via_registry() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            created = await reg.get("todo.create").execute(tctx, {"title": "Buy milk"})
+            created = await reg.get("todo_create").execute(tctx, {"title": "Buy milk"})
             assert "created todo" in created.llm_content
             todo = (await s.execute(select(Todo).where(Todo.tenant_id == tid))).scalar_one()
             assert todo.title == "Buy milk" and todo.source == "agent"
 
-            listing = await reg.get("todo.list").execute(tctx, {})
+            listing = await reg.get("todo_list").execute(tctx, {})
             assert str(todo.id) in listing.llm_content
 
-            done = await reg.get("todo.update").execute(
+            done = await reg.get("todo_update").execute(
                 tctx, {"todo_id": str(todo.id), "if_version": todo.version, "status": "completed"}
             )
             assert "updated todo" in done.llm_content
@@ -123,7 +123,7 @@ async def test_loop_agent_creates_todo() -> None:
             provider = MockProvider(
                 script=[
                     [
-                        ToolCall(id="c1", name="todo.create", args={"title": "Prep slides"}),
+                        ToolCall(id="c1", name="todo_create", args={"title": "Prep slides"}),
                         Finish("tool_use"),
                     ],
                     [TextDelta("Added."), Finish("stop")],

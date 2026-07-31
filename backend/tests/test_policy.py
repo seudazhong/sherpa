@@ -103,7 +103,7 @@ async def test_loop_deny_refuses_execution(monkeypatch: pytest.MonkeyPatch) -> N
             tid, rid, run = await _seed(s)
             provider = MockProvider(
                 script=[
-                    [ToolCall(id="c1", name="core.get_time", args={}), Finish("tool_use")],
+                    [ToolCall(id="c1", name="core_get_time", args={}), Finish("tool_use")],
                     [TextDelta("ok"), Finish("stop")],
                 ]
             )
@@ -121,7 +121,7 @@ async def test_loop_deny_refuses_execution(monkeypatch: pytest.MonkeyPatch) -> N
                     )
                 )
             ).scalar_one()
-            assert inv.effect_name == "core.get_time"
+            assert inv.effect_name == "core_get_time"
             assert inv.status == "settled" and inv.outcome == "failed"  # denied, never ran
 
             types = set(

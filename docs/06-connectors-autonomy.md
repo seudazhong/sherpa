@@ -76,7 +76,7 @@ def push(user, message, idempotency_key):
 
 ```
 定时 job(每 N 分钟):
-  1. connector.sync() → 拿到自上次 cursor 后的新邮件/issue
+  1. connector_sync() → 拿到自上次 cursor 后的新邮件/issue
   2. 逐条: 跑 core 循环(SAFE 工具集 + "抽取可执行待办" prompt)
   3. 建 todos(source=gmail/github, 按 external_id 去重)
   4. 高优先级 → push(user) 主动通知

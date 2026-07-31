@@ -12,13 +12,13 @@
 
 | 维度 | 现状(已上线) | 目标(Phase TR) |
 |---|---|---|
-| 工具数 / schema 体积 | **52 个 / 19,848 B ≈ 4,962 token**(实测),每次模型调用全量重发 | core ~15 个 ≈ **≤6,144 B** + 一行式目录摘要;按需 `tools.load` |
-| 命名 | 扁平 `snake_case`,三代混杂(`todo.create`/`todo.update`/`complete_todo`) | 统一 `domain.verb`(`todo.create`/`todo.update`) |
+| 工具数 / schema 体积 | **52 个 / 19,848 B ≈ 4,962 token**(实测),每次模型调用全量重发 | core ~15 个 ≈ **≤6,144 B** + 一行式目录摘要;按需 `tools_load` |
+| 命名 | 扁平 `snake_case`,三代混杂(`todo_create`/`todo_update`/`complete_todo`) | 统一 `domain.verb`(`todo_create`/`todo_update`) |
 | VISIBLE 闸 | 只有 SAFE/FULL 二元,且 `tier` 恒为 FULL ⇒ **事实上没实现** | `ToolsetResolver`(trust tier × surface × session kind × runtime),turn 边界冻结,core 恒为缓存前缀真前缀 |
-| 发现 | 无 | `tools.search` / `tools.load` 两个元工具 + 目录摘要 |
+| 发现 | 无 | `tools_search` / `tools_load` 两个元工具 + 目录摘要 |
 | ALLOWED 策略 | `evaluate(tool)`,只看 `ToolFlags` | `evaluate(ctx, descriptor, args, scope)`,结构化审批 scope |
 | 重复能力 | `file_*`(遗留 files 表) vs `drive_*` 两套文件系统 | `file_*` 与整条 files 栈**删除**,Drive 唯一 |
-| 项目文件/执行 | `project.tree`/`project.read`(只看 head)+ `project.run`(必失败)+ `run_code` | `fs.*`(宿主侧,读 effective tree)+ `runtime.*`/`sh.*`/`run.*`(显式 RuntimeSession) |
+| 项目文件/执行 | `project_tree`/`project_read`(只看 head)+ `project_run`(必失败)+ `run_code` | `fs.*`(宿主侧,读 effective tree)+ `runtime.*`/`sh.*`/`run.*`(显式 RuntimeSession) |
 
 **clean break**:不做别名、不做弃用期、不做数据迁移(ADR-045)。删掉的工具名直接消失;模型若照抄历史 transcript 调旧名,得到 `unknown tool` 观察——错误即观察,不崩循环。
 
@@ -96,8 +96,8 @@ async def accept_candidate(
 
 **内部写 vs 外部动作(关键区分)**
 - **内部同租户写**(候选/待办/日程)= 纯事务 DB 操作,**不走 effect/幂等层**,只靠 `if_version` 乐观并发。
-- **外部/非幂等动作**(`email.send`)= 走 `begin_invocation` + 审批(#20 已建)。
-- **触发 job**(`connector.sync`)= 入队 arq job(与现有 `POST /connectors/{id}/sync` 同路径)。
+- **外部/非幂等动作**(`email_send`)= 走 `begin_invocation` + 审批(#20 已建)。
+- **触发 job**(`connector_sync`)= 入队 arq job(与现有 `POST /connectors/{id}/sync` 同路径)。
 
 ---
 
@@ -144,10 +144,10 @@ class Tool(Protocol):
 | flags | effect_class | 例 |
 |---|---|---|
 | `is_read_only=True` | `read_only` | `list_*` |
-| 写 + `is_concurrency_safe=True` + 非破坏 | `idempotent_write` | `inbox.accept`、`todo.update` |
-| `is_destructive=True` 或 非并发安全 | `non_idempotent_write` | `email.send`、`delete_imported` |
+| 写 + `is_concurrency_safe=True` + 非破坏 | `idempotent_write` | `inbox_accept`、`todo_update` |
+| `is_destructive=True` 或 非并发安全 | `non_idempotent_write` | `email_send`、`delete_imported` |
 
-**6.3 SAFE/FULL**:所有数据工具 = **FULL**(仅已认证用户会话)。`echo`/`core.get_time` 保持 SAFE。不可信内容会话(未来邮件等)永不获得数据工具(ADR-009)。v1 只有 FULL 会话。
+**6.3 SAFE/FULL**:所有数据工具 = **FULL**(仅已认证用户会话)。`echo`/`core_get_time` 保持 SAFE。不可信内容会话(未来邮件等)永不获得数据工具(ADR-009)。v1 只有 FULL 会话。
 
 **6.4 活动回执**:Tool 适配器在 service 成功后自动 `record_receipt(actor="agent", …)`——**agent 每次工具动作 = 一条 activity**。REST(人自己点)不记回执。背景 job 记 `system/connector`。这样"活动台账 = agent/系统替我做的事"语义自洽。
 
@@ -156,7 +156,7 @@ class Tool(Protocol):
 ## 7. 四道闸 + ALLOWED 策略引擎
 
 > **⚠️ 已被 ADR-046 §决策6 取代**:下面的 `evaluate(ctx, tool, scope)` v1 极简版**只看 `ToolFlags`**,表达不了「`pytest` 可以但 `rm -rf` 要审批」。目标签名是 **args 感知**的
-> `evaluate(ctx, descriptor, args, scope) -> allow|ask|deny`(last-match 胜,`deny > ask > allow`),审批 scope 升为结构化 `PermissionScope{tool, command_class, command_preview, paths}`,grants matcher 从只支持 `email.send` 扩到 `sh.exec`(平台安全命令白名单)与 `fs.write`(路径前缀)。见 `contracts/api.md` §7.1。
+> `evaluate(ctx, descriptor, args, scope) -> allow|ask|deny`(last-match 胜,`deny > ask > allow`),审批 scope 升为结构化 `PermissionScope{tool, command_class, command_preview, paths}`,grants matcher 从只支持 `email_send` 扩到 `sh_exec`(平台安全命令白名单)与 `fs_write`(路径前缀)。见 `contracts/api.md` §7.1。
 
 现状:`registry.py` 有 **VISIBLE** 闸;#20 `permissions/policy.py` 只有"非只读就 ask"极简版。**缺真正的 ALLOWED 策略引擎**(api.md §7.1 步骤 3)。
 
@@ -170,7 +170,7 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
     return "deny"
 ```
 - **同租户读/幂等写 → allow**:你让 agent"接受候选/建待办/触发同步",agent 代你执行,无需再审批。
-- **外部/破坏性 → ask**:`email.send`(#20 已走此路)、`delete_imported`。
+- **外部/破坏性 → ask**:`email_send`(#20 已走此路)、`delete_imported`。
 - 未来:`permission_rules` 表(每租户 `allow|ask|deny` + scope 通配 + last-match),`evaluate` 读表。
 
 **7.2 loop 集成**:`_run_tool`(#20 已建 ask 分支)前置一步 `evaluate`:
@@ -192,58 +192,58 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 > **UI 列是 DoD 闸**:用户可见能力,UI 还是 ⬜ 就不算 Done(见 AGENTS.md §2)。每个能力两条 Playwright 验证:agent 路径(chat→tool)+ **人工路径(真实点 UI 控件)**。
 
 | 能力 | service | REST | Tool | **UI** | effect | 策略 |
-|---|---|---|---|---|---|---|| 列候选 | ✅ | GET /candidates ✅ | `inbox.list_candidates` ✅ | Today ✅ | read_only | allow |
-| 接受候选→todo | ✅ | POST …/accept ✅ | `inbox.accept` ✅ | Today(Accept)✅ | idempotent_write | allow |
+|---|---|---|---|---|---|---|| 列候选 | ✅ | GET /candidates ✅ | `inbox_list_candidates` ✅ | Today ✅ | read_only | allow |
+| 接受候选→todo | ✅ | POST …/accept ✅ | `inbox_accept` ✅ | Today(Accept)✅ | idempotent_write | allow |
 | 编辑候选 | ✅ | POST …/edit ✅ | `edit_candidate` ✅ | ⬜(仅 chat/REST) | idempotent_write | allow |
-| 忽略候选 | ✅ | POST …/dismiss ✅ | `inbox.dismiss` ✅ | Today(Dismiss)✅ | idempotent_write | allow |
-| 列待办 | ✅ | GET /todos ✅ | `todo.list` ✅ | Today ✅ | read_only | allow |
-| 改待办(完成/改期/snooze) | ✅ | PATCH /todos/{id} ✅ | `todo.update`/`complete_todo` ✅ | ⬜(Today 只读,无完成按钮) | idempotent_write | allow |
-| 新建待办 | ✅ | POST /todos ✅ | `todo.create` ✅ | ⬜ | idempotent_write | allow |
-| 列连接器 | ✅ | GET /connectors ✅ | `connector.list` ✅ | ⬜(侧栏占位) | read_only | allow |
-| 触发同步分析 | ✅ | POST …/sync ✅ | `connector.sync` ✅ | ⬜ | idempotent_write | allow |
-| 建提醒/日程 | ✅ | POST /schedules ✅ | `schedule.create_reminder`/`schedule.create_digest` ✅ | Schedules(/reminders)✅ | idempotent_write | allow |
-| 通用定时任务 cron（agent_task，ADR-031） | ✅ schedules（cadence 引擎+护栏） | POST /schedules · /run-now · /status · GET …/firings ✅ | `schedule.create_task` ✅ | Schedules 调度台（建/试跑/暂停/历史）✅ | idempotent_write（run 内外部动作仍 ask） | allow |
-| 列/取消日程 | ✅ | GET /schedules · /cancel ✅ | `schedule.list`/`schedule.cancel` ✅ | Schedules ✅ | idempotent_write | allow |
-| 列通知 | ✅ | GET /notifications ✅ | `notify.list` ✅ | Today ✅ | read_only | allow |
-| 读/改通知设置 | ✅ | GET·PATCH /settings ✅ | `notify.get_settings`/`notify.update_settings` ✅ | Settings(/preferences)✅ | idempotent_write | allow |
-| 活动台账 | ✅ | GET /activity ✅ | `notify.list_activity` ✅ | Activity(/data)✅ | read_only | allow |
+| 忽略候选 | ✅ | POST …/dismiss ✅ | `inbox_dismiss` ✅ | Today(Dismiss)✅ | idempotent_write | allow |
+| 列待办 | ✅ | GET /todos ✅ | `todo_list` ✅ | Today ✅ | read_only | allow |
+| 改待办(完成/改期/snooze) | ✅ | PATCH /todos/{id} ✅ | `todo_update`/`complete_todo` ✅ | ⬜(Today 只读,无完成按钮) | idempotent_write | allow |
+| 新建待办 | ✅ | POST /todos ✅ | `todo_create` ✅ | ⬜ | idempotent_write | allow |
+| 列连接器 | ✅ | GET /connectors ✅ | `connector_list` ✅ | ⬜(侧栏占位) | read_only | allow |
+| 触发同步分析 | ✅ | POST …/sync ✅ | `connector_sync` ✅ | ⬜ | idempotent_write | allow |
+| 建提醒/日程 | ✅ | POST /schedules ✅ | `schedule_create_reminder`/`schedule_create_digest` ✅ | Schedules(/reminders)✅ | idempotent_write | allow |
+| 通用定时任务 cron（agent_task，ADR-031） | ✅ schedules（cadence 引擎+护栏） | POST /schedules · /run-now · /status · GET …/firings ✅ | `schedule_create_task` ✅ | Schedules 调度台（建/试跑/暂停/历史）✅ | idempotent_write（run 内外部动作仍 ask） | allow |
+| 列/取消日程 | ✅ | GET /schedules · /cancel ✅ | `schedule_list`/`schedule_cancel` ✅ | Schedules ✅ | idempotent_write | allow |
+| 列通知 | ✅ | GET /notifications ✅ | `notify_list` ✅ | Today ✅ | read_only | allow |
+| 读/改通知设置 | ✅ | GET·PATCH /settings ✅ | `notify_get_settings`/`notify_update_settings` ✅ | Settings(/preferences)✅ | idempotent_write | allow |
+| 活动台账 | ✅ | GET /activity ✅ | `notify_list_activity` ✅ | Activity(/data)✅ | read_only | allow |
 | 会话:新建/切换 | (会话 API) | POST·GET /sessions ✅ | ❌ 不给 agent | Chat(new chat + 切换)✅ | — | — |
 | 会话库:浏览/续跑/重命名/恢复(P0) | ✅ sessions | GET/PATCH /sessions · resume-state · recover · timeline ✅ | ❌ 不给 agent | Sessions(/history)✅ | read_only/idempotent_write | allow |
 | 会话内容搜索(P1) | ✅ search | GET /sessions?query= ✅ | ❌ 不给 agent | Sessions 搜索框 ✅ | read_only | allow |
-| 个人网盘:列/建夹/上传/下载/改名·移动/版本·恢复版本/回收站·恢复(P2) | ✅ drive | /drive/* ✅ | `drive.list`/`search`/`make_folder`/`write`/`read`/`move`/`trash`/`restore` ✅（ADR-046 改名 `drive.*`） | Drive(/workspace)✅ | idempotent_write | allow |
+| 个人网盘:列/建夹/上传/下载/改名·移动/版本·恢复版本/回收站·恢复(P2) | ✅ drive | /drive/* ✅ | `drive_list`/`search`/`make_folder`/`write`/`read`/`move`/`trash`/`restore` ✅（ADR-046 改名 `drive.*`） | Drive(/workspace)✅ | idempotent_write | allow |
 | ~~个人文件工作区 `file_*`（遗留 `files` 表）~~ | ✅ **已删除**（Phase TR P1.1, 2026-07-30） | ✅ **已删除** `/files/*`（含 vite dev proxy） | ✅ **已删除** `file_write`/`file_read`/`file_list`/`file_delete` | ❌（前端早已无 Files 页；死客户端一并删除） | — | — |
-| ~~通用代码执行 `run_code`~~ | ✅ **已删除**（Phase TR P1.2, 2026-07-30） | —（本就无 REST） | ✅ **已删除**，将由 `runtime.open(scope="ephemeral")` + `sh.exec` 取代（Phase TR P4，尚未实现） | — | — | — |
-| 个人网盘:文件夹/批量上传(ADR-042, backlog B-5) | ✅ drive(复用单文件端点) | POST /drive/folders + /drive/files ✅(**无 batch 端点**) | ❌ 不给 agent(`drive.make_folder`+`drive.write` 已等价) | Drive 「Upload folder」/多选/拖拽 + 逐文件进度 ✅ | idempotent_write | allow |
+| ~~通用代码执行 `run_code`~~ | ✅ **已删除**（Phase TR P1.2, 2026-07-30） | —（本就无 REST） | ✅ **已删除**，将由 `runtime_open(scope="ephemeral")` + `sh_exec` 取代（Phase TR P4，尚未实现） | — | — | — |
+| 个人网盘:文件夹/批量上传(ADR-042, backlog B-5) | ✅ drive(复用单文件端点) | POST /drive/folders + /drive/files ✅(**无 batch 端点**) | ❌ 不给 agent(`drive_make_folder`+`drive_write` 已等价) | Drive 「Upload folder」/多选/拖拽 + 逐文件进度 ✅ | idempotent_write | allow |
 | 个人网盘:永久删除(purge) | ✅ drive | DELETE /drive/nodes/{id} ✅ | ❌ **不给 agent**(人工/审批专属) | Drive(Delete forever + 确认)✅ | non_idempotent_write | user-only |
-| Chat 附件:上传/粘贴图片 + 从 Drive 附加(ADR-043, backlog B-6) | ✅ core/attachments.py(引用解析 + 有界装配) | POST /sessions/{id}/prompt(`attachments`) + GET /sessions/{id}/messages(附件元数据) ✅ | ❌ 不给 agent(附件是人在 composer 的输入;agent 用 `drive.read` 读同一份字节) | Chat composer:Attach / From Drive 拾取器 / 粘贴 / 可删 chip / 转录缩略图 ✅ | idempotent_write | allow |
+| Chat 附件:上传/粘贴图片 + 从 Drive 附加(ADR-043, backlog B-6) | ✅ core/attachments.py(引用解析 + 有界装配) | POST /sessions/{id}/prompt(`attachments`) + GET /sessions/{id}/messages(附件元数据) ✅ | ❌ 不给 agent(附件是人在 composer 的输入;agent 用 `drive_read` 读同一份字节) | Chat composer:Attach / From Drive 拾取器 / 粘贴 / 可删 chip / 转录缩略图 ✅ | idempotent_write | allow |
 | 模型来源:vision 能力标志(ADR-043) | ✅ services/model_providers.py | PATCH /providers/{id}(`supports_vision`)· GET /sessions/{id}/model ✅ | ❌ 不给 agent(设置) | Settings「Models」每来源开关 ✅ | idempotent_write | user-only |
 | 项目:列/新建(空·模板)(ADR-037, W2a) | ✅ services/projects.py | GET·POST /projects | `project_list`/`project_create` | ✅ /work/projects(列表 + 新建空/模板) | idempotent_write | allow |
 | 项目:归档导入(ZIP/TAR)(ADR-037, W2a) | ✅ services/projects_import.py(durable job) | POST /projects/imports(github→501) | ❌ 不给 agent(人工上传) | ✅ 新建项目·上传归档(安全解压 + 失败态) | idempotent_write(durable job) | allow |
-| 项目:详情·文件树·快照(ADR-037, W2a) | ✅ services/projects.py | GET /projects/{id}·/tree·/snapshots | `project.tree`/`project.read` | ✅ 项目详情(只读树 + 快照 + 活动) | read_only | allow |
+| 项目:详情·文件树·快照(ADR-037, W2a) | ✅ services/projects.py | GET /projects/{id}·/tree·/snapshots | `project_tree`/`project_read` | ✅ 项目详情(只读树 + 快照 + 活动) | read_only | allow |
 | 项目:Open in Chat(project 绑定会话)(ADR-037, W2a) | ✅ services/projects.py | POST /projects/{id}/chats·GET /sessions/{id}/project-context | ❌ 不给 agent(会话创建) | ✅ project 绑定 Chat(首消息后不可变) | idempotent_write | user-only |
 | 项目:GitHub 连接(凭据)(ADR-038, W2b) | ✅ services/github_source.py(AEAD vault·连接边界·软撤销) | GET·POST·DELETE /connections/github | ❌ 不给 agent(凭据边界) | ✅ /work/projects(GitHub 连接面板·PAT·永不回显 token) | idempotent_write | user-only |
 | 项目:GitHub 一次性导入(选 repo/ref → 有界归档获取 → 不可变初始快照 + source OID)(ADR-038, W2b) | ✅ services/projects_import.py(github 分支·durable job·resolve→OID→tarball→安全解压→快照) | POST /projects/imports kind=github(**202**)·POST /projects/{id}/imports/retry·GET /projects/github/repos·/refs | ❌ 不给 agent(人工·跨凭据+不可信外部内容) | ✅ /work/projects(repo/ref 选择·导入进度·成功来源元数据·失败/重试·390px) | idempotent_write(durable job) | user-only |
-| 项目:任务工作副本（跨 turn 持久 working copy + overlay + lease/fence + head_generation CAS）(ADR-040/ADR-039) | ✅ **已上线**（migration 0030；仅挂一次性 scratch 副本、绝不挂真相源） | GET /sessions/{id}/working-copy · GET/POST …/working-copies ✅ | ⚠️ `project.run` **实际必失败**（B-8）→ ADR-048 用 `runtime.*`/`fs.*`/`sh.*` **取代并删除** | ⚠️ **⬜ 修正**（Change Review 面板 ✅，但**没有 Run 控件**：`frontend/src/api.ts::createSandboxRun` 全前端**零调用点**，人工执行泳道从未存在）→ Phase TR P5 | idempotent_write | allow |
-| 项目:变更评审（added/modified/deleted + artifacts + 有界 diff/truncated）(ADR-040) | ✅ **已上线**（change-set 投影 + 溢出 diff + 二进制检测） | GET …/change-sets/{cs}·/entries/{e}/diff · GET …/artifacts ✅ | `project.review_changes` ✅（ADR-046 改名 `project.review_changes`） | ✅ Change Review 条目列表 + diff + artifacts Keep/Export | read_only | allow |
+| 项目:任务工作副本（跨 turn 持久 working copy + overlay + lease/fence + head_generation CAS）(ADR-040/ADR-039) | ✅ **已上线**（migration 0030；仅挂一次性 scratch 副本、绝不挂真相源） | GET /sessions/{id}/working-copy · GET/POST …/working-copies ✅ | ⚠️ `project_run` **实际必失败**（B-8）→ ADR-048 用 `runtime.*`/`fs.*`/`sh.*` **取代并删除** | ⚠️ **⬜ 修正**（Change Review 面板 ✅，但**没有 Run 控件**：`frontend/src/api.ts::createSandboxRun` 全前端**零调用点**，人工执行泳道从未存在）→ Phase TR P5 | idempotent_write | allow |
+| 项目:变更评审（added/modified/deleted + artifacts + 有界 diff/truncated）(ADR-040) | ✅ **已上线**（change-set 投影 + 溢出 diff + 二进制检测） | GET …/change-sets/{cs}·/entries/{e}/diff · GET …/artifacts ✅ | `project_review_changes` ✅（ADR-046 改名 `project_review_changes`） | ✅ Change Review 条目列表 + diff + artifacts Keep/Export | read_only | allow |
 | 项目:Save selected / Save+checkpoint / Discard / Keep·Export artifact（人工评审闸；head 移动→CAS 拒绝）(ADR-040) | ✅ **已上线**（apply=head_generation CAS→409 SaveConflict） | POST …/change-sets/{cs}/apply（409 SaveConflict）·/discard · …/artifacts/{a}/keep·export ✅ | ❌ **不给 agent**（推进 head=人工评审决定，ADR-048 不改这条） | ✅ Save selected/Save+checkpoint/Discard + Keep/Export 按钮 | idempotent_write（apply=CAS） | user-only |
-| **项目:编码运行时**（RuntimeSession open/exec/close + tar 传输 + 流式/取消）(ADR-047/ADR-048) | ⬜ **Phase TR P3/P4** | ⬜ POST /projects/{id}/runtime · POST /runtime/{rid}/exec·/cancel · DELETE /runtime/{rid}（202 + SSE） | ⬜ `runtime.open`/`runtime.close`（allow）· `sh.exec`（**ask** + 安全命令 grants）· `run.test`/`run.lint` | ⬜ **Phase TR P5**（三栏工作台 + Run 控件 + 流式日志 + Stop + Runs tab） | non_idempotent_write | **ask**（白名单 allow） |
-| **项目:文件读写**（宿主侧作用于工作副本 effective tree；沙箱不可用仍可用）(ADR-048) | ⬜ **Phase TR P4**（复用 `project_workcopy.effective_tree`） | （复用既有 tree/diff 端点 + P5 的树编辑） | ⬜ `fs.list`/`fs.read`/`fs.grep`/`fs.write`/`fs.edit`/`fs.delete`（取代 `project.tree`/`project.read`/`project.run` 的编辑面） | ⬜ **Phase TR P5**（可编辑文件树，人的手改与 agent 的手改进同一个 overlay） | idempotent_write | allow（敏感路径 ask） |
-| **工具目录 / 发现**（`domain.verb` + ToolDescriptor + ToolsetResolver + 渐进式披露）(ADR-046) | ⬜ **Phase TR P2** | —（无 REST 面） | ⬜ `tools.search` / `tools.load` | —（目录摘要进 system 消息，非页面） | read_only | allow（`tools.load` 记审计） |
+| **项目:编码运行时**（RuntimeSession open/exec/close + tar 传输 + 流式/取消）(ADR-047/ADR-048) | ⬜ **Phase TR P3/P4** | ⬜ POST /projects/{id}/runtime · POST /runtime/{rid}/exec·/cancel · DELETE /runtime/{rid}（202 + SSE） | ⬜ `runtime_open`/`runtime_close`（allow）· `sh_exec`（**ask** + 安全命令 grants）· `run_test`/`run_lint` | ⬜ **Phase TR P5**（三栏工作台 + Run 控件 + 流式日志 + Stop + Runs tab） | non_idempotent_write | **ask**（白名单 allow） |
+| **项目:文件读写**（宿主侧作用于工作副本 effective tree；沙箱不可用仍可用）(ADR-048) | ⬜ **Phase TR P4**（复用 `project_workcopy.effective_tree`） | （复用既有 tree/diff 端点 + P5 的树编辑） | ⬜ `fs_list`/`fs_read`/`fs_grep`/`fs_write`/`fs_edit`/`fs_delete`（取代 `project_tree`/`project_read`/`project_run` 的编辑面） | ⬜ **Phase TR P5**（可编辑文件树，人的手改与 agent 的手改进同一个 overlay） | idempotent_write | allow（敏感路径 ask） |
+| **工具目录 / 发现**（`domain.verb` + ToolDescriptor + ToolsetResolver + 渐进式披露）(ADR-046) | ⬜ **Phase TR P2** | —（无 REST 面） | ⬜ `tools_search` / `tools_load` | —（目录摘要进 system 消息，非页面） | read_only | allow（`tools_load` 记审计） |
 | 项目:GitHub 同步 / push / PR(对外写) | ❌ **W4**(后续 ADR;走 ADR-020 审批) | POST /projects/{id}/push 等(W4) | `project_push`(W4,ask) | ⬜ **W4** | non_idempotent_write | **ask** |
 | 模型 provider:配置多来源(OpenAI/Anthropic/Gemini/DeepSeek/Qwen…；AEAD 密钥) (ADR-041) | ✅ **生产实现**(migration 0031 model_providers + AEAD 密钥；services/model_providers；3 wire 适配器) | GET/POST /providers · GET/PATCH/DELETE …/{id} · POST …/{id}/test·default · GET …/{id}/models | ❌ **不给 agent**(跨凭据边界=人工设置,同 GitHub 连接) | ✅ **Settings「Models」面**(增删/测试连接/选默认/每源默认 model；密钥 password 永不回显) | — | user-only |
 | 模型 provider:全局默认 + 每会话切 model (ADR-041) | ✅ **生产实现**(sessions.model_provider_id/model；build_provider 按 DB 解析；env 兜底) | POST …/{id}/default · GET/POST /sessions/{id}/model | ❌ **不给 agent**(model 选择=设置) | ✅ **chat 顶栏 model 切换器** | — | user-only |
-| 发邮件(外部) | — | ❌(仅 Tool) | `email.send` ✅ | ⬜ 审批渲染器(v1 收尾) | non_idempotent_write | **ask** |
+| 发邮件(外部) | — | ❌(仅 Tool) | `email_send` ✅ | ⬜ 审批渲染器(v1 收尾) | non_idempotent_write | **ask** |
 | 连接 Gmail(OAuth) | — | connect/callback ✅ | ❌ | ⬜(需真实 Google 凭据) | — | — |
 | 列/解决审批 | — | GET /permissions·/resolve ✅ | ❌ **不给 agent**(不自批) | Approvals(/approvals，可解析后台/定时审批)✅ | — | user-only |
 | 预授权 grants(白名单自动放行，ADR-034) | ✅ grants | GET/POST/DELETE /grants ✅ | ❌ **不给 agent**(不能自发权限) | Approvals 页「Pre-authorized」增删 ✅ | idempotent_write(命中仍记 effect+审计) | user-only |
 | 导出/删除导入数据 | ✅ | ✅ | ❌(破坏性,不给 agent) | Activity(Export/Delete)✅ | non_idempotent_write | ask/human |
 | QQ/IM 入站对话 + IM 审批(post-v1 里程碑4) | channels ✅ | POST /channels/qq/webhook · GET /channels · /simulate · /threads ✅ | 复用有界循环(非独立 tool);审批复用 v1 基座 | Messaging(/messaging)✅ | idempotent_write | HMAC+owner allowlist |
-| agentic email 入站 + 邮件审批 + 统一发信(post-v1 里程碑5) | notifications(build_email_sender)✅ · channels ✅ | POST /channels/email/webhook · /simulate · GET /channels/threads ✅ | `email.send`(走统一发信接缝,真实 AgentMail)✅;入站复用有界循环;审批复用基座 | Messaging(email 段)✅ | non_idempotent_write | Svix+owner allowlist · **ask** |
-| 知识库:检索(带引用)(ADR-036, KB3/KB4/KB5) | ✅ knowledge_search | POST /knowledge/search ✅ | `knowledge.search` ✅ | Knowledge(/library)检索测试 ✅ + Chat 引用 chips/无依据态 ✅ | read_only | allow |
-| 知识库:列来源(ADR-036, KB4/KB5) | ✅ knowledge | GET /knowledge/sources ✅ | `knowledge.list_sources` ✅ | Knowledge 主页(/library)✅ | read_only | allow |
-| 知识库:加来源(从 Drive 文件)(ADR-036, KB1/KB4/KB5) | ✅ knowledge | POST /knowledge/sources ✅ | `knowledge.add_source`(按 path 解析) ✅ | Knowledge「从 Drive 添加」拾取器 ✅ | idempotent_write | allow |
-| 知识库:重建来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | POST /knowledge/sources/{id}/reindex ✅ | `knowledge.reindex` ✅ | 来源详情「重建」+ 全部重建 ✅ | idempotent_write | allow |
-| 知识库:删除来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | DELETE /knowledge/sources/{id} ✅ | `knowledge.remove_source`(破坏性→审批) ✅ | 来源详情/列表「移除」+ 确认 ✅ | non_idempotent_write | **ask** |
+| agentic email 入站 + 邮件审批 + 统一发信(post-v1 里程碑5) | notifications(build_email_sender)✅ · channels ✅ | POST /channels/email/webhook · /simulate · GET /channels/threads ✅ | `email_send`(走统一发信接缝,真实 AgentMail)✅;入站复用有界循环;审批复用基座 | Messaging(email 段)✅ | non_idempotent_write | Svix+owner allowlist · **ask** |
+| 知识库:检索(带引用)(ADR-036, KB3/KB4/KB5) | ✅ knowledge_search | POST /knowledge/search ✅ | `knowledge_search` ✅ | Knowledge(/library)检索测试 ✅ + Chat 引用 chips/无依据态 ✅ | read_only | allow |
+| 知识库:列来源(ADR-036, KB4/KB5) | ✅ knowledge | GET /knowledge/sources ✅ | `knowledge_list_sources` ✅ | Knowledge 主页(/library)✅ | read_only | allow |
+| 知识库:加来源(从 Drive 文件)(ADR-036, KB1/KB4/KB5) | ✅ knowledge | POST /knowledge/sources ✅ | `knowledge_add_source`(按 path 解析) ✅ | Knowledge「从 Drive 添加」拾取器 ✅ | idempotent_write | allow |
+| 知识库:重建来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | POST /knowledge/sources/{id}/reindex ✅ | `knowledge_reindex` ✅ | 来源详情「重建」+ 全部重建 ✅ | idempotent_write | allow |
+| 知识库:删除来源(ADR-036, KB1/KB4/KB5) | ✅ knowledge | DELETE /knowledge/sources/{id} ✅ | `knowledge_remove_source`(破坏性→审批) ✅ | 来源详情/列表「移除」+ 确认 ✅ | non_idempotent_write | **ask** |
 
 **这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
 

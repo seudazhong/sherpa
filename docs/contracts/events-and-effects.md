@@ -290,7 +290,7 @@ only the attempt named by `turn.end` is a completed turn.
 #### `toolset.resolved` **`[target]`** (ADR-046)
 
 Emitted once per turn, immediately after the `ToolsetResolver` computes the visible set,
-and again whenever `tools.load` changes it. It exists so a run **self-documents which tools
+and again whenever `tools_load` changes it. It exists so a run **self-documents which tools
 the model could see** — today only a `tools_offered` integer reaches the optional debug
 event, which is not enough to explain a "why didn't it use X?" report. Durability `debug`;
 it carries no schemas and no user content.
@@ -305,7 +305,7 @@ it carries no schemas and no user content.
     runtime_session_id: uuid | null
   },
   core_toolsets: [string],        # toolset ids in the always-on set
-  loaded_toolsets: [string],      # ids added via tools.load this session
+  loaded_toolsets: [string],      # ids added via tools_load this session
   catalog_toolsets: [string],     # advertised-but-unloaded ids
   tools_offered: integer >= 0,    # length of the serialized tool array
   core_bytes: integer >= 0,       # serialized byte count of the core set
@@ -313,7 +313,7 @@ it carries no schemas and no user content.
 }
 ```
 
-A change to the visible tool set is security-relevant, so a `tools.load` call ALSO produces
+A change to the visible tool set is security-relevant, so a `tools_load` call ALSO produces
 the ordinary `tool-call`/`tool-result` pair and an audit receipt; `toolset.resolved` is the
 diagnostic projection, never the authorization record.
 
@@ -816,7 +816,7 @@ is an owner user-level operation and emits no `project.lifecycle` event (it touc
 
 Execution runs **inside** a Project-bound chat's durable **model-loop run** (the frozen `run`/
 `event_journal` machinery, ADR-016). It reuses the run lifecycle (`run.started`/`run.settled`),
-streaming, and tool events (§2.1/§2.2); a `runtime.open` / `sh.exec` / `runtime.close` tool call
+streaming, and tool events (§2.1/§2.2); a `runtime_open` / `sh_exec` / `runtime_close` tool call
 is an ordinary `tool-call`/`tool-result` on that run. The durable project-side record is the
 project runtime tables (data-model §Projects runtime) + structured logs. The effect discipline is:
 

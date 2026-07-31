@@ -218,7 +218,7 @@ async def test_create_scheduled_task_tool() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            res = await reg.get("schedule.create_task").execute(
+            res = await reg.get("schedule_create_task").execute(
                 tctx,
                 {
                     "name": "Nightly report",

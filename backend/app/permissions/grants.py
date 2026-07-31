@@ -46,8 +46,8 @@ def _derive_send_email(args: Args) -> Rule | None:
 
 
 # tool_name -> (matcher, derive-rule-from-action-args). Only these tools support grants.
-_MATCHERS: dict[str, Matcher] = {"email.send": _match_send_email}
-_DERIVERS: dict[str, Callable[[Args], Rule | None]] = {"email.send": _derive_send_email}
+_MATCHERS: dict[str, Matcher] = {"email_send": _match_send_email}
+_DERIVERS: dict[str, Callable[[Args], Rule | None]] = {"email_send": _derive_send_email}
 
 
 def supported_tools() -> frozenset[str]:

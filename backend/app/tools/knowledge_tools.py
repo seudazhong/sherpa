@@ -20,12 +20,12 @@ _WRITE = ToolFlags(is_read_only=False, is_concurrency_safe=True, is_destructive=
 _DESTRUCTIVE = ToolFlags(is_read_only=False, is_concurrency_safe=False, is_destructive=True)
 _SOURCE_ID: dict[str, object] = {
     "type": "string",
-    "description": "knowledge source id (uuid, from knowledge.list_sources)",
+    "description": "knowledge source id (uuid, from knowledge_list_sources)",
 }
 
 
 class SearchKnowledgeTool:
-    name = "knowledge.search"
+    name = "knowledge_search"
     description = (
         "Search the user's Knowledge base (their uploaded documents) by meaning and "
         "keywords; returns the most relevant excerpts with citation references and "
@@ -73,7 +73,7 @@ class SearchKnowledgeTool:
 
 
 class ListKnowledgeSourcesTool:
-    name = "knowledge.list_sources"
+    name = "knowledge_list_sources"
     description = (
         "List the documents in the user's Knowledge base with their index status. Read-only."
     )
@@ -94,7 +94,7 @@ class ListKnowledgeSourcesTool:
 
 
 class AddKnowledgeSourceTool:
-    name = "knowledge.add_source"
+    name = "knowledge_add_source"
     description = (
         "Add one of the user's Drive files (by path) to the Knowledge base so it can be "
         "searched with citations. The file is indexed asynchronously. Own-data; no approval."
@@ -120,7 +120,7 @@ class AddKnowledgeSourceTool:
 
 
 class ReindexKnowledgeSourceTool:
-    name = "knowledge.reindex"
+    name = "knowledge_reindex"
     description = (
         "Re-index a Knowledge source (by id) to pick up a changed file. Own-data; no approval."
     )
@@ -142,7 +142,7 @@ class ReindexKnowledgeSourceTool:
 
 
 class RemoveKnowledgeSourceTool:
-    name = "knowledge.remove_source"
+    name = "knowledge_remove_source"
     description = (
         "Remove a document from the user's Knowledge base (by id). It stops being "
         "searchable; the underlying Drive file is NOT deleted. Destructive action — "

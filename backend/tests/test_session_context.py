@@ -95,7 +95,7 @@ async def test_general_chat_context_says_no_project() -> None:
             block = await render_session_context(s, tenant_id=tid, session_id=sid)
             assert "Surface: Web chat" in block
             assert "Project: none" in block
-            assert "project.list" in block
+            assert "project_list" in block
         finally:
             await s.rollback()
 
@@ -153,12 +153,12 @@ async def test_project_tools_default_to_the_bound_project() -> None:
             tctx = ToolContext(tenant_id=tid, user_id=uid, session_id=sid, session=s)
 
             # No project_id passed: the binding supplies it.
-            tree = await reg.get("project.tree").execute(tctx, {})
+            tree = await reg.get("project_tree").execute(tctx, {})
             assert "main.py" in tree.llm_content
-            read = await reg.get("project.read").execute(tctx, {"path": "main.py"})
+            read = await reg.get("project_read").execute(tctx, {"path": "main.py"})
             assert "hello, sherpa" in read.llm_content
             # The listing marks which project the chat is on.
-            listing = await reg.get("project.list").execute(tctx, {})
+            listing = await reg.get("project_list").execute(tctx, {})
             assert "this chat is bound to this project" in listing.llm_content
         finally:
             await s.rollback()
@@ -175,9 +175,9 @@ async def test_general_chat_without_project_id_gets_an_actionable_observation() 
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session_id=sid, session=s)
             with pytest.raises(ToolError) as err:
-                await reg.get("project.tree").execute(tctx, {})
+                await reg.get("project_tree").execute(tctx, {})
             assert "not bound to a project" in str(err.value)
-            assert "project.list" in str(err.value)
+            assert "project_list" in str(err.value)
         finally:
             await s.rollback()
 

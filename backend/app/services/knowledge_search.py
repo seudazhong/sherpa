@@ -30,7 +30,7 @@ from app.models import KnowledgeChunk, KnowledgeRetrievalEvidence, KnowledgeSour
 from app.services.context import CallerContext
 from app.services.errors import Invalid
 
-logger = logging.getLogger("app.knowledge.search")
+logger = logging.getLogger("app.knowledge_search")
 
 _RRF_K = 60
 _PER_SOURCE = 3

@@ -116,20 +116,20 @@ async def test_memory_tools_via_registry() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            out = await reg.get("memory.set").execute(
+            out = await reg.get("memory_set").execute(
                 tctx, {"key": "prefers.concise", "value": "yes"}
             )
             assert "remembered" in out.llm_content
 
-            got = await reg.get("memory.recall").execute(tctx, {"key": "prefers.concise"})
+            got = await reg.get("memory_recall").execute(tctx, {"key": "prefers.concise"})
             assert "yes" in got.llm_content
 
             # key omitted -> recall everything (absorbed `memory_user_list`, B-10)
-            listed = await reg.get("memory.recall").execute(tctx, {})
+            listed = await reg.get("memory_recall").execute(tctx, {})
             assert "prefers.concise" in listed.llm_content
 
-            await reg.get("memory.delete").execute(tctx, {"key": "prefers.concise"})
-            gone = await reg.get("memory.recall").execute(tctx, {"key": "prefers.concise"})
+            await reg.get("memory_delete").execute(tctx, {"key": "prefers.concise"})
+            gone = await reg.get("memory_recall").execute(tctx, {"key": "prefers.concise"})
             assert "no memory" in gone.llm_content
         finally:
             await s.rollback()

@@ -26,7 +26,7 @@ def _parse_time(value: object) -> datetime.time:
 
 
 class CreateReminderTool:
-    name = "schedule.create_reminder"
+    name = "schedule_create_reminder"
     description = (
         "Set a one-time reminder for a to-do at an absolute time. Needs todo_id and "
         "remind_at (ISO-8601). reminder_kind is due_soon (default) or overdue."
@@ -64,7 +64,7 @@ class CreateReminderTool:
 
 
 class CreateDigestTool:
-    name = "schedule.create_digest"
+    name = "schedule_create_digest"
     description = (
         "Set a daily digest at a local time. Needs local_time (HH:MM); timezone defaults to UTC."
     )
@@ -99,7 +99,7 @@ class CreateDigestTool:
 
 
 class ListSchedulesTool:
-    name = "schedule.list"
+    name = "schedule_list"
     description = "List the user's reminders and digests with id, kind, next fire time and version."
     input_schema: dict[str, object] = {"type": "object", "properties": {}}
     flags = ToolFlags(is_read_only=True)
@@ -118,13 +118,13 @@ class ListSchedulesTool:
 
 
 class CancelScheduleTool:
-    name = "schedule.cancel"
+    name = "schedule_cancel"
     description = "Cancel (disable) a reminder or digest. Needs schedule_id + if_version."
     input_schema: dict[str, object] = {
         "type": "object",
         "properties": {
             "schedule_id": {"type": "string", "description": "schedule id (uuid)"},
-            "if_version": {"type": "integer", "description": "if_version from schedule.list"},
+            "if_version": {"type": "integer", "description": "if_version from schedule_list"},
         },
         "required": ["schedule_id", "if_version"],
     }
@@ -146,7 +146,7 @@ class CancelScheduleTool:
 
 
 class CreateScheduledTaskTool:
-    name = "schedule.create_task"
+    name = "schedule_create_task"
     description = (
         "Schedule a recurring autonomous task: at each occurrence Sherpa runs the "
         "given prompt and delivers the result. Specify exactly one cadence: cron (a "

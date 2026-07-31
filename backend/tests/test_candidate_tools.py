@@ -131,10 +131,10 @@ async def test_candidate_tools_via_registry() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            listing = await reg.get("inbox.list_candidates").execute(tctx, {})
+            listing = await reg.get("inbox_list_candidates").execute(tctx, {})
             assert str(cid) in listing.llm_content
 
-            accepted = await reg.get("inbox.accept").execute(
+            accepted = await reg.get("inbox_accept").execute(
                 tctx, {"candidate_id": str(cid), "if_version": 1}
             )
             assert "accepted candidate" in accepted.llm_content
@@ -157,7 +157,7 @@ async def test_accept_candidate_with_patch_edits_first() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            out = await reg.get("inbox.accept").execute(
+            out = await reg.get("inbox_accept").execute(
                 tctx,
                 {
                     "candidate_id": str(cid),
@@ -210,7 +210,7 @@ async def test_loop_agent_accepts_candidate() -> None:
                     [
                         ToolCall(
                             id="c1",
-                            name="inbox.accept",
+                            name="inbox_accept",
                             args={"candidate_id": str(cid), "if_version": 1},
                         ),
                         Finish("tool_use"),

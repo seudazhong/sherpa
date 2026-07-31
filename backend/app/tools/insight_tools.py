@@ -11,7 +11,7 @@ from app.tools.validate import validate_args
 
 
 class ListNotificationsTool:
-    name = "notify.list"
+    name = "notify_list"
     description = (
         "List delivered/missed reminders and digests (shown on the Today page). Read-only."
     )
@@ -33,7 +33,7 @@ class ListNotificationsTool:
 
 
 class ListActivityTool:
-    name = "notify.list_activity"
+    name = "notify_list_activity"
     description = (
         "List the activity ledger — what Sherpa did on the user's behalf "
         "(reads/inferences/actions). Optional type filter. Read-only."
@@ -61,7 +61,7 @@ class ListActivityTool:
 
 
 class GetSettingsTool:
-    name = "notify.get_settings"
+    name = "notify_get_settings"
     description = "Read the user's notification settings (incl. version). Read-only."
     input_schema: dict[str, object] = {"type": "object", "properties": {}}
     flags = ToolFlags(is_read_only=True)
@@ -81,7 +81,7 @@ class GetSettingsTool:
 
 
 class UpdateSettingsTool:
-    name = "notify.update_settings"
+    name = "notify_update_settings"
     description = (
         "Change the user's notification settings (any of notifications_enabled, "
         "web_enabled, email_digest_enabled, timezone, quiet_hours_enabled, daily_cap)."

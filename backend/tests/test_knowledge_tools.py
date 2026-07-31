@@ -43,11 +43,11 @@ _FIN_MD = "# 财务制度\n\n预算审批流程：单笔不超过5万由部门�
 
 def test_knowledge_tool_policy() -> None:
     reg = build_default_registry()
-    assert evaluate(reg.get("knowledge.search")) == "allow"
-    assert evaluate(reg.get("knowledge.list_sources")) == "allow"
-    assert evaluate(reg.get("knowledge.add_source")) == "allow"
-    assert evaluate(reg.get("knowledge.reindex")) == "allow"
-    assert evaluate(reg.get("knowledge.remove_source")) == "ask"  # destructive → approval
+    assert evaluate(reg.get("knowledge_search")) == "allow"
+    assert evaluate(reg.get("knowledge_list_sources")) == "allow"
+    assert evaluate(reg.get("knowledge_add_source")) == "allow"
+    assert evaluate(reg.get("knowledge_reindex")) == "allow"
+    assert evaluate(reg.get("knowledge_remove_source")) == "ask"  # destructive → approval
 
 
 @pytest.mark.asyncio
@@ -61,8 +61,8 @@ async def test_knowledge_tools_add_ingest_search() -> None:
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
             cc = CallerContext(tenant_id=tid, user_id=uid, actor="agent")
 
-            await reg.get("drive.write").execute(tctx, {"path": "docs/fin.md", "content": _FIN_MD})
-            added = await reg.get("knowledge.add_source").execute(tctx, {"path": "docs/fin.md"})
+            await reg.get("drive_write").execute(tctx, {"path": "docs/fin.md", "content": _FIN_MD})
+            added = await reg.get("knowledge_add_source").execute(tctx, {"path": "docs/fin.md"})
             assert "Knowledge" in added.llm_content
 
             srcs = await ksvc.list_sources(s, cc)
@@ -74,10 +74,10 @@ async def test_knowledge_tools_add_ingest_search() -> None:
                 == "done"
             )
 
-            listed = await reg.get("knowledge.list_sources").execute(tctx, {})
+            listed = await reg.get("knowledge_list_sources").execute(tctx, {})
             assert "fin.md" in listed.llm_content
 
-            res = await reg.get("knowledge.search").execute(tctx, {"query": "预算 审批阈值"})
+            res = await reg.get("knowledge_search").execute(tctx, {"query": "预算 审批阈值"})
             if await _has_sherpa_text(s):
                 assert "K:" in res.llm_content  # citation reference present
                 assert "审批" in res.llm_content

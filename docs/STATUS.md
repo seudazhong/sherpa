@@ -37,7 +37,7 @@ fails). Triage on 2026-07-30 showed these are **one architecture problem** — f
 grow the flat surface to ~66 tools, and fixing B-2 alone would block the tools B-8 needs.
 
 **Approved (2026-07-30):** the architecture — [ADR-045](decisions.md#adr-045) umbrella ·
-[ADR-046](decisions.md#adr-046) tool catalog / `ToolsetResolver` / `tools.search`+`tools.load` ·
+[ADR-046](decisions.md#adr-046) tool catalog / `ToolsetResolver` / `tools_search`+`tools_load` ·
 [ADR-047](decisions.md#adr-047) tar workspace transport (a **narrowing** of the ADR-025/039 mount
 wording, not a relaxation) · [ADR-048](decisions.md#adr-048) explicit `RuntimeSession` + host-side
 `fs.*` + sandbox-routed `sh.*`/`run.*` — **and the P0–P5 execution plan itself**. Clean break: no
@@ -89,7 +89,7 @@ per task:
   `ProjectRuntimeSession` + `ProjectExecRun`) so the baseline can stay the only revision and never
   need a follow-up migration; `run_sandbox` now opens/closes one runtime session per boundary and
   records a command as one exec run. **That is persistence alignment, not P4 behavior** — no
-  `runtime.open`/`sh.exec`, no tar transport, no async REST, no UI. `SandboxRunState.warm` is gone
+  `runtime_open`/`sh_exec`, no tar transport, no async REST, no UI. `SandboxRunState.warm` is gone
   (ADR-047 §7: never implemented anywhere).
 
 Gate: `alembic heads` = **one head (0001)**; `uv run pytest` **385 passed** (the ADR-044 harness
@@ -105,7 +105,7 @@ among P1's deletions. They are **P4** ([TR.9](IMPLEMENTATION.md)), not P1, and t
 `project_run` still runs (and still fails at the container, exactly as before).
 
 **What P2/P3 do next:** **P2** builds the tool catalog (`domain.verb` rename, `ToolDescriptor`,
-`ToolsetResolver`, `tools.search`/`tools.load`, byte budget) and **P3** replaces the bind mount with
+`ToolsetResolver`, `tools_search`/`tools_load`, byte budget) and **P3** replaces the bind mount with
 tar ingress/egress plus a first-party runner image. They are disjoint by file ownership (TR.4) and
 may be built in parallel; both must merge before **P4** (`RuntimeSession` + `fs`/`sh`/`run`).
 
@@ -133,9 +133,9 @@ and [**B-11**](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argu
   `if_version` un-requirable and **delete the optimistic-concurrency guard** — plus ④ model weakness at
   discriminated unions.
 - **New ADR-046 §决策10: consolidate only on the *vertical* (workflow) axis**, never the horizontal (CRUD)
-  one; cross-domain `list(kind)` is forbidden. Vertical candidates (`todo.create(…, remind_at?)`,
-  `inbox.accept(…, patch?, remind_at?)`, `today()`, `knowledge.add(query_or_path)`) are parked in B-10.
-  Borrowed from CLI practice: **drop `run.test`/`run.lint` from P4** (pure sugar over `sh.exec`), and keep
+  one; cross-domain `list(kind)` is forbidden. Vertical candidates (`todo_create(…, remind_at?)`,
+  `inbox_accept(…, patch?, remind_at?)`, `today()`, `knowledge_add(query_or_path)`) are parked in B-10.
+  Borrowed from CLI practice: **drop `run_test`/`run_lint` from P4** (pure sugar over `sh_exec`), and keep
   `fs.*` separate (CLI agents keep Read/Edit out of Bash for exactly Sherpa's reasons).
 - **Methodology gap (B-11).** All of the above is empirically decidable and we decided it by argument.
   Phoenix is already up with `OTEL_CAPTURE_MESSAGE_CONTENT=true` and already records
@@ -150,20 +150,35 @@ and [**B-11**](backlog.md#b-11-no-tool-use-evaluation-harness-decisions-are-argu
   (c) `execute_tool` spans carry no result content. Details in B-11.
 
 **✅ Phase TR P2.2 shipped (2026-07-31) — naming unification only.** All **42** tools renamed to a
-single `domain.verb` namespace (ADR-046 §决策1), hard rename, no aliases. The measured starting point
-was **28 `action_domain` · 15 `domain_action` · 4 neither**, mixed *inside* single domains
-(`todo_write` ↔ `list_todos`; `project_read` ↔ `list_projects`), so the model could not even
-pattern-match locally. 11 namespaces now: `core` `inbox` `todo` `connector` `schedule` `notify`
-`memory` `drive` `knowledge` `project` `email`. The names match `api.md` §7.3's target table exactly.
-Two enforcement points were widened from the old dot-less `^[a-z][a-z0-9_]{0,63}$`:
-`app/api/schemas.py::ApprovalAction.tool_name`, and the **`ck_pg_tool` CHECK** on
-`permission_grants.tool_name` — the latter only surfaced by running the suite (6 failures) and earned
-migration **`0002_tool_name_domain_verb`**, the first revision after the baseline squash (existing
-databases, including the retained ADR-044 test database, are migrated rather than rebuilt).
-Model-facing prose was renamed with the tools (`SYSTEM_PROMPT`, `session_context`, `if_version from …`
-argument descriptions, approval-card text) so no description advertises a name that no longer exists.
-Byte-neutral by design: 16,153 → **16,161 B**, still 42 tools. Gate: `uv run pytest` green,
-`alembic heads` = one head (`0002`), ruff + format + mypy clean, `npm run lint` + `npm run build` green.
+single `domain_verb` namespace (ADR-046 §决策1 as amended by **修订 B**), hard rename, no aliases. The
+measured starting point was **28 `action_domain` · 15 `domain_action` · 4 neither**, mixed *inside*
+single domains (`todo_write` ↔ `list_todos`; `project_read` ↔ `list_projects`), so the model could not
+even pattern-match locally. 11 namespaces now: `core` `inbox` `todo` `connector` `schedule` `notify`
+`memory` `drive` `knowledge` `project` `email`.
+
+> **⚠️ This shipped WRONG once, and the test suite structurally could not see it.** ADR-046 originally
+> specified `domain.verb` **with a dot**, on the unverified claim that a dot is legal in the OpenAI /
+> Anthropic / Gemini wire formats. The dotted rename was implemented and committed, **`uv run pytest`
+> stayed fully green** — the suite runs the mock provider, which can never observe a wire-format
+> rejection — and the live stack was then unable to make **any** tool call: GitHub Copilot behind the
+> litellm proxy answers `400 Invalid 'tools[0].name': ... Expected a string that matches the pattern
+> '^[a-zA-Z0-9_-]+$'`. **Only a live smoke against the real provider caught it.** Fixed by switching to
+> underscores — which is also what Anthropic's own examples use (`asana_search`, `jira_search`) — and
+> re-verified end to end on the rebuilt stack: the event journal now shows `tool-call` → `tool-result`
+> for `core_get_time`, with zero provider errors.
+> **Standing lesson: tool-name grammar is a wire contract that `pytest` can never validate.** Any future
+> change to it MUST be smoke-tested against a real provider. Gap tracked in B-11.
+
+Two enforcement points spelled the old dot-less grammar: `app/api/schemas.py::ApprovalAction.tool_name`,
+and the **`ck_pg_tool` CHECK** on `permission_grants.tool_name` — the latter is reachable only at
+runtime and surfaced as 6 test failures. Migrations **`0002`** (dotted, wrong) and **`0003`**
+(underscore, correct) are both kept: existing databases, including the retained ADR-044 test database,
+are migrated forward rather than rebuilt, and the history records the wrong turn honestly.
+Model-facing prose was renamed with the tools (`SYSTEM_PROMPT`, `session_context`, the
+`if_version from …` argument descriptions, the approval-card text) so no description advertises a name
+that no longer exists. Byte-neutral by design: 16,153 → **16,161 B**, still 42 tools.
+Gate: `uv run pytest` green, `alembic heads` = one head (`0003`), ruff + format + mypy clean,
+`npm run lint` + `npm run build` green, **plus a live agent-lane smoke on the rebuilt stack**.
 **No merging, no deletion, no redesign** — those remain open in B-10.
 
 **✅ Phase TR P2.0a shipped (2026-07-31) — the dead-tool sweep.**
@@ -174,7 +189,7 @@ hallucinated id), `complete_todo` (exactly `update_todo(status="completed")` —
 `todos.complete_todo` had no REST caller and went with it), `edit_candidate` (folded into
 `accept_candidate`, which now takes an optional `title`/`description`/`due_at`/`priority` patch — **REST
 keeps both endpoints**, since the Inbox UI has two buttons and only the *tool* surface merges), and
-`memory_user_list` (folded into `memory_user_get`, `key` now optional — both become `memory.recall` in
+`memory_user_list` (folded into `memory_user_get`, `key` now optional — both become `memory_recall` in
 P2.2). `SYSTEM_PROMPT` updated to stop advertising a deleted tool.
 **Measured 47 → 42 tools / 17,432 → 16,153 B compact** (18,303 → 16,948 B with default separators).
 Guard: `tests/test_tools.py::test_deleted_tools_are_gone`. Contract `api.md` §7.3 updated.

@@ -449,7 +449,7 @@ Large tool output is an ephemeral runtime artifact, not a database record, user 
 > **DELETED.** `WORKSPACE_ROOT` and its `read`/`glob`/`grep` tools are removed by the
 > ADR-045 clean break. They were the filesystem authority for an api.md §7.3 starter
 > registry that no longer exists, and they are strictly superseded:
-> - **Project code** is reached with `fs.list`/`fs.read`/`fs.grep` (api §7.6), which read
+> - **Project code** is reached with `fs_list`/`fs_read`/`fs_grep` (api §7.6), which read
 >   the Project working copy's **effective tree** and enforce project-relative paths.
 > - **Personal files** are reached with `drive.*` over the ADR-030 Drive.
 >
@@ -527,7 +527,7 @@ working copy and nothing else.**
 - **Image boundary `[target]`.** `SANDBOX_IMAGE` MUST be a **pinned digest of the
   repository's own `sandbox-runner` image**, not a stock upstream tag. The v1 image carries
   Python + `pytest` + `ruff` and a `capabilities.json` manifest that the orchestrator probes
-  at `runtime.open`; it deliberately contains **no `git` and no network tooling**. Node is a
+  at `runtime_open`; it deliberately contains **no `git` and no network tooling**. Node is a
   later optional profile. Probed capabilities let a missing dependency return
   `environment_missing_dependencies` **with the list of what is available**, instead of an
   unexplained exit 127.

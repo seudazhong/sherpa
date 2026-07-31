@@ -96,7 +96,7 @@ async def test_effect_unknown_moves_to_reconciliation() -> None:
                 s,
                 tenant_id=tid,
                 run_id=rid,
-                effect_name="email.send",
+                effect_name="email_send",
                 idempotency_key=f"tool:{rid}:0:send-1",
                 effect_class="reconcilable_write",
                 retry_policy="after_reconcile",

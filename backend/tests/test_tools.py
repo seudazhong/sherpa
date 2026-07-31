@@ -46,9 +46,9 @@ def test_bound_text_long_truncated() -> None:
 
 def test_registry_visibility() -> None:
     reg = build_default_registry()
-    assert {t.name for t in reg.visible("safe")} == {"core.get_time"}
-    assert reg.is_visible("core.get_time", "safe") is True
-    assert reg.is_visible("email.send", "safe") is False
+    assert {t.name for t in reg.visible("safe")} == {"core_get_time"}
+    assert reg.is_visible("core_get_time", "safe") is True
+    assert reg.is_visible("email_send", "safe") is False
 
 
 def test_unknown_tool_raises() -> None:
@@ -68,7 +68,7 @@ def test_deleted_tools_are_gone() -> None:
 @pytest.mark.asyncio
 async def test_get_time_executes() -> None:
     reg = build_default_registry()
-    result = await reg.get("core.get_time").execute(_ctx(), {})
+    result = await reg.get("core_get_time").execute(_ctx(), {})
     assert "T" in result.llm_content
 
 

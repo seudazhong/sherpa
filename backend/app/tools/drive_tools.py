@@ -22,7 +22,7 @@ _WRITE = ToolFlags(is_read_only=False, is_concurrency_safe=True, is_destructive=
 
 
 class DriveWriteTool:
-    name = "drive.write"
+    name = "drive_write"
     description = (
         "Create or overwrite a text file in the user's Drive (folders auto-created). "
         "Own-data write; keeps prior versions; no approval needed."
@@ -52,7 +52,7 @@ class DriveWriteTool:
 
 
 class DriveReadTool:
-    name = "drive.read"
+    name = "drive_read"
     description = "Read a text file from the user's Drive by path. Read-only."
     input_schema: dict[str, object] = {
         "type": "object",
@@ -73,7 +73,7 @@ class DriveReadTool:
 
 
 class DriveListTool:
-    name = "drive.list"
+    name = "drive_list"
     description = (
         "List a folder in the user's Drive (name, type, size, version). "
         "Omit path for the Drive root. Read-only."
@@ -110,7 +110,7 @@ class DriveListTool:
 
 
 class DriveSearchTool:
-    name = "drive.search"
+    name = "drive_search"
     description = "Search the user's Drive by file/folder name. Read-only."
     input_schema: dict[str, object] = {
         "type": "object",
@@ -137,7 +137,7 @@ class DriveSearchTool:
 
 
 class DriveMakeFolderTool:
-    name = "drive.make_folder"
+    name = "drive_make_folder"
     description = "Create a folder (and any missing parents) in the user's Drive. Own-data."
     input_schema: dict[str, object] = {
         "type": "object",
@@ -161,7 +161,7 @@ class DriveMakeFolderTool:
 
 
 class DriveMoveTool:
-    name = "drive.move"
+    name = "drive_move"
     description = "Move or rename a Drive file/folder. Own-data; no approval needed."
     input_schema: dict[str, object] = {
         "type": "object",
@@ -199,7 +199,7 @@ class DriveMoveTool:
 
 
 class DriveTrashTool:
-    name = "drive.trash"
+    name = "drive_trash"
     description = (
         "Move a Drive file/folder to the trash (restorable). Own-data; permanent "
         "purge is human-only and not available to the agent."

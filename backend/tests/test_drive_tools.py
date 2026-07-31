@@ -36,27 +36,27 @@ async def test_drive_tools_roundtrip() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session=s)
 
-            wrote = await reg.get("drive.write").execute(
+            wrote = await reg.get("drive_write").execute(
                 tctx, {"path": "projects/notes.md", "content": "hello"}
             )
             assert "projects/notes.md" in wrote.llm_content
 
-            read = await reg.get("drive.read").execute(tctx, {"path": "projects/notes.md"})
+            read = await reg.get("drive_read").execute(tctx, {"path": "projects/notes.md"})
             assert read.llm_content == "hello"
 
-            listing = await reg.get("drive.list").execute(tctx, {"path": "projects"})
+            listing = await reg.get("drive_list").execute(tctx, {"path": "projects"})
             assert "notes.md" in listing.llm_content
 
-            found = await reg.get("drive.search").execute(tctx, {"query": "notes"})
+            found = await reg.get("drive_search").execute(tctx, {"query": "notes"})
             assert "projects/notes.md" in found.llm_content
 
-            await reg.get("drive.make_folder").execute(tctx, {"path": "archive/2026"})
-            moved = await reg.get("drive.move").execute(
+            await reg.get("drive_make_folder").execute(tctx, {"path": "archive/2026"})
+            moved = await reg.get("drive_move").execute(
                 tctx, {"path": "projects/notes.md", "to": "archive/2026/old.md"}
             )
             assert "archive/2026/old.md" in moved.llm_content
 
-            trashed = await reg.get("drive.trash").execute(tctx, {"path": "archive/2026/old.md"})
+            trashed = await reg.get("drive_trash").execute(tctx, {"path": "archive/2026/old.md"})
             assert "trashed" in trashed.llm_content
 
             # Purge is human-only: no such agent tool is registered.

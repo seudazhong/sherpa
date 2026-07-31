@@ -1004,7 +1004,7 @@ class ApprovalBound(StrictModel):
 
 
 class ApprovalAction(StrictModel):
-    tool_name: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")]
+    tool_name: Annotated[str, Field(pattern=r"^[a-z][a-z0-9]*_[a-z][a-z0-9_]*$")]
     permission_scope: Annotated[str, Field(min_length=1, max_length=512)]
     session_id: UUID
 
@@ -1163,14 +1163,28 @@ class Tool(Protocol):                              # [shipped] — UNCHANGED by 
 
 Contract rules:
 
-- `name` is stable, unique, and **`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`** — a
-  `domain.verb` pair, at most 64 characters total (**`[shipped]` 2026-07-31**, ADR-046
-  §决策1; supersedes the former `^[a-z][a-z0-9_]{0,63}$`). The dot is accepted by the
-  OpenAI, Anthropic and Gemini wire formats. The grammar is enforced in two places:
-  `app/api/schemas.py::ApprovalAction.tool_name` and the `ck_pg_tool` CHECK on
-  `permission_grants.tool_name` (widened by migration **`0002`**). Because ADR-045 is a
-  clean break there is **no alias table and no deprecated-name grace period**: a removed
-  name simply becomes an `unknown tool` observation.
+- `name` is stable, unique, and **`^[a-z][a-z0-9]*_[a-z][a-z0-9_]*$`** — a `domain_verb`
+  pair, at most 64 characters total (**`[shipped]` 2026-07-31**, ADR-046 §决策1 as amended
+  by 修订 B).
+
+  > **A dot is NOT allowed, and this was learned the hard way.** ADR-046 originally
+  > specified `domain.verb` on the claim that "the dot is legal in the OpenAI, Anthropic
+  > and Gemini wire formats". The dotted names shipped, the whole unit suite stayed green
+  > (it uses the mock provider, which can never see a wire-format rejection), and the live
+  > stack could then make **no tool call at all**: the GitHub Copilot backend behind the
+  > litellm proxy answers `400` with
+  > `Invalid 'tools[0].name': string does not match pattern. Expected a string that matches
+  > the pattern '^[a-zA-Z0-9_-]+$'`. Underscores are the portable choice — and they match
+  > Anthropic's own published examples (`asana_search`, `jira_search`). Any future change to
+  > the tool-name grammar MUST be validated against a real provider, not only the suite.
+
+  The grammar is enforced in two places: `app/api/schemas.py::ApprovalAction.tool_name`
+  and the `ck_pg_tool` CHECK on `permission_grants.tool_name` (migration **`0003`**;
+  `0002` briefly held the dotted form). The regex enforces the two-part shape but cannot
+  prove the prefix is a real namespace — that check belongs to `ToolDescriptor.namespace`
+  (§7.5, Phase TR P2.1). Because ADR-045 is a clean break there is **no alias table and no
+  deprecated-name grace period**: a removed name simply becomes an `unknown tool`
+  observation.
 - `description` is model-visible and MUST state purpose, boundary, and important
   non-obvious failure conditions; it MUST NOT contain secrets or tenant data.
 - `input_schema` is JSON Schema Draft 2020-12. Object schemas default to
@@ -1197,7 +1211,7 @@ class ToolDescriptor(StrictModel):                 # [target] ADR-046
         "tools", "core", "inbox", "todo", "schedule", "memory", "knowledge",
         "connector", "drive", "project", "fs", "sh", "run",
     ]
-    toolset: str                    # catalog entry id, e.g. "knowledge", "fs.edit"
+    toolset: str                    # catalog entry id, e.g. "knowledge", "fs_edit"
     version: Annotated[int, Field(ge=1)]           # breaking schema change ⇒ bump
     requires: frozenset[str]        # "project_binding" | "runtime_session" | "gmail_connected"
     surfaces: frozenset[str]        # "chat" | "scheduled_task"  (never "connector_analysis")
@@ -1250,16 +1264,16 @@ exact action being approved:
 
 ```python
 class PermissionScope(StrictModel):                # [target] ADR-046 §决策6
-    tool: str                                      # "sh.exec"
+    tool: str                                      # "sh_exec"
     command_class: str | None = None               # "shell" | "package" | ...
     command_preview: Annotated[str, Field(max_length=2000)] | None = None
     paths: Annotated[list[str], Field(max_length=20)] = Field(default_factory=list)
 ```
 
-An approval preview for `sh.exec` MUST render the exact command and the target paths; an
-approval preview for a sensitive-path `fs.write` MUST render the path. Pre-authorization
+An approval preview for `sh_exec` MUST render the exact command and the target paths; an
+approval preview for a sensitive-path `fs_write` MUST render the path. Pre-authorization
 grants (ADR-034) match on this scope — today only `send_email` has a matcher; the target
-adds `sh.exec` (safe-command allowlist) and `fs.write` (path-prefix).
+adds `sh_exec` (safe-command allowlist) and `fs_write` (path-prefix).
 
 
 ### 7.2 Output bounding and spill
@@ -1333,28 +1347,28 @@ sees is the **visible** subset chosen by the resolver (§7.5) — the two are no
 
 | Toolset | Tools (`domain.verb`) | `requires` | Default policy |
 |---|---|---|---|
-| `tools` (core) | `tools.search`, `tools.load` | — | allow |
-| `core` (core) | `core.get_time` | — | allow |
-| `inbox` (core) | `inbox.list_candidates`, `inbox.accept`, `inbox.dismiss` | — | allow |
-| `todo` (core) | `todo.list`, `todo.create`, `todo.update` | — | allow |
-| `project` (core, project-bound) | `project.list`, `project.create`, `project.review_changes` | `project_binding` for review | allow |
-| `fs` (core, project-bound) | `fs.list`, `fs.read`, `fs.grep`, `fs.write`, `fs.edit`, `fs.delete` | `project_binding` | allow; sensitive paths `ask` |
-| `sh` (loadable, project-bound) | `sh.exec` | `runtime_session` | **`ask`** + safe-command grants |
-| `run` (loadable, project-bound) | `run.test`, `run.lint` | `runtime_session` | inherits `sh.exec` |
-| `runtime` (core, project-bound) | `runtime.open`, `runtime.close` | `project_binding` | allow |
-| `schedule` (loadable) | `schedule.create_reminder`, `schedule.create_digest`, `schedule.create_task`, `schedule.list`, `schedule.cancel` | — | allow |
-| `memory` (loadable) | `memory.set`, `memory.recall`, `memory.delete`, `memory.note`, `memory.search` | — | allow |
-| `knowledge` (loadable) | `knowledge.search`, `knowledge.list_sources`, `knowledge.add_source`, `knowledge.reindex`, `knowledge.remove_source` | — | allow; `remove_source` **`ask`** |
-| `drive` (loadable) | `drive.list`, `drive.read`, `drive.write`, `drive.search`, `drive.make_folder`, `drive.move`, `drive.trash` | — | allow |
-| `connector` (loadable) | `connector.list`, `connector.sync` | `gmail_connected` for sync | allow |
-| `notify` (loadable) | `notify.list`, `notify.get_settings`, `notify.update_settings`, `notify.list_activity` | — | allow |
-| `email` (loadable) | `email.send` | — | **`ask`** (ADR-020 envelope) |
+| `tools` (core) | `tools_search`, `tools_load` | — | allow |
+| `core` (core) | `core_get_time` | — | allow |
+| `inbox` (core) | `inbox_list_candidates`, `inbox_accept`, `inbox_dismiss` | — | allow |
+| `todo` (core) | `todo_list`, `todo_create`, `todo_update` | — | allow |
+| `project` (core, project-bound) | `project_list`, `project_create`, `project_review_changes` | `project_binding` for review | allow |
+| `fs` (core, project-bound) | `fs_list`, `fs_read`, `fs_grep`, `fs_write`, `fs_edit`, `fs_delete` | `project_binding` | allow; sensitive paths `ask` |
+| `sh` (loadable, project-bound) | `sh_exec` | `runtime_session` | **`ask`** + safe-command grants |
+| `run` (loadable, project-bound) | `run_test`, `run_lint` | `runtime_session` | inherits `sh_exec` |
+| `runtime` (core, project-bound) | `runtime_open`, `runtime_close` | `project_binding` | allow |
+| `schedule` (loadable) | `schedule_create_reminder`, `schedule_create_digest`, `schedule_create_task`, `schedule_list`, `schedule_cancel` | — | allow |
+| `memory` (loadable) | `memory_set`, `memory_recall`, `memory_delete`, `memory_note`, `memory_search` | — | allow |
+| `knowledge` (loadable) | `knowledge_search`, `knowledge_list_sources`, `knowledge_add_source`, `knowledge_reindex`, `knowledge_remove_source` | — | allow; `remove_source` **`ask`** |
+| `drive` (loadable) | `drive_list`, `drive_read`, `drive_write`, `drive_search`, `drive_make_folder`, `drive_move`, `drive_trash` | — | allow |
+| `connector` (loadable) | `connector_list`, `connector_sync` | `gmail_connected` for sync | allow |
+| `notify` (loadable) | `notify_list`, `notify_get_settings`, `notify_update_settings`, `notify_list_activity` | — | allow |
+| `email` (loadable) | `email_send` | — | **`ask`** (ADR-020 envelope) |
 
 **Renames are hard renames** (no aliases, ADR-045): `memory_user_get`/`memory_user_list` →
-`memory.recall` (optional `key`); `todo_write`/`update_todo`/`complete_todo` →
-`todo.create`/`todo.update` (status is a field). **Deletions**: `file_write`/`file_read`/
+`memory_recall` (optional `key`); `todo_write`/`update_todo`/`complete_todo` →
+`todo_create`/`todo_update` (status is a field). **Deletions**: `file_write`/`file_read`/
 `file_list`/`file_delete` (the legacy `files` stack — Drive is the only personal byte
-store, ADR-030), `run_code` (replaced by `runtime.open(scope="ephemeral")` + `sh.exec`),
+store, ADR-030), `run_code` (replaced by `runtime_open(scope="ephemeral")` + `sh_exec`),
 `project_run`/`project_tree`/`project_read` (replaced by `fs.*` + `runtime.*` + `sh.*`;
 `fs.*` is strictly stronger because it reads the working copy's **effective tree**, so the
 agent can see what it just wrote — the old tools only saw the saved head).
@@ -1364,16 +1378,16 @@ catalog would otherwise have indexed rather than removed:
 
 - `echo` — dev leftover with no product value, and it was SAFE-tier (visible even to
   untrusted-content sessions). SAFE is now `{get_time}` alone.
-- `drive.restore` — **structurally uncallable**: it required a `node_id` and no tool ever
+- `drive_restore` — **structurally uncallable**: it required a `node_id` and no tool ever
   emitted one, so the agent could only call it with a hallucinated id. Restoring from the
   trash is human-only in the Drive UI; the REST route and service are unchanged.
-- `complete_todo` — exactly `todo.update(status="completed")`; the service function behind
+- `complete_todo` — exactly `todo_update(status="completed")`; the service function behind
   it was a one-line alias and is deleted too.
-- `edit_candidate` — folded into **`inbox.accept`**, which now takes an optional
+- `edit_candidate` — folded into **`inbox_accept`**, which now takes an optional
   `title`/`description`/`due_at`/`priority` patch: same effect class, same approval scope,
   one intent. **REST keeps both `accept` and `edit` endpoints** — the Inbox UI has two
   buttons; only the *tool* surface merges.
-- `memory_user_list` — folded into `memory.recall` (key optional), as already specified
+- `memory_user_list` — folded into `memory_recall` (key optional), as already specified
   above.
 
 Measured effect: **47 → 42 tools, 17,432 → 16,153 B** (compact JSON). That is deletion,
@@ -1401,7 +1415,7 @@ argument validation, effect persistence, permission handling, output bounding,
 events, and audit path. MCP and sub-agent adapters remain contract-reserved and
 unregistered. No plugin transport may execute before `EXECUTABLE`. An externally
 supplied (MCP/plugin) tool defaults to `surfaces={"chat"}`, policy `ask`, and **never
-enters the core set** — it must be loaded explicitly via `tools.load`.
+enters the core set** — it must be loaded explicitly via `tools_load`.
 
 ### 7.5 `ToolsetResolver`, catalog digest, and discovery **`[target]`**
 
@@ -1411,7 +1425,7 @@ class ToolsetProfile(StrictModel):                 # inputs to the VISIBLE gate
     surface: Literal["chat", "scheduled_task", "connector_analysis"]
     session_kind: Literal["general", "project_bound"]
     runtime_session_id: UUID | None                # an open RuntimeSession, if any
-    loaded_toolsets: frozenset[str]                # accumulated via tools.load this session
+    loaded_toolsets: frozenset[str]                # accumulated via tools_load this session
 
 
 class CatalogLine(StrictModel):
@@ -1422,7 +1436,7 @@ class CatalogLine(StrictModel):
 
 class ResolvedToolset(StrictModel):
     core: list[Tool]                # always present, deterministic order, sent first
-    loaded: list[Tool]              # tools.load additions, appended after core
+    loaded: list[Tool]              # tools_load additions, appended after core
     catalog: list[CatalogLine]      # one line per unloaded toolset (digest, not schemas)
     core_bytes: int                 # serialized JSON byte count of `core`
 ```
@@ -1434,7 +1448,7 @@ Rules:
    array produced for any richer profile. Loading a toolset only invalidates the *tail* of
    the cached prefix — the docs/04 invariant ⑤ requirement applied to the tool array.
 2. **Frozen per turn.** The visible set is computed at turn construction and does not
-   change mid-turn (ADR-009). A `tools.load` call takes effect on the **next** turn and
+   change mid-turn (ADR-009). A `tools_load` call takes effect on the **next** turn and
    emits a `toolset.resolved` event (`events-and-effects.md` §2.2).
 3. **`connector_analysis` resolves to an empty tool array**, unconditionally, plus an empty
    catalog. §8 is unchanged.
@@ -1454,7 +1468,7 @@ class ToolsLoadArgs(StrictModel):
     toolsets: Annotated[list[str], Field(min_length=1, max_length=3)]
 ```
 
-`tools.search` is `read_only`/allow and returns matching `CatalogLine`s. `tools.load` is
+`tools_search` is `read_only`/allow and returns matching `CatalogLine`s. `tools_load` is
 `read_only`/allow (it grants *visibility*, never authority — every loaded tool still passes
 ALLOWED and EXECUTABLE independently) but is **audited**, because a change to the visible
 set is a security-relevant event.
@@ -1500,13 +1514,13 @@ class ShExecArgs(StrictModel):
 
 - Every `path` is a normalized project-relative path. Absolute paths, `..` escape, NUL,
   device paths, and symlinks resolving outside the project root are rejected.
-- `fs.write`/`fs.edit`/`fs.delete` write the **reviewable overlay**, never the Project
+- `fs_write`/`fs_edit`/`fs_delete` write the **reviewable overlay**, never the Project
   head, so they are `idempotent_write`/allow — except paths matching the sensitive set
   (`.env*`, `*.pem`, `*.key`, `id_*`, `.github/workflows/**`), which are forced to `ask`.
-- `sh.exec` is `non_idempotent_write`/**`ask`**, auto-released by a platform safe-command
+- `sh_exec` is `non_idempotent_write`/**`ask`**, auto-released by a platform safe-command
   grant (ADR-034 matcher). It requires an open `RuntimeSession`; it never installs packages
   and never enables the network (ADR-047).
-- `run.test` / `run.lint` are bounded semantic wrappers over `sh.exec` that consult the
+- `run_test` / `run_lint` are bounded semantic wrappers over `sh_exec` that consult the
   runtime's probed `capabilities` first, so a missing tool returns
   `environment_missing_dependencies` with the list of what the image does provide, rather
   than a bare exit 127.
@@ -1964,18 +1978,18 @@ class ProjectContext(StrictModel):
 - `GET /projects/{id}/tree` returns a **bounded page** ordered by `path` (default 200, hard cap
   500 entries per call). `returned_count` is the number of entries in this page; `truncated=true`
   means **more entries exist beyond this page** — the page is **not** the full tree, so absence of
-  a path from a truncated page is **not** proof it doesn't exist. Callers (and the `fs.list`
+  a path from a truncated page is **not** proof it doesn't exist. Callers (and the `fs_list`
   tool) must narrow with the `path` prefix filter (or later `cursor`) to inspect subtrees. Because
   a `path`-filtered listing has no cheap total, the response intentionally carries **no** `total`
   field — only `truncated` + `returned_count`.
 - Reservation/quota reuse ADR-030: a project's snapshot bytes are the same content-addressed,
   ref-counted `storage_blobs`; `507 insufficient_storage` when a reservation would exceed quota.
-- **Tool surface (ADR-023 + ADR-046/048):** `project.list` / `project.create` are `allow`.
-  Project file reads go through **`fs.list` / `fs.read` / `fs.grep`** (§7.6), which read the
+- **Tool surface (ADR-023 + ADR-046/048):** `project_list` / `project_create` are `allow`.
+  Project file reads go through **`fs_list` / `fs_read` / `fs_grep`** (§7.6), which read the
   Project-bound chat's **effective tree** (`base snapshot + persisted overlay`) and therefore also
   show what the agent has just written — strictly stronger than the deleted
   `project_tree`/`project_read`, which only ever saw the saved head. The project is taken from
-  `sessions.project_id` (backlog B-3); a general chat gets an observation naming `project.list`.
+  `sessions.project_id` (backlog B-3); a general chat gets an observation naming `project_list`.
   **Not given to the agent:** any destructive purge, `project_push` (W4), and the human-only
   Save/checkpoint/Discard gate. Project files remain
   **untrusted content** (ADR-009); source credentials (W2b+) never enter a project tree, prompt,
@@ -2106,7 +2120,7 @@ class ProjectSource(StrictModel):
 - **Tool surface (W2b, ADR-023):** **no new agent tool.** GitHub import is **human-only** (it
   crosses the credential boundary and pulls untrusted external content, and avoids letting the
   agent enumerate the user's private repos) — consistent with W2a archive upload. After import the
-  agent reads the project via `fs.list`/`fs.read`/`fs.grep` (project files remain
+  agent reads the project via `fs_list`/`fs_read`/`fs_grep` (project files remain
   **untrusted content**, ADR-009). **Not given to the agent:** `project_push` (W4), the human-only
   Save/checkpoint/Discard gate, any destructive purge.
 - **UI:** the W2b flow (GitHub connection status / repo + ref selection / import progress / success
@@ -2230,7 +2244,7 @@ the current `project_sandbox_runs` path; the routes and payloads in this section
   `POST /runtime/{rid}/cancel` kills the container and settles the exec with
   `termination_reason='cancelled'`.
 - **Working copy is lazy + isolated per chat.** A Project-bound chat reads the head until
-  its **first mutating action** (`fs.write`/`fs.edit`/`fs.delete` or `runtime.open`), which
+  its **first mutating action** (`fs_write`/`fs_edit`/`fs_delete` or `runtime_open`), which
   atomically opens the durable working copy at `base_snapshot_id = current_snapshot_id`
   (recording `base_head_generation`). Multiple chats on one Project get **isolated** working
   copies; a General chat has none.
@@ -2250,8 +2264,8 @@ the current `project_sandbox_runs` path; the routes and payloads in this section
   `(current_snapshot_id, head_generation)` returning **`409` `SaveConflict` (`head_moved`)**
   and applying nothing if the head moved; artifacts are `ephemeral` until Keep/Export.
 - **Tool surface** — see §7.3/§7.6. `fs.*` (host-side, works without a container),
-  `runtime.open`/`runtime.close`, `sh.exec` (**`ask`** + safe-command grants), `run.test`/
-  `run.lint`, and `project.review_changes` (read-only). **Not given to the agent:**
+  `runtime_open`/`runtime_close`, `sh_exec` (**`ask`** + safe-command grants), `run_test`/
+  `run_lint`, and `project_review_changes` (read-only). **Not given to the agent:**
   `Save` / `Save + checkpoint` / `Discard` / artifact `keep`·`export` remain **user-only**
   (advancing the head is a human Change-Review decision, ADR-040 §决策6); `project_push`
   (W4), destructive purge and dependency installation are also excluded. Project files and

@@ -59,7 +59,7 @@ async def _seed_gated_send(
         run_id=rid,
         session_id=sid,
         event_type="tool-call",
-        payload={"id": _CALL_ID, "name": "email.send", "args": _ARGS},
+        payload={"id": _CALL_ID, "name": "email_send", "args": _ARGS},
     )
 
     effect_class = classify_effect(SendEmailTool().flags)
@@ -67,7 +67,7 @@ async def _seed_gated_send(
         s,
         tenant_id=tid,
         run_id=rid,
-        effect_name="email.send",
+        effect_name="email_send",
         idempotency_key=f"tool:{rid}:1:{_CALL_ID}",
         effect_class=effect_class,
         retry_policy="transient_before_dispatch",
@@ -80,7 +80,7 @@ async def _seed_gated_send(
         run_id=rid,
         session_id=sid,
         invocation_id=handle.invocation_id,
-        tool_name="email.send",
+        tool_name="email_send",
         effect_class=effect_class,
         args=_ARGS,
         decider_user_id=uid,
@@ -134,7 +134,7 @@ async def test_resume_allow_executes_send_email() -> None:
                 (
                     await s.execute(
                         select(AuditReceipt).where(
-                            AuditReceipt.tenant_id == tid, AuditReceipt.action == "email.send"
+                            AuditReceipt.tenant_id == tid, AuditReceipt.action == "email_send"
                         )
                     )
                 )

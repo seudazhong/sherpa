@@ -176,10 +176,10 @@ def test_capture_llm_io_writes_openinference_attrs_redacted_and_bounded() -> Non
                 },
             ],
             tools=[
-                {"name": "email.send", "input_schema": {"type": "object"}, "api_key": "sk-TOOL"}
+                {"name": "email_send", "input_schema": {"type": "object"}, "api_key": "sk-TOOL"}
             ],
             output_text="Here you go.",
-            output_tool_calls=[ToolCall(id="c2", name="core.get_time", args={})],
+            output_tool_calls=[ToolCall(id="c2", name="core_get_time", args={})],
         )
 
     attrs = dict(exp.get_finished_spans()[0].attributes or {})
@@ -194,14 +194,14 @@ def test_capture_llm_io_writes_openinference_attrs_redacted_and_bounded() -> Non
     assert "q" in str(attrs[f"{in_tc}.function.arguments"])
     # Secret-named fields masked in structured parts (tool schema).
     assert "sk-TOOL" not in str(attrs["llm.tools.0.tool.json_schema"])
-    assert "email.send" in str(attrs["llm.tools.0.tool.json_schema"])
+    assert "email_send" in str(attrs["llm.tools.0.tool.json_schema"])
     # Output + flattened value present.
     assert attrs["llm.output_messages.0.message.role"] == "assistant"
     assert attrs["llm.output_messages.0.message.content"] == "Here you go."
     # Tool calls flattened into OpenInference indexed sub-attrs (NOT a JSON string
     # — Phoenix .map()s over these, so a string would crash the trace view).
     out_tc_name = "llm.output_messages.0.message.tool_calls.0.tool_call.function.name"
-    assert attrs[out_tc_name] == "core.get_time"
+    assert attrs[out_tc_name] == "core_get_time"
     assert "llm.output_messages.0.message.tool_calls" not in attrs  # no scalar string attr
     assert attrs["input.mime_type"] == genai.MIME_JSON
     assert "You are Sherpa." in str(attrs["input.value"])

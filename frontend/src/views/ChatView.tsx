@@ -85,10 +85,10 @@ function stripMarkdown(text: string): string {
     .trim();
 }
 
-// A knowledge.search citation reference is emitted by the tool as [K:<tool_call_id>:<n>].
+// A knowledge_search citation reference is emitted by the tool as [K:<tool_call_id>:<n>].
 // Real models often reformat it in their answer (truncate the uuid, drop the :n, and
 // append a human description), so we match any [K:...] token and resolve it best-effort
-// against the evidence parsed from the knowledge.search tool output (R1: no backend change).
+// against the evidence parsed from the knowledge_search tool output (R1: no backend change).
 const CITE_TOKEN = /\[(K:[^\]]+?)\]/g;
 const NO_EVIDENCE = "No relevant knowledge found";
 
@@ -385,7 +385,7 @@ export default function ChatView() {
     es.addEventListener("tool-result", (e) => {
       const env = parse(e);
       const output = String(env.payload.output ?? "");
-      if (String(env.payload.name ?? "") === "knowledge.search") {
+      if (String(env.payload.name ?? "") === "knowledge_search") {
         ingestCitations(output);
       }
       setActivities((a) => [
@@ -445,7 +445,7 @@ export default function ChatView() {
   }, [ingestCitations]);
 
   // R1: rebuild the citation map for an already-persisted transcript by replaying
-  // the journal backlog (from cursor 0) and parsing prior knowledge.search tool
+  // the journal backlog (from cursor 0) and parsing prior knowledge_search tool
   // outputs. Reads only until the first keep-alive (backlog exhausted), then aborts;
   // it never touches bubbles, so there is no duplication with the live tail stream.
   const backfillCitations = useCallback(
@@ -487,7 +487,7 @@ export default function ChatView() {
             if (evType !== "tool-result" && evType !== "tool-error") continue;
             try {
               const env = JSON.parse(data) as Envelope;
-              if (String(env.payload.name ?? "") === "knowledge.search") {
+              if (String(env.payload.name ?? "") === "knowledge_search") {
                 const output = String(env.payload.output ?? "");
                 if (!output.startsWith(NO_EVIDENCE)) {
                   const parsed = parseKnowledgeCitations(output);

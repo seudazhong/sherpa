@@ -353,16 +353,16 @@ Do **not** re-litigate these. They are settled inputs, not open questions.
 | — | Alembic | **Squash `0001`…`0032` into one new `0001_baseline`.** Destructive dev rebuild accepted. |
 | O-1 | Tool naming | **`domain.verb`** (`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`), api.md §7 regex updated. |
 | O-2 | Verb mega-tools (`drive(op=…)`) | **No.** Grouping + on-demand loading only. |
-| O-3 | `sh.exec` policy | **`ask`**, auto-released by a **platform safe-command allowlist grant**. |
-| O-4 | `fs.write`/`fs.edit`/`fs.delete` policy | **`allow`** (writes the reviewable overlay), **except** sensitive paths → `ask`. |
+| O-3 | `sh_exec` policy | **`ask`**, auto-released by a **platform safe-command allowlist grant**. |
+| O-4 | `fs_write`/`fs_edit`/`fs_delete` policy | **`allow`** (writes the reviewable overlay), **except** sensitive paths → `ask`. |
 | O-5 | v1 workspace transport | **tar ingress/egress** (`put_archive`/`get_archive`); no bind mount, no host path. |
 | O-6 | Runner image v1 | **Python + `pytest` + `ruff`**, first-party, pinned by digest. **Node is later/optional.** |
-| O-7 | `tools.load` | **Model may load autonomously** (audited). External/MCP tools never enter core. |
+| O-7 | `tools_load` | **Model may load autonomously** (audited). External/MCP tools never enter core. |
 | O-8 | `/Project` UI | **Three-column workspace** for Project-bound chat. |
 | O-9 | Execution REST | **Async `202` + SSE + cancel**, executed by the **worker**. |
 | O-10 | Plan object | **Deferred** to a later slice; reserve a `ui.*` namespace only. |
 | O-11 | Legacy `/files` stack + `run_code` | **Deleted.** |
-| O-12 | `run_code` | **Deleted**, replaced by `runtime.open(scope="ephemeral")` + `sh.exec`. |
+| O-12 | `run_code` | **Deleted**, replaced by `runtime_open(scope="ephemeral")` + `sh_exec`. |
 | O-13 | Route inventory | **Generated file + CI diff**, replacing the hand-frozen api.md §9 count. |
 | O-14 | `app/files/` package | **Rename to `app/objectstore/`** (it is the object-store adapter, not the deleted files stack). |
 
@@ -544,7 +544,7 @@ by `ProjectRuntimeSession` + `ProjectExecRun` (declarative definitions), and the
 bookkeeping was re-pointed at them — `run_sandbox` opens one runtime session per boundary, records a
 command as one exec run, and **closes the session on every exit** so the `uq_prs_live` partial unique
 index can never block the next boundary. This is schema/persistence alignment only. **P4 behavior is
-not implemented**: no `runtime.open`/`runtime.close`, no `sh.exec`, no tar transport, no async 202
+not implemented**: no `runtime_open`/`runtime_close`, no `sh_exec`, no tar transport, no async 202
 REST, no three-column UI, and `project_run`/`project_tree`/`project_read` still exist (their deletion
 is TR.9 P4). `project_run` still bind-mounts and still fails identically — it now records its named
 exit on the right rows. `SandboxRunState.warm` was dropped (ADR-047 §7: never implemented).
@@ -574,18 +574,18 @@ TDD order per task: write the failing test first, then the implementation.
 | # | Task | Paths | TDD / AC |
 |---|---|---|---|
 | **P2.0a** ✅ **SHIPPED 2026-07-31** | **Dead-tool sweep (5 confirmed deletions)** | `backend/app/tools/{builtin,candidate_tools,todo_tools,drive_tools,memory_tools}.py`, `app/tools/__init__.py`, `app/services/todos.py`, `app/core/loop.py`, 6 test files, `docs/contracts/api.md` §7.3 | Deleted `echo` (SAFE-tier dev leftover; SAFE is now `{get_time}`) and **`drive_restore`** (structurally uncallable — needed a `node_id` no tool emits); deleted `complete_todo` **and its one-line service alias** (`todos.complete_todo`, which had no REST caller); folded `edit_candidate` into `accept_candidate` (optional `title`/`description`/`due_at`/`priority` patch; **REST keeps both endpoints** for the Inbox UI's two buttons); folded `memory_user_list` into `memory_user_get` (`key` now optional). Regression guard `test_deleted_tools_are_gone` asserts none reappear. **Measured 47 → 42 tools, 17,432 → 16,153 B compact.** Gate: 386 passed, ruff + format + mypy clean. |
-| P2.0b | **Prose diet + description byte cap** (the other half of P2.0 — **owner skipped 2026-07-31**: *"P2.0跳过了，一个个删工具没意义"*) | `backend/app/tools/*.py`, `backend/app/config.py`, new startup assertion | Descriptions are still **39% of the surface** (6,336 B of 16,161). Would add `TOOL_DESCRIPTION_MAX_BYTES` (proposal: 160) enforced at startup **next to the name regex**; trim the offenders (`project.run` 641 chars, `project.tree` 507, `knowledge.search` 398, `schedule.create_task` 276). |
-| P2.0c | **Owner-decision deletions** (**skipped with P2.0b**) | — | `drive.make_folder` · `notify.list` · `knowledge.reindex` · `schedule.create_digest`; plus whether memory keeps **two** systems (KV + archival). Parked in [B-10](backlog.md). |
+| P2.0b | **Prose diet + description byte cap** (the other half of P2.0 — **owner skipped 2026-07-31**: *"P2.0跳过了，一个个删工具没意义"*) | `backend/app/tools/*.py`, `backend/app/config.py`, new startup assertion | Descriptions are still **39% of the surface** (6,336 B of 16,161). Would add `TOOL_DESCRIPTION_MAX_BYTES` (proposal: 160) enforced at startup **next to the name regex**; trim the offenders (`project_run` 641 chars, `project_tree` 507, `knowledge_search` 398, `schedule_create_task` 276). |
+| P2.0c | **Owner-decision deletions** (**skipped with P2.0b**) | — | `drive_make_folder` · `notify_list` · `knowledge_reindex` · `schedule_create_digest`; plus whether memory keeps **two** systems (KV + archival). Parked in [B-10](backlog.md). |
 | P2.1 | `ToolDescriptor` + startup validation (name regex, uniqueness, unknown `requires`, version monotonicity) | new `backend/app/tools/catalog.py`; `backend/app/tools/builtin.py` | Test first: a bad name, a dupe and an unknown `requires` each raise at startup |
 | ~~P2.2~~ | ~~Rename every tool to `domain.verb` **and register with a descriptor**~~ | — | **The rename half shipped 2026-07-31** (row below). The descriptor half moves to P2.1, which owns `ToolDescriptor`. |
-| P2.2 ✅ **SHIPPED 2026-07-31** | Rename every tool to `domain.verb` (hard rename, no aliases) | `backend/app/tools/*.py` + their tests + `app/api/schemas.py` + `app/permissions/grants.py` + `app/core/{loop,session_context,attachments}.py` + `frontend/src/views/{ApprovalsView,ChatView}.tsx` + new `migrations/versions/0002_tool_name_domain_verb.py` | All **42** tools now match `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$` across 11 namespaces, matching §7.3's table exactly. Two dot-less enforcement points widened: `ApprovalAction.tool_name` and the **`ck_pg_tool` CHECK** on `permission_grants` (found only by running the suite — 6 failures — and given migration `0002`, the first revision after the baseline squash). Model-facing prose renamed with the tools. `memory.recall` covers the old get/list; `todo.update` covers complete. Gate: pytest green, one alembic head, ruff/format/mypy clean, frontend lint+build green. |
+| P2.2 ✅ **SHIPPED 2026-07-31** | Rename every tool to `domain.verb` (hard rename, no aliases) | `backend/app/tools/*.py` + their tests + `app/api/schemas.py` + `app/permissions/grants.py` + `app/core/{loop,session_context,attachments}.py` + `frontend/src/views/{ApprovalsView,ChatView}.tsx` + new `migrations/versions/0002_tool_name_domain_verb.py` | All **42** tools now match `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$` across 11 namespaces, matching §7.3's table exactly. Two dot-less enforcement points widened: `ApprovalAction.tool_name` and the **`ck_pg_tool` CHECK** on `permission_grants` (found only by running the suite — 6 failures — and given migration `0002`, the first revision after the baseline squash). Model-facing prose renamed with the tools. `memory_recall` covers the old get/list; `todo_update` covers complete. Gate: pytest green, one alembic head, ruff/format/mypy clean, frontend lint+build green. |
 | P2.3 | `ToolsetResolver` + profiles | new `backend/app/tools/resolver.py`; `backend/app/tools/registry.py` | Tests: (a) `resolve(general).core` is a **byte-true prefix** of the project-bound array; (b) two calls with the same profile are byte-identical; (c) `connector_analysis` → empty array |
-| P2.4 | `tools.search` / `tools.load` + catalog digest in the system message | `backend/app/tools/meta_tools.py`, `backend/app/core/loop.py` (system-message assembly + the `registry.schemas(tier)` call site) | Mock-provider script: search → load → **next turn** exposes the toolset and the call succeeds; a same-turn load does **not** change that turn |
+| P2.4 | `tools_search` / `tools_load` + catalog digest in the system message | `backend/app/tools/meta_tools.py`, `backend/app/core/loop.py` (system-message assembly + the `registry.schemas(tier)` call site) | Mock-provider script: search → load → **next turn** exposes the toolset and the call succeeds; a same-turn load does **not** change that turn |
 | P2.5 | Byte budget | `backend/app/config.py` (`tool_catalog_core_max_bytes=6144`), `backend/app/tools/resolver.py` | Startup fails above the cap; `test_tool_catalog.py` asserts `core_bytes <= 6144` and records the measured value |
-| P2.6 | Args-aware policy + structured `PermissionScope` + grants matchers | `backend/app/permissions/{policy,grants,service}.py` | Tests: read-only → allow; overlay write → allow; sensitive path → ask; safe-command grant flips `sh.exec` ask→allow; non-allowlisted stays ask |
+| P2.6 | Args-aware policy + structured `PermissionScope` + grants matchers | `backend/app/permissions/{policy,grants,service}.py` | Tests: read-only → allow; overlay write → allow; sensitive path → ask; safe-command grant flips `sh_exec` ask→allow; non-allowlisted stays ask |
 | P2.7 | `toolset.resolved` telemetry event | `backend/app/events/journal.py` consumer, `backend/app/core/loop.py` | Event carries `core_toolsets`/`loaded_toolsets`/`tools_offered`/`core_bytes`/`total_bytes` |
 | P2.8 | Typed `ToolOutputSpillReference` + retention janitor (api §7.2 debt) | `backend/app/tools/bounding.py`, worker cron | Oversized output yields the typed object in `return_display`; janitor deletes past `TOOL_OUTPUT_RETENTION_HOURS` |
-| P2.V | Full gate + agent-lane Playwright | — | Chat: "what can you do about my knowledge base?" → model calls `tools.search`, then `tools.load`, then `knowledge.search` |
+| P2.V | Full gate + agent-lane Playwright | — | Chat: "what can you do about my knowledge base?" → model calls `tools_search`, then `tools_load`, then `knowledge_search` |
 
 **P2 exit (this closes B-2):** general-chat tool JSON **≤ 6,144 bytes** (measured baseline **17,432 B**
 compact / 18,303 B default separators for 47 tools — the older 19,848 B figure was the pre-P1 52-tool
@@ -619,24 +619,24 @@ test passes; `uv run pytest -m docker` exists and is green locally.
 ### TR.9 P4 — RuntimeSession + `fs`/`sh`/`run` (product half of B-8)
 
 > **P4.5 dropped 2026-07-30** ([ADR-046 §决策10](decisions.md#adr-046), from the owner's P2 design review):
-> `run.test`/`run.lint` are pure sugar over `sh.exec("pytest")` / `sh.exec("ruff check")` and CLI agents
+> `run_test`/`run_lint` are pure sugar over `sh_exec("pytest")` / `sh_exec("ruff check")` and CLI agents
 > ship no `run_test` tool — **−2 tools**. The capability probe that backed them stays (it is what turns a
 > missing binary into `environment_missing_dependencies` instead of a bare exit 127); it now reports through
-> `runtime.open` and `sh.exec`.
+> `runtime_open` and `sh_exec`.
 
 | # | Task | Paths | TDD / AC |
 |---|---|---|---|
 | P4.1 | Schema: `project_runtime_sessions` + `project_exec_runs` (**fold into `0001_baseline`** — there is no second migration in a clean break) | `backend/app/models/projects.py`, `backend/migrations/versions/0001_baseline.py` | `uq_prs_live` blocks a second live session per working copy; `ck_prs_scope_binding` holds |
-| P4.2 | `runtime.open` / `runtime.close` service + tools | `backend/app/services/project_runtime.py`, `backend/app/tools/runtime_tools.py` | Open acquires lease + bumps fence, probes capabilities, records `ingress_bytes`; close persists the boundary **before** teardown |
-| P4.3 | `fs.*` host-side tools over the working-copy effective tree | `backend/app/tools/fs_tools.py`, `backend/app/services/project_workcopy.py` | **Key test: with `SANDBOX_KIND=disabled`, every `fs.*` tool still works** (the degradation guarantee); `fs.read` after `fs.write` returns the new content without any Save |
-| P4.4 | `sh.exec` with streaming + cancel | `backend/app/tools/sh_tools.py`, `backend/app/services/project_runtime.py`, `backend/app/api/projects.py` | `202` + `runtime.output` SSE frames + `POST /runtime/{rid}/cancel` settles `cancelled` **after** the persistence boundary runs |
-| ~~P4.5~~ | ~~`run.test` / `run.lint` over probed capabilities~~ | ~~`backend/app/tools/run_tools.py`~~ | **DROPPED** (see the note above). The AC moves to `sh.exec`: a missing tool → `environment_missing_dependencies` **naming what the image does have**, never a bare exit 127 |
+| P4.2 | `runtime_open` / `runtime_close` service + tools | `backend/app/services/project_runtime.py`, `backend/app/tools/runtime_tools.py` | Open acquires lease + bumps fence, probes capabilities, records `ingress_bytes`; close persists the boundary **before** teardown |
+| P4.3 | `fs.*` host-side tools over the working-copy effective tree | `backend/app/tools/fs_tools.py`, `backend/app/services/project_workcopy.py` | **Key test: with `SANDBOX_KIND=disabled`, every `fs.*` tool still works** (the degradation guarantee); `fs_read` after `fs_write` returns the new content without any Save |
+| P4.4 | `sh_exec` with streaming + cancel | `backend/app/tools/sh_tools.py`, `backend/app/services/project_runtime.py`, `backend/app/api/projects.py` | `202` + `runtime.output` SSE frames + `POST /runtime/{rid}/cancel` settles `cancelled` **after** the persistence boundary runs |
+| ~~P4.5~~ | ~~`run_test` / `run_lint` over probed capabilities~~ | ~~`backend/app/tools/run_tools.py`~~ | **DROPPED** (see the note above). The AC moves to `sh_exec`: a missing tool → `environment_missing_dependencies` **naming what the image does have**, never a bare exit 127 |
 | P4.6 | Delete `project_run` / `project_tree` / `project_read`; rewrite REST to the runtime routes; delete `POST /projects/{id}/sandbox-runs` | `backend/app/tools/project_tools.py`, `backend/app/api/projects.py` | Route inventory shows the new routes and none of the old |
 | P4.7 | Route-inventory generator + CI step (O-13) | new `backend/scripts/route_inventory.py`, `docs/contracts/route-inventory.md`, `.github/workflows/ci.yml` | CI fails on undeclared route drift; `/files/*` and `sandbox-runs` cannot reappear |
-| P4.V | Full gate + agent-lane Playwright | — | One chat drives read → edit → `sh.exec("pytest")` fail → edit → pass, with the approval card appearing for a non-allowlisted command |
+| P4.V | Full gate + agent-lane Playwright | — | One chat drives read → edit → `sh_exec("pytest")` fail → edit → pass, with the approval card appearing for a non-allowlisted command |
 
 **P4 exit:** the agent completes a real edit/test loop; `fs.*` provably survives a disabled sandbox;
-`sh.exec` approval preview shows the exact command and paths; the old tools and route are gone and
+`sh_exec` approval preview shows the exact command and paths; the old tools and route are gone and
 CI enforces it.
 
 ### TR.10 P5 — `/Project` three-column UI (human lane)

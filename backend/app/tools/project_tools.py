@@ -32,7 +32,7 @@ _TREE_MAX = 500
 _PROJECT_ID: dict[str, object] = {
     "type": "string",
     "description": (
-        "project id (uuid, from project.list). Optional inside a Project-bound chat: "
+        "project id (uuid, from project_list). Optional inside a Project-bound chat: "
         "omit it to use the project this conversation is bound to."
     ),
 }
@@ -61,13 +61,13 @@ async def _resolve_project_id(
     if bound is None:
         raise ToolError(
             "project_id is required: this conversation is not bound to a project. "
-            "Call project.list and pass the id you want."
+            "Call project_list and pass the id you want."
         )
     return bound
 
 
 class ListProjectsTool:
-    name = "project.list"
+    name = "project_list"
     description = "List the user's Workspace projects (name, status, storage, snapshot). Read-only."
     input_schema: dict[str, object] = {"type": "object", "properties": {}}
     flags = ToolFlags(is_read_only=True)
@@ -94,7 +94,7 @@ class ListProjectsTool:
 
 
 class CreateProjectTool:
-    name = "project.create"
+    name = "project_create"
     description = (
         "Create a new blank or template Workspace project. Provide a name, an optional "
         "description, and an optional template_id ('notes' or 'python-basic'; omit for a "
@@ -128,7 +128,7 @@ class CreateProjectTool:
 
 
 class ProjectTreeTool:
-    name = "project.tree"
+    name = "project_tree"
     description = (
         "List the files/folders in a project's current snapshot (read-only file tree). "
         "Inside a Project-bound chat you may omit project_id — the bound project is used. "
@@ -188,7 +188,7 @@ class ProjectTreeTool:
 
 
 class ProjectReadTool:
-    name = "project.read"
+    name = "project_read"
     description = (
         "Read the text contents of one file in a project's current snapshot (by path). "
         "Inside a Project-bound chat you may omit project_id — the bound project is used. "
@@ -217,7 +217,7 @@ class ProjectReadTool:
 
 
 class ProjectRunTool:
-    name = "project.run"
+    name = "project_run"
     description = (
         "Work on the CURRENT Project-bound chat's task working copy in a hardened, "
         "network-disabled sandbox that mounts ONLY a one-time scratch copy (never your saved "
@@ -257,12 +257,12 @@ class ProjectRunTool:
         validate_args(self.input_schema, args)
         db, cc = require_session(ctx), to_caller(ctx)
         if cc.session_id is None:
-            raise ToolError("project.run requires a chat session")
+            raise ToolError("project_run requires a chat session")
         command = arg_opt_str(args.get("command"))
         writes = cast("list[dict[str, object]]", args.get("writes") or [])
         deletes = cast("list[object]", args.get("deletes") or [])
         if not command and not writes and not deletes:
-            raise ToolError("project.run needs a command, a write, or a delete")
+            raise ToolError("project_run needs a command, a write, or a delete")
         edits: list[ScratchEdit] = []
         for w in writes:
             edits.append(
@@ -315,7 +315,7 @@ class ProjectRunTool:
 
 
 class ProjectReviewChangesTool:
-    name = "project.review_changes"
+    name = "project_review_changes"
     description = (
         "Review the CURRENT Project-bound chat's pending changes (added/modified/deleted "
         "files vs the saved project head). Read-only; the paths + diffs are untrusted "
@@ -328,7 +328,7 @@ class ProjectReviewChangesTool:
         validate_args(self.input_schema, args)
         db, cc = require_session(ctx), to_caller(ctx)
         if cc.session_id is None:
-            raise ToolError("project.review_changes requires a chat session")
+            raise ToolError("project_review_changes requires a chat session")
         try:
             wc = await wc_svc.get_live(db, cc, session_id=cc.session_id)
             if wc is None:

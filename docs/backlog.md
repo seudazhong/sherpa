@@ -72,7 +72,7 @@ That whole 19,848-byte array is rebuilt at `backend/app/core/loop.py:527` **insi
 - Token + prefix-cache cost (docs/04 invariant ⑤), and scope drift versus ADR-022 v1 (many are post-v1 surfaces).
 - **Added during triage:** the VISIBLE gate (api.md §7.1 step 2) is **not actually implemented** — `backend/app/tools/registry.py` only has a SAFE/FULL binary and `tier` is hard-coded to `FULL` at `core/loop.py:412/437/449`, so "no scoping" is structural, not an oversight. Also `file_*` is backed by a **legacy `files` table** whose UI was replaced by Drive, yet `files_router` is still registered in `app/main.py`.
 
-**Direction (~~undecided, needs an ADR~~ ✅ decided 2026-07-30).** Options weighed: verb-parameterised namespaced tools (`drive{op}`, `memory{op}`, `todo{op}`); progressive disclosure via a tool-search meta-tool; context-scoped tool sets; merging `drive_*` and `file_*`. **Resolved in [ADR-046](decisions.md#adr-046)**: unified `domain.verb` naming + a `ToolDescriptor` beside the **unchanged** `Tool` protocol + a `ToolsetResolver` that finally implements the VISIBLE gate + `tools.search`/`tools.load` progressive disclosure + an args-aware policy engine. **Verb mega-tools were rejected** — collapsing eight precise schemas into one `oneOf` weakens argument validation, destroys per-tool effect classification, and coarsens the approval scope. `file_*` and the whole legacy `files` stack are **deleted** (Drive is the only personal byte store), as is `run_code`. The narrow waist is untouched: built-ins / MCP / sub-agents / runtime providers still present one `Tool` interface through the same four gates. **Sequencing note from triage: this and B-8 are one problem** — fixing B-8 alone would grow the flat surface from 52 to ~66 tools. Deliverables landed: ADR-045/046/047/048 → `docs/11-agent-tool-surface.md` (incl. the §9 capability matrix) → contracts (`api.md` §7.0/§7.3/§7.5/§7.6, `events` §2.2, `config` §1.10) → [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Code not started** — Phase TR needs its own owner approval.
+**Direction (~~undecided, needs an ADR~~ ✅ decided 2026-07-30).** Options weighed: verb-parameterised namespaced tools (`drive{op}`, `memory{op}`, `todo{op}`); progressive disclosure via a tool-search meta-tool; context-scoped tool sets; merging `drive_*` and `file_*`. **Resolved in [ADR-046](decisions.md#adr-046)**: unified `domain.verb` naming + a `ToolDescriptor` beside the **unchanged** `Tool` protocol + a `ToolsetResolver` that finally implements the VISIBLE gate + `tools_search`/`tools_load` progressive disclosure + an args-aware policy engine. **Verb mega-tools were rejected** — collapsing eight precise schemas into one `oneOf` weakens argument validation, destroys per-tool effect classification, and coarsens the approval scope. `file_*` and the whole legacy `files` stack are **deleted** (Drive is the only personal byte store), as is `run_code`. The narrow waist is untouched: built-ins / MCP / sub-agents / runtime providers still present one `Tool` interface through the same four gates. **Sequencing note from triage: this and B-8 are one problem** — fixing B-8 alone would grow the flat surface from 52 to ~66 tools. Deliverables landed: ADR-045/046/047/048 → `docs/11-agent-tool-surface.md` (incl. the §9 capability matrix) → contracts (`api.md` §7.0/§7.3/§7.5/§7.6, `events` §2.2, `config` §1.10) → [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Code not started** — Phase TR needs its own owner approval.
 
 **Close criterion (Phase TR P2).** General-chat tool JSON **≤ 6,144 bytes** (from the measured 19,848), `core` is a byte-true prefix of the project-bound array, discovery works end-to-end in the agent lane, and `CONNECTOR_ANALYSIS` still receives zero tools.
 
@@ -264,7 +264,7 @@ bind source path does not exist: /app/.sherpa/scratch/<run>
 2. **Even with the mount fixed, the REST lane would still fail, for a different reason.** `app/api/projects.py::create_sandbox_run` executes `sbx_svc.run_sandbox(...)` **synchronously inside the web process**, but `SANDBOX_KIND=docker` is set **only on the worker** (`infra/docker-compose.yml:163`) and web has no Docker socket — so it defaults to `disabled`. It also blocks the HTTP request for up to 120 s, while the contract describes it as `202`. *(P0 makes this legible — the route now reports `sandbox_disabled` rather than `sandbox_unavailable` — but does not fix it; P4/P5 do.)*
 3. **The test suite is structurally blind to this.** `tests/test_project_sandbox.py` monkeypatches `_execute_in_scratch` and (until Phase TR P1 deleted it with `run_code`) `tests/test_sandbox.py` patched `_execute`; **no test in the repository ever starts a container**. That is why 297 green tests plus a two-lane Playwright pass did not catch it. P0 added a fake-docker-client lane that at least exercises the real classification branches of `_run_docker`; Phase TR **P3** still adds the real-Docker lane (`uv run pytest -m docker`) and a topology matrix, or the same failure mode returns.
 
-Also settled: `project_run` / `project_tree` / `project_read` / `run_code` are **deleted** (clean break, no shim) in favour of host-side `fs.*` plus an explicit `RuntimeSession` (`runtime.open` → `sh.exec` → `runtime.close`), so that **a sandbox outage costs the ability to run code, not the ability to edit it** — today it costs both. The `project_sandbox_runs` table is redesigned into `project_runtime_sessions` + `project_exec_runs`; `warm_until` is dropped because warm containers were never implemented in any code path.
+Also settled: `project_run` / `project_tree` / `project_read` / `run_code` are **deleted** (clean break, no shim) in favour of host-side `fs.*` plus an explicit `RuntimeSession` (`runtime_open` → `sh_exec` → `runtime_close`), so that **a sandbox outage costs the ability to run code, not the ability to edit it** — today it costs both. The `project_sandbox_runs` table is redesigned into `project_runtime_sessions` + `project_exec_runs`; `warm_until` is dropped because warm containers were never implemented in any code path.
 
 **Close criterion (Phase TR P5).** A real command executes in a real container on the Windows dev stack and returns a real exit code and stdout; every failure injection maps to exactly one named `termination_reason` with a worker log line; the credential canary passes; and the human lane can press **Run**, watch streaming output, press **Stop**, and review the resulting change set.
 
@@ -301,7 +301,7 @@ async def _drop_owner() -> None:            # tests/test_connections_api.py:28-3
 
 *Raised 2026-07-30 by the owner during a Phase TR P2 design review · kind: design · status: **open** — feeds [Phase TR](IMPLEMENTATION.md) **P2***
 
-**Owner's challenge.** Reviewing the P2 plan, the owner objected that *`tools.search`/`tools.load` is the
+**Owner's challenge.** Reviewing the P2 plan, the owner objected that *`tools_search`/`tools_load` is the
 classic answer to an oversized toolset, but we have not yet done the cheap compression that should come
 first*, and separately that (a) the naming is inconsistent and (b) same-area simple tools might merge into
 `domain(action, ...)`, borrowing from how local CLI agents avoid large tool definitions. Both challenges
@@ -329,7 +329,7 @@ build_default_registry().schemas("full") -> 47 tools
 | 239 | `drive_restore` | **delete — structurally uncallable (real bug)**, see below |
 | 383 | `accept_candidate` | **merge into `edit_candidate`** — `edit` is documented as "edit fields *then accept*", so `accept` is `edit` with no fields: same effect class, same approval scope |
 | 327 | `complete_todo` | **delete** — exactly `update_todo(status="completed")` (already in ADR-046 §8) |
-| 283 | `memory_user_get` | **merge into `memory.recall`** (already in ADR-046 §8) |
+| 283 | `memory_user_get` | **merge into `memory_recall`** (already in ADR-046 §8) |
 | 255 | `drive_make_folder` | **owner decision** — `drive_write` documents "folders auto-created", leaving only "create an *empty* folder" |
 | 176 | `list_notifications` | **owner decision** — its own description says "shown on the Today page", i.e. built for the human |
 | 312 | `reindex_knowledge_source` | **owner decision** — maintenance action or agent capability? |
@@ -386,7 +386,7 @@ ADR-046 §决策5 rejected verb mega-tools on three grounds. Re-checked against 
 
 ②/③ assume the policy engine cannot see arguments — but §决策6 of the *same ADR* upgrades it to args-aware
 `evaluate(ctx, descriptor, args, scope)`. Once policy sees args, `drive(action="trash")` classifies exactly
-as precisely as `drive.trash`. **The ADR rejects mega-tools partly on a ground its own next decision
+as precisely as `drive_trash`. **The ADR rejects mega-tools partly on a ground its own next decision
 removes**; the rejection must stand on ① plus model accuracy alone. (ADR-046 amended accordingly.)
 
 ① is real and understated. `app/tools/validate.py` is self-described as *"Not a full JSON-Schema engine ...
@@ -437,13 +437,13 @@ Not scheduled; each needs B-11 evidence before implementation.
 
 | # | Candidate | Chain it replaces | Saves |
 |---|---|---|---|
-| V-1 | `todo.create(..., remind_at?)` | `todo_write` -> read back id -> `create_reminder(todo_id, ...)` | 1 round trip + `create_reminder`'s main use case. This *is* the `schedule_event` example |
-| V-2 | `inbox.accept(candidate_id, if_version, patch?, remind_at?)` | `accept`/`edit` choice -> todo -> reminder | 2 tools + 1 round trip |
+| V-1 | `todo_create(..., remind_at?)` | `todo_write` -> read back id -> `create_reminder(todo_id, ...)` | 1 round trip + `create_reminder`'s main use case. This *is* the `schedule_event` example |
+| V-2 | `inbox_accept(candidate_id, if_version, patch?, remind_at?)` | `accept`/`edit` choice -> todo -> reminder | 2 tools + 1 round trip |
 | V-3 | `today()` | `list_todos` + `list_candidates` + `list_notifications` + `list_activity` fired together | This *is* the `get_customer_context` example; the daily-brief workflow almost always wants all four |
-| V-4 | `knowledge.add(query_or_path)` | `drive_search` -> read back path -> `add_knowledge_source(path)` | 1 round trip |
+| V-4 | `knowledge_add(query_or_path)` | `drive_search` -> read back path -> `add_knowledge_source(path)` | 1 round trip |
 
-Also borrowed from CLI-agent practice: **`run.test` / `run.lint` (planned in Phase TR P4) are pure sugar
-over `sh.exec("pytest")` / `sh.exec("ruff check")`** — Claude Code ships no `run_test` tool. Recommend
+Also borrowed from CLI-agent practice: **`run_test` / `run_lint` (planned in Phase TR P4) are pure sugar
+over `sh_exec("pytest")` / `sh_exec("ruff check")`** — Claude Code ships no `run_test` tool. Recommend
 dropping both from P4 (-2 tools). Conversely, CLI agents deliberately keep `Read`/`Write`/`Edit`/`Glob`/
 `Grep` **separate** from `Bash` (structured diffs, no shell-quoting hazards, permission tiering, enforceable
 path bounds) — all four reasons apply to Sherpa's change-set projection, so **`fs.*` staying separate is
@@ -454,8 +454,8 @@ endorsed, not contradicted, by CLI practice**.
 | What makes CLI agents cheap | Transfers to Sherpa's own-data domains? |
 |---|---|
 | One schema, unbounded verbs (`Bash(cmd)`) | ✅ — this is the horizontal merge, available but costly (Finding 4) |
-| **Pretrained priors** (the model already knows `ls`/`git`/`pytest`) | ❌ — **the single largest source of the saving, and it does not transfer.** Nobody on the internet has written `sherpa todo list`; it needs exactly as much teaching as `todo.list` |
-| In-band discovery (`--help`, `man`) | ✅ — this *is* `tools.search`/`tools.load` |
+| **Pretrained priors** (the model already knows `ls`/`git`/`pytest`) | ❌ — **the single largest source of the saving, and it does not transfer.** Nobody on the internet has written `sherpa todo list`; it needs exactly as much teaching as `todo_list` |
+| In-band discovery (`--help`, `man`) | ✅ — this *is* `tools_search`/`tools_load` |
 
 Hard blocker on an in-sandbox `sherpa` CLI for own data: ADR-019/ADR-047 forbid credentials in the sandbox
 and the sandbox is network-disabled, so it cannot reach the database. A host-side broker would just be a
