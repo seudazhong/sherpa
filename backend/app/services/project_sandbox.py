@@ -96,6 +96,11 @@ def failure_note(reason: str) -> str:
     return f"{reason}: {FAILURE_NOTES.get(reason, sbx.UNMODELLED_NOTE)}"
 
 
+#: Placeholder that replaces a delta entry once its bytes are durable, so the list stops
+#: pinning buffers it no longer needs (config §1.7 peak model).
+_DROPPED = sbx.DeltaEntry(path="", change_kind="deleted", data=None, size_bytes=0, executable=False)
+
+
 def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
@@ -347,18 +352,39 @@ async def run_sandbox(
             )
 
         # Stage changed blobs (content-addressed dedup) + build the overlay deltas.
+        #
+        # PEAK-MEMORY DISCIPLINE (config §1.7). By this point the delta already holds the
+        # only buffers that still matter, and `ws.files` / `result_files` hold the *same*
+        # objects — the delta references them, it does not copy them. Dropping the two trees
+        # here means the loop below retains one file's bytes at a time instead of a full
+        # old tree plus a full new tree for the whole staging pass.
+        #
+        # Safety: `delta.entries` carries every byte that must be persisted, and the failure
+        # paths below never re-read these trees — a failing exit still persists whatever the
+        # delta captured, so the "edits are never lost" guarantee is untouched.
+        ws.files.clear()
+        ws.dirs.clear()
+        if result_files is not ws.files:
+            result_files.clear()
+        del result_files
+
         overlay: list[wc_svc.OverlayDelta] = []
-        for d in delta.entries:
+        # Destructive iteration: each entry's buffer is dropped as soon as its bytes are
+        # durable, so staging holds **one** file at a time rather than the whole change set.
+        entries = delta.entries
+        for idx in range(len(entries)):
+            d = entries[idx]
             if d.change_kind in ("added", "modified"):
-                # The transport hands over a read-only ``bytearray`` (transport.ByteBuffer)
-                # so egress needs no full-size copy; the content-addressed blob store needs
-                # immutable bytes, so the single conversion happens here — once, for one
-                # file at a time, bounded by the WORKING_COPY_MAX_* change-set caps.
-                payload = bytes(d.data) if d.data is not None else b""
+                # `d.data` may be the bytearray egress filled. It is handed to the blob
+                # store as a **buffer** — no `bytes()` copy — and the store makes the single
+                # immutable snapshot it needs at its own boundary.
                 h, _ = await drive_svc.ensure_blob(
-                    db, ctx, wc.user_id, data=payload, content_type="application/octet-stream"
+                    db,
+                    ctx,
+                    wc.user_id,
+                    data=d.data if d.data is not None else b"",
+                    content_type="application/octet-stream",
                 )
-                del payload
                 overlay.append(
                     wc_svc.OverlayDelta(
                         path=d.path,
@@ -373,6 +399,10 @@ async def run_sandbox(
                 overlay.append(
                     wc_svc.OverlayDelta(path=d.path, change_kind="deleted", entry_kind="file")
                 )
+            # Release this file's bytes before touching the next one.
+            entries[idx] = _DROPPED
+            del d
+        entries.clear()
 
         published = True
         if overlay:

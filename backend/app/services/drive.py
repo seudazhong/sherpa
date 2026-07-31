@@ -43,7 +43,7 @@ from app.models import (
     StorageAccount,
     StorageBlob,
 )
-from app.objectstore import build_object_store
+from app.objectstore import Buffer, build_object_store
 from app.services.context import CallerContext
 from app.services.errors import (
     Conflict,
@@ -57,6 +57,10 @@ from app.services.errors import (
 
 _MAX_NAME = 255
 _LIST_LIMIT = 200
+
+#: Bytes hashed per update when content-addressing a buffer. Bounded and constant, so
+#: hashing a 500 MiB project file costs this much transient memory, not another 500 MiB.
+_HASH_CHUNK_BYTES = 1024 * 1024
 
 
 def _now() -> datetime.datetime:
@@ -409,20 +413,43 @@ async def create_folder(
 # --- upload / write ---------------------------------------------------------
 
 
+def _hash_buffer(data: Buffer) -> bytes:
+    """SHA-256 a buffer **without copying it**.
+
+    ``hashlib.sha256(x)`` already accepts the buffer protocol, but going through
+    ``memoryview`` and feeding bounded slices keeps the guarantee explicit and independent
+    of how any single hashlib build handles a large ``bytearray``: peak stays at the chunk
+    size, never a second copy of the payload."""
+    digest = hashlib.sha256()
+    view = memoryview(data).cast("B")
+    try:
+        for start in range(0, len(view), _HASH_CHUNK_BYTES):
+            digest.update(view[start : start + _HASH_CHUNK_BYTES])
+    finally:
+        view.release()
+    return digest.digest()
+
+
 async def _ensure_blob(
     db: AsyncSession,
     ctx: CallerContext,
     uid: uuid.UUID,
     *,
-    data: bytes,
+    data: Buffer,
     content_type: str,
 ) -> tuple[bytes, bool]:
     """Content-address + persist the blob row; write the object before commit.
 
     Returns (content_hash, is_new_bytes). ``is_new_bytes`` is True only when this
     user did not already hold these exact bytes (dedupe), i.e. it consumes quota.
+
+    ``data`` is any buffer (``bytes``, ``bytearray``, ``memoryview``). Accepting a buffer
+    rather than requiring ``bytes`` is what lets the sandbox hand over the ``bytearray`` it
+    already filled instead of copying it — on a 500 MiB project file that copy was 500 MiB
+    of avoidable RSS (config §1.7 peak model). Content addressing is unchanged: the hash is
+    taken over exactly the bytes that get stored.
     """
-    content_hash = hashlib.sha256(data).digest()
+    content_hash = _hash_buffer(data)
     existing = await db.get(StorageBlob, (ctx.tenant_id, uid, content_hash))
     is_new = existing is None or existing.ref_count == 0
     if existing is None:
@@ -448,11 +475,14 @@ async def ensure_blob(
     ctx: CallerContext,
     uid: uuid.UUID,
     *,
-    data: bytes,
+    data: Buffer,
     content_type: str,
 ) -> tuple[bytes, bool]:
     """Public wrapper: content-address + persist a blob row (object written before
-    commit). Shared by Projects (ADR-037) to reuse Drive's deduped blob store."""
+    commit). Shared by Projects (ADR-037) to reuse Drive's deduped blob store.
+
+    Accepts any buffer so a caller holding a ``bytearray`` need not copy it to ``bytes``
+    (config §1.7 peak model); immutability of the *stored* object is unchanged."""
     return await _ensure_blob(db, ctx, uid, data=data, content_type=content_type)
 
 

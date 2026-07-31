@@ -165,15 +165,25 @@ class Settings(BaseSettings):
     # actually needs is SANDBOX_RUNTIME_IDLE_TTL_SECONDS (wired by P4).
     working_copy_idle_ttl_seconds: int = 86400  # durable working-copy idle expiry
     sandbox_runtime_idle_ttl_seconds: int = 600  # RuntimeSession idle TTL (P4 lifecycle)
-    # Bounds the tar in BOTH directions, and therefore the worker's peak memory while it
-    # transfers a workspace: the whole archive is streamed, but every retained file is held
-    # in memory. 512 MiB, not the earlier 2 GiB, for two reasons that both point the same
-    # way: the worker would otherwise be asked to hold multiples of its own footprint, and
-    # 2 GiB was internally incoherent with WORKING_COPY_MAX_CHANGED_BYTES (500 MiB), which
-    # rejects any change set that large downstream anyway.
-    sandbox_scratch_max_bytes: int = 512 * 1024 * 1024  # per-session tar cap (512 MiB)
+    # PEAK-MEMORY MODEL (config §1.7), because these two numbers are a memory budget, not
+    # just a product limit. Computing a delta inherently requires BOTH trees in memory: the
+    # materialized base (old) and what came back from the container (new). Measured end to
+    # end, worker peak is therefore:
+    #
+    #     peak ~= 2 x (workspace bytes) + C,  C ~= 40 MiB (interpreter + imports)
+    #
+    # Everything beyond that 2x has been removed: the tar is streamed rather than buffered,
+    # blob upload takes a buffer instead of a `bytes()` copy, hashing is chunked, staged
+    # buffers are released per file, and the change-set projection decides diffability from
+    # recorded sizes so it never reads an over-cap object at all.
+    #
+    # 128 MiB therefore budgets ~296 MiB of worker RSS for the sandbox path. The previous
+    # 512 MiB implied ~1 GiB, which was not a claim this worker could honour — the compose
+    # worker now declares a 1 GiB limit, so raising this cap REQUIRES raising that limit by
+    # twice the delta. `WORKING_COPY_MAX_CHANGED_BYTES` must stay <= the transfer cap.
+    sandbox_scratch_max_bytes: int = 128 * 1024 * 1024  # per-session tar cap (128 MiB)
     working_copy_max_changed_files: int = 5000  # change-set bound: changed-file count
-    working_copy_max_changed_bytes: int = 500 * 1024 * 1024  # change-set bound: changed bytes
+    working_copy_max_changed_bytes: int = 128 * 1024 * 1024  # change-set bound: changed bytes
     working_copy_max_artifact_bytes: int = 200 * 1024 * 1024  # change-set bound: artifact bytes
     working_copy_max_diff_bytes: int = 2 * 1024 * 1024  # per-file spilled unified-diff cap (2 MiB)
     sandbox_run_timeout_seconds: int = 120  # per-exec wall-clock deadline

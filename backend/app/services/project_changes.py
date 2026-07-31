@@ -47,13 +47,18 @@ from app.services.errors import Conflict, InsufficientStorage, Invalid, NotFound
 
 _ENTRY_PAGE = 200
 
+#: How much of an object is inspected to classify it as binary. The same heuristic the
+#: in-memory path uses, but as a **bounded prefix read** so classifying a 500 MiB object
+#: costs 8 KiB rather than 500 MiB (config §1.7 peak model).
+_BINARY_SNIFF_BYTES = 8192
+
 
 def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
 
 def _is_binary(data: bytes) -> bool:
-    return b"\x00" in data[:8192]
+    return b"\x00" in data[:_BINARY_SNIFF_BYTES]
 
 
 async def _read_blob(
@@ -65,6 +70,37 @@ async def _read_blob(
     if blob is None:
         return b""
     return await build_object_store().get(blob.object_key)
+
+
+async def _blob_size(
+    db: AsyncSession, ctx: CallerContext, uid: uuid.UUID, content_hash: bytes | None
+) -> int:
+    """The recorded size of a blob — from the row, never by reading the object."""
+    if content_hash is None:
+        return 0
+    blob = await db.get(StorageBlob, (ctx.tenant_id, uid, content_hash))
+    return int(blob.size_bytes) if blob is not None else 0
+
+
+async def _sniff_binary(
+    db: AsyncSession, ctx: CallerContext, uid: uuid.UUID, content_hash: bytes | None
+) -> bool:
+    """Classify an object as binary from a **bounded prefix**, never a full read.
+
+    A 500 MiB object must not be pulled into the worker just to decide it will not be
+    diffed. A NUL in the first few KiB is the same heuristic :func:`_is_binary` applies to
+    an in-memory payload; reading only that prefix makes the cost constant."""
+    if content_hash is None:
+        return False
+    blob = await db.get(StorageBlob, (ctx.tenant_id, uid, content_hash))
+    if blob is None:
+        return False
+    store = build_object_store()
+    try:
+        prefix = await store.get_prefix(blob.object_key, _BINARY_SNIFF_BYTES)
+    except Exception:  # noqa: BLE001 - a classification read must never fail the projection
+        return False
+    return b"\x00" in prefix
 
 
 async def _base_file_hashes(
@@ -164,6 +200,7 @@ async def build_change_set(
             truncated = True
             break
         old_hash = base.get(o.path, (None, 0))[0]
+        old_size = base.get(o.path, (None, 0))[1]
         if o.change_kind == "added":
             added += 1
             new_hash = o.content_hash
@@ -179,13 +216,48 @@ async def build_change_set(
             new_hash = None
             size = 0
 
+        # Decide DIFFABILITY FROM RECORDED SIZES, before touching the object store. Reading
+        # a 500 MiB object in order to conclude "too big to diff" is exactly the mistake
+        # this ordering exists to prevent: sizes are already on the rows (the snapshot entry
+        # for the old side, the overlay entry for the new side).
+        new_size = o.size_bytes if new_hash is not None else 0
+        if old_hash is not None and old_size <= 0:
+            old_size = await _blob_size(db, ctx, wc.user_id, old_hash)
+        oversized = new_size > diff_cap or old_size > diff_cap
+
+        if oversized:
+            # Bounded prefix reads only — enough to classify, never the whole object.
+            is_binary = await _sniff_binary(db, ctx, wc.user_id, new_hash) or await _sniff_binary(
+                db, ctx, wc.user_id, old_hash
+            )
+            db.add(
+                ProjectChangeSetEntry(
+                    tenant_id=ctx.tenant_id,
+                    id=uuid.uuid4(),
+                    change_set_id=cs.id,
+                    path=o.path,
+                    change_kind=o.change_kind,
+                    old_content_hash=old_hash,
+                    new_content_hash=new_hash,
+                    size_bytes=size,
+                    executable=o.executable,
+                    is_binary=is_binary,
+                    diff_object_key=None,
+                    # Truthful: there IS more to show, we declined to render it. The UI
+                    # already treats this as "diff not shown", which is what happened.
+                    diff_truncated=not is_binary,
+                    selected=True,
+                )
+            )
+            continue
+
         new_bytes = await _read_blob(db, ctx, wc.user_id, new_hash)
         old_bytes = await _read_blob(db, ctx, wc.user_id, old_hash)
         is_binary = _is_binary(new_bytes) or _is_binary(old_bytes)
 
         diff_key: str | None = None
         diff_trunc = False
-        if not is_binary and (len(new_bytes) <= diff_cap and len(old_bytes) <= diff_cap):
+        if not is_binary:
             entry_id = uuid.uuid4()
             diff_text = "".join(
                 difflib.unified_diff(
@@ -238,6 +310,10 @@ async def build_change_set(
                     selected=True,
                 )
             )
+
+        # Release this file's bytes before the next iteration: the projection holds one
+        # under-cap pair at a time, never an accumulation across the change set.
+        del new_bytes, old_bytes
 
     artifact_count = await db.scalar(
         select(func.count())

@@ -184,6 +184,12 @@ services:
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-always_on}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    # The worker's memory budget is what makes the sandbox peak model checkable rather than
+    # aspirational (config §1.7): a workspace transfer peaks at ~2x the workspace bytes plus
+    # a ~40 MiB interpreter baseline, so the 128 MiB SANDBOX_SCRATCH_MAX_BYTES cap budgets
+    # ~296 MiB here and leaves the rest for the model loop, embeddings and ingestion.
+    # Raising that cap REQUIRES raising this limit by twice the delta.
+    mem_limit: ${WORKER_MEM_LIMIT:-1g}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

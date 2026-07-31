@@ -15,6 +15,7 @@ import uuid
 
 import pytest
 
+from app.config import settings
 from app.db import SessionLocal, ping_db
 from app.models import Session as SessionModel
 from app.models import Tenant, User
@@ -398,5 +399,133 @@ async def test_the_executable_bit_survives_the_change_set_save_and_head_snapshot
             head_row = await _snapshot_entry(s, ctx, saved.snapshot.id, "run.sh")
             assert head_row.executable is True
             assert head_row.content_hash == base_hash
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_build_change_set_never_full_reads_an_oversized_file(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The final-review defect, against the real projection.
+
+    `build_change_set` used to `_read_blob()` **both** sides of every entry before checking
+    the diff cap — so a 500 MiB modified file was pulled into the worker twice purely to
+    conclude it was too big to diff. MinIO's get() really does read the whole object, so the
+    cost was real, not theoretical.
+
+    The decision is now made from recorded sizes, and classification uses a bounded prefix.
+    This instruments the store so "bounded" is observed, not assumed."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+
+    from app.objectstore import store as store_mod
+
+    real = store_mod.build_object_store()
+
+    class SpyStore:
+        def __init__(self) -> None:
+            self.full_reads: list[str] = []
+            self.prefix_reads: list[tuple[str, int]] = []
+
+        async def put(self, key, data, content_type):  # noqa: ANN001
+            await real.put(key, data, content_type)
+
+        async def get(self, key):  # noqa: ANN001
+            self.full_reads.append(key)
+            return await real.get(key)
+
+        async def get_prefix(self, key, length):  # noqa: ANN001
+            self.prefix_reads.append((key, length))
+            return await real.get_prefix(key, length)
+
+        async def delete(self, key):  # noqa: ANN001
+            await real.delete(key)
+
+        async def list_keys(self, prefix=""):  # noqa: ANN001
+            return await real.list_keys(prefix)
+
+    spy = SpyStore()
+
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            _project, _sid, wc = await _open_wc(s, ctx)
+
+            # A file comfortably over the 2 MiB diff cap, and text (no NUL) so the ONLY
+            # thing that can stop a diff attempt is the size check.
+            cap = settings.working_copy_max_diff_bytes
+            big = b"x" * (cap + 4096)
+            await sbx_svc.run_sandbox(
+                s,
+                ctx,
+                wc,
+                run_id=uuid.uuid4(),
+                request=sbx_svc.SandboxRequest(
+                    edits=[ScratchEdit(path="big.txt", op="write", data=big)]
+                ),
+            )
+            await changes_svc.build_change_set(s, ctx, wc, run_id=uuid.uuid4())
+            await wc_svc.save(s, ctx, wc)
+            wc = await wc_svc.open_working_copy(s, ctx, session_id=wc.session_id)
+
+            # Modify it — now BOTH sides exist and both are over the cap.
+            await sbx_svc.run_sandbox(
+                s,
+                ctx,
+                wc,
+                run_id=uuid.uuid4(),
+                request=sbx_svc.SandboxRequest(
+                    edits=[ScratchEdit(path="big.txt", op="write", data=big + b"more")]
+                ),
+            )
+
+            monkeypatch.setattr(store_mod, "build_object_store", lambda: spy)
+            monkeypatch.setattr(changes_svc, "build_object_store", lambda: spy)
+            cs = await changes_svc.build_change_set(s, ctx, wc, run_id=uuid.uuid4())
+            assert cs is not None
+
+            # Nothing was full-read while projecting an over-cap entry.
+            assert spy.full_reads == [], f"oversized file was fully read: {spy.full_reads}"
+            # Classification happened, and only as bounded prefixes.
+            assert spy.prefix_reads, "no bounded prefix read was performed"
+            assert all(n <= 8192 for _k, n in spy.prefix_reads), spy.prefix_reads
+
+            # The projection is still truthful about what the user is being shown.
+            entries, _ = await changes_svc.get_change_set_entries(s, ctx, cs)
+            entry = next(e for e in entries if e.path == "big.txt")
+            assert entry.change_kind == "modified"
+            assert entry.diff_object_key is None
+            assert entry.is_binary is False
+            assert entry.diff_truncated is True  # "there is more, we declined to render it"
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_a_small_text_file_is_still_diffed_normally(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The size gate must not swing the other way and stop diffing ordinary files."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            _project, _sid, wc = await _open_wc(s, ctx)
+            await sbx_svc.run_sandbox(
+                s,
+                ctx,
+                wc,
+                run_id=uuid.uuid4(),
+                request=sbx_svc.SandboxRequest(
+                    edits=[ScratchEdit(path="small.txt", op="write", data=b"alpha\n")]
+                ),
+            )
+            cs = await changes_svc.build_change_set(s, ctx, wc, run_id=uuid.uuid4())
+            assert cs is not None
+            entries, _ = await changes_svc.get_change_set_entries(s, ctx, cs)
+            entry = next(e for e in entries if e.path == "small.txt")
+            assert entry.diff_object_key is not None
+            diff = await changes_svc.get_entry_diff(
+                s, ctx, project_id=wc.project_id, cs_id=cs.id, entry_id=entry.id
+            )
+            assert "alpha" in diff
         finally:
             await s.rollback()

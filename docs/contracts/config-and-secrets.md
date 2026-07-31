@@ -154,9 +154,9 @@ class Settings(BaseSettings):
     # DELETED (ADR-047): sandbox_scratch_root — tar transport has no host scratch path at all.
     sandbox_image: str = Field(default="")                                  # digest-pinned first-party runner; no default (fail closed)
     sandbox_runtime_idle_ttl_seconds: int = Field(default=600, ge=30)       # [target] RuntimeSession idle TTL (10m)
-    sandbox_scratch_max_bytes: int = Field(default=512 * 1024 * 1024, ge=1)  # per-session tar cap, BOTH directions (512 MiB)
+    sandbox_scratch_max_bytes: int = Field(default=128 * 1024 * 1024, ge=1)  # per-session tar cap, BOTH directions (128 MiB)
     working_copy_max_changed_files: int = Field(default=5000, ge=1)         # change-set bound: changed-file count
-    working_copy_max_changed_bytes: int = Field(default=500 * 1024 * 1024, ge=1)  # change-set bound: total changed bytes
+    working_copy_max_changed_bytes: int = Field(default=128 * 1024 * 1024, ge=1)  # change-set bound: total changed bytes
     working_copy_max_artifact_bytes: int = Field(default=200 * 1024 * 1024, ge=1) # change-set bound: total artifact bytes
     working_copy_max_diff_bytes: int = Field(default=2 * 1024 * 1024, ge=1)  # per-file spilled unified-diff cap (2 MiB)
     sandbox_run_timeout_seconds: int = Field(default=120, ge=1)             # per-exec wall-clock deadline
@@ -409,12 +409,12 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Projects (runtime) | ~~`SANDBOX_SCRATCH_ROOT`~~ | — | — | — | — | **DELETED (ADR-047)** — tar transport passes no host path to the daemon at all; this setting was the direct cause of backlog B-8. |
 | Projects (runtime) | `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` | `int` ≥ 30 | `600` | No | No | **`[target]`** RuntimeSession idle TTL; the container is closed after it, and the working copy survives. The setting exists after P3, but **nothing reads it until P4**. |
 | Projects (runtime) | `WORKING_COPY_MAX_CHANGED_FILES` | `int` ≥ 1 | `5000` | No | No | Change-set bound: changed-file count; overflow ⇒ explicit truncated review. |
-| Projects (runtime) | `WORKING_COPY_MAX_CHANGED_BYTES` | `int` ≥ 1 | `524288000` | No | No | Change-set bound: total changed bytes (500 MiB). |
+| Projects (runtime) | `WORKING_COPY_MAX_CHANGED_BYTES` | `int` ≥ 1 | `134217728` | No | No | Change-set bound: total changed bytes (**128 MiB**); must stay ≤ `SANDBOX_SCRATCH_MAX_BYTES`, since both bound the same in-memory trees. |
 | Projects (runtime) | `WORKING_COPY_MAX_ARTIFACT_BYTES` | `int` ≥ 1 | `209715200` | No | No | Change-set bound: total artifact bytes (200 MiB); artifacts charge quota only when kept. |
 | Projects (runtime) | `WORKING_COPY_MAX_DIFF_BYTES` | `int` ≥ 1 | `2097152` | No | No | Per-file spilled unified-diff cap (2 MiB); over ⇒ `diff_truncated`. |
 | Projects (runtime) | `SANDBOX_RUN_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Per-exec wall-clock deadline; over ⇒ `wall_timeout`. |
 | Projects (runtime) | `SANDBOX_IMAGE` | `str` (digest) | **none — must be set** | `worker` | No | **`[shipped]` (P3)** MUST be the repository's own runner image, pinned by `docker image inspect --format '{{.Id}}'`. **Enforced fail-closed**: a tag or an empty value is refused with `runtime_image_untrusted` before any container is created. The digest **is** the trust root (an allowlist of one immutable image); the additional OCI title-label check is a **forgeable misconfiguration guard, not provenance** — signature/attestation verification is out of scope for v1. No default, so a fresh checkout fails loudly instead of running a mutable tag. |
-| Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `536870912` | No | No | Per-session tar cap (512 MiB), enforced in **both** directions and **before** allocation. Reduced from 2 GiB in the P3 review fix: it must stay ≥ `WORKING_COPY_MAX_CHANGED_BYTES` and small enough for the worker to hold. |
+| Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `134217728` | No | No | Per-session tar cap (**128 MiB**), enforced in **both** directions and **before** allocation. This is a **memory budget**: peak ≈ 2× this + ~40 MiB, i.e. ~296 MiB of worker RSS against the compose worker's `mem_limit: 1g`. Raising it requires raising that limit by twice the delta. Must stay ≥ `WORKING_COPY_MAX_CHANGED_BYTES`. History: 2 GiB → 512 MiB → 128 MiB, each step forced by a measurement. |
 | Projects (runtime) | `SANDBOX_MEM_MB` | `int` ≥ 1 | `1024` | `worker` | No | Container memory cap; exceeding it is reported as the named `mem_limit` (docker `State.OOMKilled`). Raised from 256 in P3 — `pytest` + `ruff` do not fit in 256 MiB. |
 | Tools | `TOOL_CATALOG_CORE_MAX_BYTES` | `int` ≥ 1024 | `6144` | No | No | **`[target]`** Hard cap on the serialized core tool-set bytes (ADR-046); startup fails above it. Pre-ADR-046 baseline was 19,848 bytes across 52 flat tools. |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
@@ -530,23 +530,39 @@ nothing else.**
   persisted. (Note: `id_*` is deliberately literal and therefore broad — it also matches an
   innocent `id_utils.py`. The cost is bounded: the file stays in the working copy and is only
   invisible to the sandbox.)
-  > **Peak-memory assumption, stated exactly (it is a contract, not an implementation
-  > detail).** Egress peak ≈ **the retained workspace + O(constant)**, where the constant is
-  > the drain chunk (256 KiB), tarfile's stream read-ahead (32 KiB) and the wire reader's
-  > slack (1 MiB) — none of which scale with the archive or with the largest member. This is
-  > achieved by reading each member in chunk-sized views (so `tarfile` never allocates a
-  > whole member internally) and by **handing over ownership** of the filled buffer instead
-  > of copying it. The first implementation did neither and measured **3.01x the largest
-  > member** on a single-large-file archive; a multi-member archive hid it, so the regression
-  > test uses the single-large-member shape and asserts the overhead does not grow with the
-  > member. One immutable copy is still made **per changed file** at the blob-store boundary,
-  > which is bounded by the `WORKING_COPY_MAX_*` change-set caps.
-  > **Cap reduced 2 GiB → 512 MiB (2026-07-31, P3 review fix).** 2 GiB was incoherent with
-  > this contract's own `WORKING_COPY_MAX_CHANGED_BYTES` (500 MiB), which rejects any change
-  > set that large downstream anyway, and it sized a worker-side buffer against a number the
-  > worker cannot hold. The bound now sits just above the change-set bound, and the
-  > invariant `SANDBOX_SCRATCH_MAX_BYTES >= WORKING_COPY_MAX_CHANGED_BYTES` is asserted in
-  > tests so the two cannot drift apart again.
+  > **Peak-memory model, stated exactly (it is a contract, not an implementation detail).**
+  > Computing a delta inherently requires **both** trees in the worker: the materialized
+  > base (old) and what came back from the container (new). Measured end to end as RSS in a
+  > child process, across materialize → egress → delta → blob persist → change-set build,
+  > with a single large modified file:
+  >
+  > ```
+  > peak ≈ 2 × (workspace bytes) + C,      C ≈ 40 MiB (interpreter + imports)
+  > ```
+  >
+  > Everything **past** that 2× has been removed, and each removal was a real defect:
+  > the archive is streamed rather than buffered; each member is read in bounded chunks and
+  > its buffer's **ownership is handed over** rather than copied; blob upload takes a
+  > *buffer* (`bytes`/`bytearray`/`memoryview`) instead of forcing a `bytes()` duplicate, and
+  > hashing is chunked; staged buffers are released **per file**; and the change-set
+  > projection decides diffability from **recorded sizes**, so an over-cap file is never
+  > read at all — previously both sides of a 500 MiB file were fully read purely to conclude
+  > they were too big to diff, which put the legal worst case near **2 GiB for one file**.
+  > Classification of an over-cap file uses a **bounded prefix read** (8 KiB), and such an
+  > entry is recorded truthfully as `diff_truncated` — there is more to show, and Sherpa
+  > declined to render it. One immutable copy is still made per stored object, at the
+  > storage boundary, which is what keeps content-addressed blobs immutable while the caller
+  > is free to hand over a mutable buffer.
+  >
+  > **The caps are therefore a memory budget.** `SANDBOX_SCRATCH_MAX_BYTES` = **128 MiB**
+  > budgets ≈ 296 MiB of worker RSS; the compose `worker` declares `mem_limit: 1g`, leaving
+  > room for the model loop, embeddings and ingestion. **Raising the cap REQUIRES raising
+  > that limit by twice the delta**, and `WORKING_COPY_MAX_CHANGED_BYTES` must stay ≤ the
+  > transfer cap. The history is worth keeping: 2 GiB → 512 MiB → 128 MiB, each step because
+  > a measurement contradicted the previous claim rather than because the number felt large.
+  > Guards: `tests/test_sandbox_memory_e2e.py` (RSS bound + marginal-cost bound + bounded
+  > reads), `tests/test_blob_nocopy.py` (no-copy mechanism),
+  > `tests/test_project_changes.py::test_build_change_set_never_full_reads_an_oversized_file`.
 - **Untrusted archive on both directions `[shipped]`.** The egress tar is untrusted input:
   expansion rejects absolute paths, `..` traversal, NUL, device/FIFO nodes, hard links, and
   symlinks resolving outside the project root, reusing the bounded expander already used for

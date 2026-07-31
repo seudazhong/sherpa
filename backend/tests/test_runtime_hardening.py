@@ -402,11 +402,15 @@ def test_a_large_member_is_bounded_even_while_the_source_workspace_is_retained()
 
 
 def test_the_transfer_cap_is_coherent_with_the_change_set_bound() -> None:
-    """A 2 GiB transfer cap was incoherent: any change set that large is rejected downstream
-    anyway, and the worker would have been asked to hold multiples of its own footprint."""
-    assert settings.sandbox_scratch_max_bytes == 512 * 1024 * 1024
+    """The caps ARE a memory budget, not just a product limit.
+
+    Peak is ~2x the workspace (the delta needs the old tree and the new tree), so the
+    transfer cap directly sets worker RSS. It was reduced 2 GiB -> 512 MiB -> 128 MiB as the
+    measurements got honest; see ``test_sandbox_memory_e2e.py`` for the measured model and
+    config §1.7 for the budget it implies against the compose worker's 1 GiB limit."""
+    assert settings.sandbox_scratch_max_bytes == 128 * 1024 * 1024
     assert settings.sandbox_scratch_max_bytes >= settings.working_copy_max_changed_bytes
-    assert settings.sandbox_scratch_max_bytes <= 1024 * 1024 * 1024
+    assert settings.sandbox_scratch_max_bytes <= 256 * 1024 * 1024
 
 
 # --------------------------------------------------------------------------------------

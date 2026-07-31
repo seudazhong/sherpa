@@ -8,6 +8,6 @@ shared the name while being a completely different thing.
 
 from __future__ import annotations
 
-from app.objectstore.store import ObjectStore, build_object_store
+from app.objectstore.store import Buffer, ObjectStore, build_object_store
 
-__all__ = ["ObjectStore", "build_object_store"]
+__all__ = ["Buffer", "ObjectStore", "build_object_store"]
