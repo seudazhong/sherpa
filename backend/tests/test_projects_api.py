@@ -224,7 +224,6 @@ async def test_project_workcopy_change_review_rest_flow(tmp_path, monkeypatch) -
     surface — working-copy summary, change set, Save (CSRF-gated) advancing the head."""
     if not await ping_db() or not await ping_redis():
         pytest.skip("database or redis not reachable")
-    monkeypatch.setattr(settings, "sandbox_scratch_root", str(tmp_path / "scratch"))
     await _drop_owner()
     from app.sandbox.runtime import ScratchEdit
     from app.services import project_sandbox as sbx_svc

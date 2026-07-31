@@ -122,7 +122,6 @@ def apply_test_environment() -> None:
     os.environ["REDIS_URL"] = derive_test_redis_url(app_redis_url)
     os.environ["OWNER_EMAIL"] = TEST_OWNER_EMAIL
     os.environ["TOOL_OUTPUT_ROOT"] = str(scratch / "tool-output")
-    os.environ["SANDBOX_SCRATCH_ROOT"] = str(scratch / "scratch")
 
     # Importing app.config above already built its module-level singleton from the OLD
     # environment; rebuild it so every later `from app.config import settings` — and the

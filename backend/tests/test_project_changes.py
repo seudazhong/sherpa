@@ -15,7 +15,6 @@ import uuid
 
 import pytest
 
-from app.config import settings
 from app.db import SessionLocal, ping_db
 from app.models import Session as SessionModel
 from app.models import Tenant, User
@@ -29,11 +28,6 @@ from app.services import projects as projects_svc
 from app.services.context import CallerContext
 from app.services.errors import Conflict, TooLarge
 from app.tools.project_tools import ProjectReviewChangesTool, ProjectRunTool
-
-
-@pytest.fixture(autouse=True)
-def _scratch_root(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(settings, "sandbox_scratch_root", str(tmp_path / "scratch"))
 
 
 async def _seed(s) -> CallerContext:  # type: ignore[no-untyped-def]

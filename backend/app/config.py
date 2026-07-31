@@ -141,25 +141,34 @@ class Settings(BaseSettings):
     # `run_code` snippet runner is deleted (ADR-048 O-12), so SANDBOX_TIMEOUT_SECONDS —
     # which only ever bounded that snippet — goes with it; the project wall clock is
     # SANDBOX_RUN_TIMEOUT_SECONDS below.
+    #
+    # SANDBOX_IMAGE MUST be the repository's own sandbox-runner image, pinned by digest
+    # (config §1.7) — never a stock upstream tag, which has no pytest/ruff, no /work volume
+    # and no capabilities manifest. It is built locally and never pushed, so it has no
+    # registry RepoDigest; pin it by IMAGE ID digest:
+    #   docker build -t sherpa-sandbox-runner:dev sandbox-runner
+    #   docker image inspect sherpa-sandbox-runner:dev --format '{{.Id}}'
+    # The tag below is only the default a fresh checkout starts from.
     sandbox_kind: str = "disabled"
-    sandbox_image: str = "python:3.11-slim"
-    sandbox_mem_mb: int = 256
+    sandbox_image: str = "sherpa-sandbox-runner:dev"
+    sandbox_mem_mb: int = 1024
     sandbox_pids_limit: int = 128
 
-    # Projects — Workspace W3 (ADR-040 + ADR-039): task working copy + one-time
-    # scratch-copy sandbox + change review (config §1.7). The sandbox reuses the
-    # ADR-025 hardened container and adds a SINGLE read-write mount of a per-run
-    # disposable scratch copy (nosuid,nodev) — never the snapshot/blob store/creds.
-    # These bound the working-copy/change-set/sandbox paths; NOT wired until W3.
+    # Projects — Workspace W3 (ADR-040 + ADR-039) + the ADR-047 tar transport: task working
+    # copy + one-time disposable copy + change review (config §1.7). The sandbox reuses the
+    # ADR-025 hardened container and receives the disposable copy as a TAR into an anonymous
+    # /work volume — no bind mount and no host path, which is why SANDBOX_SCRATCH_ROOT is
+    # gone (it was the direct cause of backlog B-8). SANDBOX_WARM_TTL_SECONDS is gone too:
+    # warm containers were never implemented anywhere, and the idle bound the RuntimeSession
+    # actually needs is SANDBOX_RUNTIME_IDLE_TTL_SECONDS (wired by P4).
     working_copy_idle_ttl_seconds: int = 86400  # durable working-copy idle expiry
-    sandbox_warm_ttl_seconds: int = 900  # warm-container idle TTL (cache hint; 0=always cold)
-    sandbox_scratch_root: str = ".sherpa/scratch"  # node-local disposable scratch dir
-    sandbox_scratch_max_bytes: int = 2 * 1024 * 1024 * 1024  # per-run scratch cap (2 GiB)
+    sandbox_runtime_idle_ttl_seconds: int = 600  # RuntimeSession idle TTL (P4 lifecycle)
+    sandbox_scratch_max_bytes: int = 2 * 1024 * 1024 * 1024  # per-session tar cap (2 GiB)
     working_copy_max_changed_files: int = 5000  # change-set bound: changed-file count
     working_copy_max_changed_bytes: int = 500 * 1024 * 1024  # change-set bound: changed bytes
     working_copy_max_artifact_bytes: int = 200 * 1024 * 1024  # change-set bound: artifact bytes
     working_copy_max_diff_bytes: int = 2 * 1024 * 1024  # per-file spilled unified-diff cap (2 MiB)
-    sandbox_run_timeout_seconds: int = 120  # per project_run wall-clock deadline
+    sandbox_run_timeout_seconds: int = 120  # per-exec wall-clock deadline
 
     # QQ official bot (ADR-028) is configured at runtime in the DB (channel_configs,
     # AppID/AppSecret via the sealed vault), NOT via env — no qq_* settings here. The

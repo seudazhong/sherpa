@@ -120,11 +120,9 @@ def test_project_tools_are_allow_policy() -> None:
 async def test_project_run_and_review_tools(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     if not await ping_db():
         pytest.skip("database not reachable")
-    from app.config import settings
     from app.models import Session as SessionModel
     from app.services import projects as svc
 
-    monkeypatch.setattr(settings, "sandbox_scratch_root", str(tmp_path / "scratch"))
     async with SessionLocal() as s:
         try:
             tid, uid = await _seed(s)

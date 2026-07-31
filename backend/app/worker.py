@@ -444,7 +444,8 @@ async def _qq_gateway_loop() -> None:
 async def _startup(ctx: dict[str, Any]) -> None:
     configure_logging()
     configure_tracing()
-    # Crash cleanup: scratch trees are rebuildable caches, never recovery truth (ADR-039).
+    # Crash cleanup: the container from a killed run is a rebuildable cache, never recovery
+    # truth (ADR-039/047). Under tar transport there is no host scratch tree left to sweep.
     try:
         from app.services import project_sandbox as sbx_svc
 
@@ -693,8 +694,8 @@ async def project_import_tick(ctx: dict[str, Any]) -> str:
 
 async def project_workcopy_maintenance(ctx: dict[str, Any]) -> str:
     """Leader-gated: expire idle Project working copies (release their quota reservation in
-    one atomic transition) + sweep orphan scratch trees left by crashed runs (ADR-040/039).
-    Scratch is a rebuildable cache — deleting it never loses a persisted boundary."""
+    one atomic transition) + sweep sandbox containers left by crashed runs (ADR-040/039/047).
+    A container is a rebuildable cache — removing it never loses a persisted boundary."""
     if not await try_acquire_leader("project_workcopy_maintenance", ttl_ms=280_000):
         return "not_leader"
     from app.services import project_sandbox as sbx_svc
@@ -704,7 +705,7 @@ async def project_workcopy_maintenance(ctx: dict[str, Any]) -> str:
         expired = await wc_svc.expire_idle(session)
         await session.commit()
     swept = sbx_svc.sweep_orphan_scratch()
-    return f"expired={expired} scratch_swept={swept}"
+    return f"expired={expired} containers_swept={swept}"
 
 
 class WorkerSettings:
