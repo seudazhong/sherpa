@@ -1,10 +1,12 @@
 """The single sandbox code path: named runtime exits + workspace mechanics + container run.
 
-Phase TR P3.1 merged the two former modules (``app.sandbox.runner``, which owned the named
-termination vocabulary, and ``app.sandbox.project_sandbox``, which owned the scratch
-mechanics) into this one. ADR-048 §3 requires exactly **one** sandbox code path — `scope`
-distinguishes a project runtime from an ephemeral one — instead of the two that let the
-`run_code` runner and the project runner drift apart.
+Phase TR P3 rewrote the transport (ADR-047). **There is no host scratch directory and no
+bind mount any more.** The one-time disposable copy of the working copy lives in memory,
+travels into the container as a tar (``put_archive`` into an **anonymous** ``/work``
+volume) and comes back as a tar (``get_archive``). Nothing in this module ever passes a
+filesystem path to the docker daemon, which is what made backlog B-8 structurally
+unfixable on Windows + Docker Desktop: the old ``Mount(type="bind", source=...)`` resolved
+the *worker container's* path against the *host* daemon.
 
 This module owns:
 
@@ -16,23 +18,33 @@ This module owns:
   operator log only — the model sees a static, redacted sentence
   (``runtime_failure_note``), never a host path or exception text (ADR-019).
 * **materialize** ``base snapshot + persisted overlay`` (an effective tree of blob refs)
-  into a **fresh, disposable, node-local** scratch dir under ``SANDBOX_SCRATCH_ROOT/<run>``
-  — ONLY project bytes are written; **never** a credential, the ``.env``, the docker
-  socket, another Project, Drive, or the blob store itself. Every path is validated to
-  resolve inside the scratch root (untrusted-input discipline; ADR-039 "the orchestrator
-  validates the src path").
-* **apply edits** host-side (write/delete a file in scratch), path-validated.
-* **run a command** in the ADR-025 hardened, network-disabled container with ONLY the
-  scratch bind-mounted read-write (``nosuid,nodev``); ``cap_drop=ALL``, non-root, read-only
-  rootfs + tmpfs, mem/pids/cpu/wall caps, ``--rm``. Gated by ``SANDBOX_KIND``
-  (``disabled`` offline).
-* **compute the delta** of scratch vs the materialized base (added/modified/deleted),
-  bounded by ``WORKING_COPY_MAX_CHANGED_FILES``/``_BYTES``.
-* **cleanup / orphan sweep** — scratch trees are rebuildable caches, never recovery truth.
+  into a fresh in-memory :class:`Workspace` — ONLY project bytes; **never** a credential,
+  the ``.env``, the docker socket, another Project, Drive, or the blob store itself.
+  Credential-shaped paths are held back from the sandbox boundary (see
+  :mod:`app.sandbox.transport`) but stay in the working copy untouched.
+* **apply edits** host-side against that in-memory copy, path-validated.
+* **run a command** in the ADR-025 hardened, network-disabled container. Every hardening
+  control is unchanged: ``network_disabled``, ``cap_drop=ALL``, ``no-new-privileges``,
+  non-root, read-only rootfs + tmpfs ``/tmp``, mem/pids/cpu/wall caps, ``--rm``, and **no
+  secret injection whatsoever**. Gated by ``SANDBOX_KIND`` (``disabled`` offline).
+* **compute the delta** of the resulting tree vs the materialized base
+  (added/modified/deleted), bounded by ``WORKING_COPY_MAX_CHANGED_FILES``/``_BYTES``.
+* **orphan sweep** — containers labelled as ours, left by crashed runs. Containers are
+  rebuildable caches, never recovery truth.
 
-``_execute_in_scratch`` is module-level so tests can substitute a fake. Nothing here mutates
+**Degradation guarantee (ADR-048 §决策2).** With ``SANDBOX_KIND=disabled`` the workspace,
+the edits and the delta all still work; only *running* is lost, never *editing*.
+
+``_execute_workspace`` is module-level so tests can substitute a fake. Nothing here mutates
 the database; the durable overlay persist + the ``project_runtime_sessions``/
 ``project_exec_runs`` bookkeeping live in :mod:`app.services.project_sandbox`.
+
+**Known ``nosuid,nodev`` caveat (honest record).** config §1.7 describes ``/work`` as an
+anonymous volume with ``nosuid,nodev``. Docker's API exposes those flags for *tmpfs* mounts
+and for bind mounts, but **not** for an anonymous volume declared by the image, so they are
+NOT set today. The equivalent protection is carried by ``cap_drop=ALL`` +
+``no-new-privileges`` + a non-root user (a setuid binary cannot gain privilege, and device
+nodes cannot be created without ``CAP_MKNOD``). Recorded rather than papered over.
 """
 
 from __future__ import annotations
@@ -40,12 +52,19 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
-import os
-import shutil
 from collections.abc import Awaitable, Callable
-from pathlib import Path
+from typing import Any
 
 from app.config import settings
+from app.sandbox.transport import (
+    RUNNER_GID,
+    RUNNER_UID,
+    WORK_DIR,
+    TarTransport,
+    TransportError,
+    WorkspaceFile,
+    is_credential_path,
+)
 
 # --- named runtime termination reasons (events §2.11 ④) ---------------------
 
@@ -54,6 +73,7 @@ RUNTIME_DAEMON_UNREACHABLE = "runtime_daemon_unreachable"
 RUNTIME_IMAGE_MISSING = "runtime_image_missing"
 RUNTIME_START_FAILED = "runtime_start_failed"
 RUNTIME_TRANSPORT_FAILED = "runtime_transport_failed"
+MEM_LIMIT = "mem_limit"
 
 #: One redacted, model-facing sentence per runtime reason. Static by construction: it names
 #: the reason and stays actionable, but carries no host path, image reference, daemon message
@@ -72,13 +92,24 @@ RUNTIME_FAILURE_NOTES: dict[str, str] = {
     RUNTIME_START_FAILED: (
         "the sandbox container could not be created or started, so no command was executed"
     ),
-    RUNTIME_TRANSPORT_FAILED: "the sandbox container ran but its output could not be retrieved",
+    RUNTIME_TRANSPORT_FAILED: (
+        "the sandbox workspace could not be transferred into or out of the container"
+    ),
+    MEM_LIMIT: "the command exceeded the sandbox memory limit and was killed",
 }
 
 UNMODELLED_NOTE = "the sandbox failed with an unmodelled internal error"
 
 #: Operator-log detail is bounded; it never reaches the model.
 DETAIL_MAX = 500
+
+#: Captured stdout/stderr is bounded so a flooding command cannot exhaust worker memory.
+#: The bounded text is marked truncated; the typed spill reference is api §7.2 debt (P2.8).
+OUTPUT_MAX_BYTES = 1_000_000
+
+#: Every container this deployment creates carries this label, so the startup sweep can find
+#: orphans from a crashed worker without touching anybody else's containers.
+RUNTIME_LABEL = "sherpa.runtime"
 
 
 def runtime_failure_note(reason: str) -> str:
@@ -97,6 +128,10 @@ class RunResult:
     #: reason; this carries the underlying detail (image name, daemon message, host path) that
     #: must never be handed to the model (events §2.11 ④ + ADR-019).
     error_detail: str | None = None
+    #: True when stdout/stderr hit ``OUTPUT_MAX_BYTES`` and were cut.
+    output_truncated: bool = False
+    #: Bytes pushed into the container by the tar ingress (recorded on the runtime session).
+    ingress_bytes: int | None = None
 
 
 def named_failure(reason: str, exc: BaseException) -> RunResult:
@@ -125,7 +160,7 @@ class MaterializeEntry:
 
 @dataclasses.dataclass(frozen=True)
 class ScratchEdit:
-    """A host-side scratch mutation applied before running a command."""
+    """A host-side mutation applied to the disposable copy before running a command."""
 
     path: str
     op: str  # write | delete
@@ -149,101 +184,122 @@ class DeltaResult:
 
 
 class ScratchError(Exception):
-    """A named, non-leaking scratch failure (path escape, unsafe symlink, too big)."""
+    """A named, non-leaking workspace failure (path escape, unsafe member, too big)."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
 
 
+@dataclasses.dataclass
+class Workspace:
+    """The one-time disposable copy of the working copy — in memory, never on the host disk.
+
+    ``base_manifest`` is the content hash of every file as materialized, and is what the
+    delta is computed against. ``held_back`` are the credential-shaped paths that never
+    cross the sandbox boundary; they are merged back into the result tree before the delta
+    so that holding a file back can never be mistaken for the sandbox *deleting* it.
+    """
+
+    files: dict[str, WorkspaceFile] = dataclasses.field(default_factory=dict)
+    dirs: set[str] = dataclasses.field(default_factory=set)
+    base_manifest: dict[str, bytes] = dataclasses.field(default_factory=dict)
+    held_back: set[str] = dataclasses.field(default_factory=set)
+    total_bytes: int = 0
+
+    @property
+    def sendable(self) -> dict[str, WorkspaceFile]:
+        """The subset of the copy that may enter the tar."""
+        return {p: f for p, f in self.files.items() if p not in self.held_back}
+
+
+@dataclasses.dataclass(frozen=True)
+class ExecOutcome:
+    """The result of running one command plus, when it came back, the egress tree."""
+
+    result: RunResult
+    #: ``None`` when no tree returned (disabled sandbox, start failure, transport failure);
+    #: the caller then falls back to the host-side copy so edits are never lost.
+    files: dict[str, WorkspaceFile] | None = None
+
+
 # --- path safety ------------------------------------------------------------
 
 
-def _scratch_root() -> Path:
-    return Path(settings.sandbox_scratch_root).resolve()
-
-
-def scratch_dir_for(run_id: str) -> Path:
-    return _scratch_root() / run_id
-
-
-def _safe_join(run_dir: Path, rel: str) -> Path:
-    """Resolve ``rel`` inside ``run_dir`` or raise ``path_escape``. Rejects absolute paths,
-    ``..`` traversal, and anything that resolves outside the scratch tree."""
-    rel = rel.strip().strip("/")
-    if not rel or rel.startswith("/") or ".." in rel.split("/"):
+def _safe_path(rel: str) -> str:
+    """Normalize a workspace-relative path or raise ``path_escape``. Rejects absolute
+    paths, ``..`` traversal, NUL and empty results."""
+    if "\x00" in rel:
         raise ScratchError("path_escape")
-    target = (run_dir / rel).resolve()
-    root = run_dir.resolve()
-    if root != target and root not in target.parents:
+    candidate = rel.strip().replace("\\", "/")
+    if candidate.startswith("/"):
         raise ScratchError("path_escape")
-    return target
+    parts: list[str] = []
+    for seg in candidate.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            raise ScratchError("path_escape")
+        parts.append(seg)
+    if not parts:
+        raise ScratchError("path_escape")
+    return "/".join(parts)
 
 
 # --- materialize ------------------------------------------------------------
 
 
-async def materialize(
-    run_id: str, entries: list[MaterializeEntry], read_blob: BlobReader
-) -> dict[str, bytes]:
-    """Write the effective tree into a FRESH scratch dir; return the base manifest
-    ``{path: content_hash}`` for files (used to compute the delta). Only project bytes are
-    written — never a credential. Raises ``ScratchError`` on a path escape / oversize tree."""
-    run_dir = scratch_dir_for(run_id)
-    await asyncio.to_thread(_reset_dir, run_dir)
-    manifest: dict[str, bytes] = {}
-    total = 0
+async def materialize(entries: list[MaterializeEntry], read_blob: BlobReader) -> Workspace:
+    """Build a FRESH in-memory copy of the effective tree and record the base manifest.
+
+    Only project bytes are read — never a credential. Credential-shaped paths are recorded
+    in ``held_back`` (still present in ``files`` and ``base_manifest``, so the delta stays
+    correct) but are never serialized into the tar. Raises ``ScratchError`` on a path escape
+    or an oversize tree."""
+    ws = Workspace()
     for e in sorted(entries, key=lambda x: x.path):
+        path = _safe_path(e.path)
         if e.entry_kind == "dir":
-            _safe_join(run_dir, e.path).mkdir(parents=True, exist_ok=True)
-        elif e.entry_kind == "symlink":
-            # Materialize as a regular file recording the target (no real symlink is
-            # created in scratch — a symlink is never followed out of the tree).
-            target = _safe_join(run_dir, e.path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(target.write_text, e.symlink_target or "")
-        else:  # file
+            ws.dirs.add(path)
+            continue
+        if e.entry_kind == "symlink":
+            # Materialized as a regular file recording the target: a symlink is never
+            # followed out of the tree, and the container gets no real link to chase.
+            data = (e.symlink_target or "").encode("utf-8")
+        else:
             if e.content_hash is None:
                 continue
             data = await read_blob(e.content_hash)
-            total += len(data)
-            if total > settings.sandbox_scratch_max_bytes:
-                raise ScratchError("scratch_too_large")
-            target = _safe_join(run_dir, e.path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(target.write_bytes, data)
-            if e.executable:
-                await asyncio.to_thread(_chmod_exec, target)
-            manifest[e.path] = e.content_hash
-    return manifest
-
-
-def _reset_dir(run_dir: Path) -> None:
-    if run_dir.exists():
-        shutil.rmtree(run_dir, ignore_errors=True)
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-
-def _chmod_exec(target: Path) -> None:
-    mode = target.stat().st_mode
-    target.chmod(mode | 0o111)
+        ws.total_bytes += len(data)
+        if ws.total_bytes > settings.sandbox_scratch_max_bytes:
+            raise ScratchError("scratch_too_large")
+        ws.files[path] = WorkspaceFile(data=data, executable=e.executable)
+        if e.entry_kind == "file" and e.content_hash is not None:
+            ws.base_manifest[path] = e.content_hash
+        else:
+            ws.base_manifest[path] = hashlib.sha256(data).digest()
+        if is_credential_path(path):
+            ws.held_back.add(path)
+    return ws
 
 
 # --- host-side edits --------------------------------------------------------
 
 
-def apply_edit(run_id: str, edit: ScratchEdit) -> None:
-    run_dir = scratch_dir_for(run_id)
-    target = _safe_join(run_dir, edit.path)
+def apply_edit(ws: Workspace, edit: ScratchEdit) -> None:
+    """Apply one host-side edit to the disposable copy (path-validated)."""
+    path = _safe_path(edit.path)
     if edit.op == "delete":
-        if target.exists():
-            target.unlink()
+        ws.files.pop(path, None)
+        ws.held_back.discard(path)
         return
     if edit.op == "write":
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(edit.data or b"")
-        if edit.executable:
-            _chmod_exec(target)
+        data = edit.data or b""
+        ws.files[path] = WorkspaceFile(data=data, executable=edit.executable)
+        if "/" in path:
+            ws.dirs.add(path.rsplit("/", 1)[0])
+        if is_credential_path(path):
+            ws.held_back.add(path)
         return
     raise ScratchError("bad_edit_op")
 
@@ -251,18 +307,20 @@ def apply_edit(run_id: str, edit: ScratchEdit) -> None:
 # --- delta ------------------------------------------------------------------
 
 
-def compute_delta(run_id: str, base_manifest: dict[str, bytes]) -> DeltaResult:
-    """Diff the scratch tree against the materialized base manifest → added/modified/deleted,
-    bounded by ``WORKING_COPY_MAX_CHANGED_FILES``/``_BYTES`` (over ⇒ ``over_bounds``)."""
-    run_dir = scratch_dir_for(run_id)
-    current: dict[str, Path] = {}
-    for dirpath, _dirs, files in os.walk(run_dir):
-        for fn in files:
-            full = Path(dirpath) / fn
-            if full.is_symlink():
-                continue
-            rel = full.relative_to(run_dir).as_posix()
-            current[rel] = full
+def compute_delta(ws: Workspace, result_files: dict[str, WorkspaceFile]) -> DeltaResult:
+    """Diff the resulting tree against the materialized base manifest →
+    added/modified/deleted, bounded by ``WORKING_COPY_MAX_CHANGED_FILES``/``_BYTES``
+    (over ⇒ ``over_bounds``).
+
+    Held-back (credential-shaped) paths are merged back from the host-side copy first: the
+    sandbox never saw them, so their absence from the egress tree is not a deletion."""
+    current = dict(result_files)
+    for path in ws.held_back:
+        held = ws.files.get(path)
+        if held is not None:
+            current[path] = held
+        else:
+            current.pop(path, None)
 
     entries: list[DeltaEntry] = []
     changed_bytes = 0
@@ -270,17 +328,17 @@ def compute_delta(run_id: str, base_manifest: dict[str, bytes]) -> DeltaResult:
     max_files = settings.working_copy_max_changed_files
     max_bytes = settings.working_copy_max_changed_bytes
 
-    for rel, full in sorted(current.items()):
-        data = full.read_bytes()
-        digest = hashlib.sha256(data).digest()
-        base = base_manifest.get(rel)
+    for rel in sorted(current):
+        f = current[rel]
+        digest = hashlib.sha256(f.data).digest()
+        base = ws.base_manifest.get(rel)
         if base is None:
             kind = "added"
         elif base != digest:
             kind = "modified"
         else:
             continue
-        changed_bytes += len(data)
+        changed_bytes += len(f.data)
         if len(entries) >= max_files or changed_bytes > max_bytes:
             over = True
             break
@@ -288,14 +346,14 @@ def compute_delta(run_id: str, base_manifest: dict[str, bytes]) -> DeltaResult:
             DeltaEntry(
                 path=rel,
                 change_kind=kind,
-                data=data,
-                size_bytes=len(data),
-                executable=bool(full.stat().st_mode & 0o111),
+                data=f.data,
+                size_bytes=len(f.data),
+                executable=f.executable,
             )
         )
 
     if not over:
-        for rel in sorted(base_manifest):
+        for rel in sorted(ws.base_manifest):
             if rel not in current:
                 if len(entries) >= max_files:
                     over = True
@@ -308,28 +366,54 @@ def compute_delta(run_id: str, base_manifest: dict[str, bytes]) -> DeltaResult:
     return DeltaResult(entries=entries, over_bounds=over)
 
 
-# --- hardened container run (ADR-025 + one-time scratch RW mount, ADR-039) ---
+# --- hardened container run (ADR-025 hardening + ADR-047 tar transport) -----
 
 
-def _run_docker(scratch_dir: str, command: str) -> RunResult:
+def _transport() -> TarTransport:
+    return TarTransport(max_bytes=settings.sandbox_scratch_max_bytes)
+
+
+def _bounded_logs(container: Any, *, stdout: bool, stderr: bool) -> tuple[str, bool]:
+    """Read a log stream with a hard byte cap: a flooding command must not exhaust the
+    worker's memory. The typed spill reference for oversized output is api §7.2 debt."""
+    chunks: list[bytes] = []
+    total = 0
+    truncated = False
+    for chunk in container.logs(stdout=stdout, stderr=stderr, stream=True):
+        if total >= OUTPUT_MAX_BYTES:
+            truncated = True
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    raw = b"".join(chunks)
+    if len(raw) > OUTPUT_MAX_BYTES:
+        raw, truncated = raw[:OUTPUT_MAX_BYTES], True
+    return raw.decode("utf-8", "replace"), truncated
+
+
+def _transport_failure(exc: TransportError) -> RunResult:
+    return RunResult("", "", -1, False, error=exc.code, error_detail=exc.detail[:DETAIL_MAX])
+
+
+def _run_docker(ws: Workspace, command: str) -> ExecOutcome:
+    """Create → tar in → start → wait → logs → tar out → remove. No mount, no host path."""
     import docker
-    from docker.errors import APIError, DockerException, ImageNotFound
-    from docker.types import Mount
+    from docker.errors import APIError, DockerException, ImageNotFound, NotFound
 
     try:
         client = docker.from_env()
     except DockerException as exc:
-        return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
+        return ExecOutcome(named_failure(RUNTIME_DAEMON_UNREACHABLE, exc))
     except Exception as exc:  # noqa: BLE001 - classify and observe, never crash the loop
-        return unmodelled_failure(exc)
+        return ExecOutcome(unmodelled_failure(exc))
 
     try:
-        container = client.containers.run(
+        container = client.containers.create(
             settings.sandbox_image,
             command=["/bin/sh", "-lc", command],
-            # ADR-039: the ONLY read-write mount is the disposable scratch copy.
-            mounts=[Mount(target="/work", source=scratch_dir, type="bind", read_only=False)],
-            working_dir="/work",
+            # ADR-047: /work is the runner image's ANONYMOUS volume. There is no mounts=,
+            # no binds= and no host path anywhere in this call — that is the whole point.
+            working_dir=WORK_DIR,
             network_disabled=True,
             mem_limit=f"{settings.sandbox_mem_mb}m",
             pids_limit=settings.sandbox_pids_limit,
@@ -338,78 +422,138 @@ def _run_docker(scratch_dir: str, command: str) -> RunResult:
             security_opt=["no-new-privileges"],
             read_only=True,  # rootfs read-only; only /work + /tmp are writable
             tmpfs={"/tmp": "size=64m,mode=1777,nosuid,nodev"},
-            user="nobody",
-            detach=True,
+            user=f"{RUNNER_UID}:{RUNNER_GID}",
+            labels={RUNTIME_LABEL: "1"},
         )
     except ImageNotFound as exc:
         # The offline sandbox never reaches the network to pull: a missing image is its own
         # named, actionable outcome — not a generic "unavailable".
-        return named_failure(RUNTIME_IMAGE_MISSING, exc)
+        return ExecOutcome(named_failure(RUNTIME_IMAGE_MISSING, exc))
     except (APIError, DockerException) as exc:
-        return named_failure(RUNTIME_START_FAILED, exc)
+        return ExecOutcome(named_failure(RUNTIME_START_FAILED, exc))
     except Exception as exc:  # noqa: BLE001
-        return unmodelled_failure(exc)
+        return ExecOutcome(unmodelled_failure(exc))
 
-    timed_out = False
+    transport = _transport()
     try:
+        try:
+            ingress_bytes = transport.ingest(container, ws.sendable, ws.dirs)
+        except TransportError as exc:
+            return ExecOutcome(_transport_failure(exc))
+        except (APIError, DockerException, OSError) as exc:
+            return ExecOutcome(named_failure(RUNTIME_TRANSPORT_FAILED, exc))
+
+        try:
+            container.start()
+        except (APIError, DockerException) as exc:
+            return ExecOutcome(named_failure(RUNTIME_START_FAILED, exc))
+        except Exception as exc:  # noqa: BLE001
+            return ExecOutcome(unmodelled_failure(exc))
+
+        timed_out = False
         try:
             res = container.wait(timeout=settings.sandbox_run_timeout_seconds)
             exit_code = int(res.get("StatusCode", -1))
-        except Exception:
+        except Exception:  # noqa: BLE001 - any wait failure is a wall-clock kill for us
             timed_out = True
             exit_code = -1
             try:
                 container.kill()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
+
         try:
-            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", "replace")
-            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", "replace")
+            container.reload()
+            oom = bool(container.attrs.get("State", {}).get("OOMKilled", False))
+        except Exception:  # noqa: BLE001 - a missing OOM flag only costs us a better name
+            oom = False
+
+        try:
+            stdout, t_out = _bounded_logs(container, stdout=True, stderr=False)
+            stderr, t_err = _bounded_logs(container, stdout=False, stderr=True)
         except Exception as exc:  # noqa: BLE001
             # The container ran but its output could not be retrieved: distinct from a start
-            # failure, because work may already have landed in the scratch tree.
-            return named_failure(RUNTIME_TRANSPORT_FAILED, exc)
-        return RunResult(stdout, stderr, exit_code, timed_out)
+            # failure, because work may already have landed in the workspace.
+            return ExecOutcome(named_failure(RUNTIME_TRANSPORT_FAILED, exc))
+        truncated = t_out or t_err
+
+        try:
+            files = transport.egress(container)
+        except TransportError as exc:
+            return ExecOutcome(
+                RunResult(
+                    stdout,
+                    stderr,
+                    exit_code,
+                    timed_out,
+                    error=exc.code,
+                    error_detail=exc.detail[:DETAIL_MAX],
+                    output_truncated=truncated,
+                    ingress_bytes=ingress_bytes,
+                )
+            )
+        except NotFound as exc:
+            return ExecOutcome(named_failure(RUNTIME_TRANSPORT_FAILED, exc))
+        except (APIError, DockerException, OSError) as exc:
+            return ExecOutcome(named_failure(RUNTIME_TRANSPORT_FAILED, exc))
+
+        return ExecOutcome(
+            RunResult(
+                stdout,
+                stderr,
+                exit_code,
+                timed_out,
+                error=MEM_LIMIT if oom else None,
+                output_truncated=truncated,
+                ingress_bytes=ingress_bytes,
+            ),
+            files=files,
+        )
     finally:
         try:
-            container.remove(force=True)
-        except Exception:
+            # v=True also removes the anonymous /work volume: the disposable copy leaves
+            # nothing behind on the node.
+            container.remove(force=True, v=True)
+        except Exception:  # noqa: BLE001
             pass
 
 
-async def _execute_in_scratch(scratch_dir: str, command: str) -> RunResult:
-    return await asyncio.to_thread(_run_docker, scratch_dir, command)
+async def _execute_workspace(ws: Workspace, command: str) -> ExecOutcome:
+    return await asyncio.to_thread(_run_docker, ws, command)
 
 
-async def run_in_scratch(run_id: str, command: str) -> RunResult:
-    """Run ``command`` in the hardened container against ONLY the run's scratch tree.
-    ``SANDBOX_KIND != docker`` (default) reports a clear disabled result for offline dev/tests;
-    the real docker path is exercised in the browser. Every failure exit is one of the
+async def run_workspace(ws: Workspace, command: str) -> ExecOutcome:
+    """Run ``command`` in the hardened container against ONLY this disposable copy.
+    ``SANDBOX_KIND != docker`` (default) reports a clear disabled result for offline dev and
+    tests — and the caller still persists the host-side edits, because losing *run* must
+    never mean losing *edit* (ADR-048 §决策2). Every failure exit is one of the
     contract-named reasons above — never a blanket collapse."""
     if settings.sandbox_kind != "docker":
-        return RunResult("", "", -1, False, error=SANDBOX_DISABLED)
-    scratch_dir = str(scratch_dir_for(run_id))
-    return await _execute_in_scratch(scratch_dir, command)
+        return ExecOutcome(RunResult("", "", -1, False, error=SANDBOX_DISABLED))
+    return await _execute_workspace(ws, command)
 
 
-# --- cleanup / orphan sweep -------------------------------------------------
+# --- orphan sweep -----------------------------------------------------------
 
 
-def cleanup(run_id: str) -> None:
-    run_dir = scratch_dir_for(run_id)
-    shutil.rmtree(run_dir, ignore_errors=True)
-
-
-def sweep_orphans(keep_run_ids: set[str] | None = None) -> int:
-    """Remove scratch trees left by crashed runs (a startup sweep). Scratch is a rebuildable
-    cache — deleting it never loses a persisted boundary. Returns the count removed."""
-    root = _scratch_root()
-    if not root.exists():
+def sweep_orphan_containers() -> int:
+    """Remove sandbox containers left behind by a crashed worker. Containers are rebuildable
+    caches — removing one never loses a persisted boundary. Only containers carrying this
+    deployment's label are touched. Returns the count removed."""
+    if settings.sandbox_kind != "docker":
         return 0
-    keep = keep_run_ids or set()
+    try:
+        import docker
+
+        client = docker.from_env()
+        containers = client.containers.list(all=True, filters={"label": RUNTIME_LABEL})
+    except Exception:  # noqa: BLE001 - best-effort cache cleanup, never fatal to startup
+        return 0
     removed = 0
-    for child in root.iterdir():
-        if child.is_dir() and child.name not in keep:
-            shutil.rmtree(child, ignore_errors=True)
+    for c in containers:
+        try:
+            c.remove(force=True, v=True)
             removed += 1
+        except Exception:  # noqa: BLE001
+            continue
     return removed
