@@ -183,6 +183,27 @@ async def test_wall_timeout_kills_a_real_container(monkeypatch: pytest.MonkeyPat
     assert out.result.timed_out is True
 
 
+async def test_a_real_oom_is_named_mem_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Docker's OOMKilled flag, read back after wait — an exit 137 alone would not say why."""
+    monkeypatch.setattr(settings, "sandbox_mem_mb", 128)
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(ws, 'python -c "b=bytearray(2*1024**3)"')
+    assert out.result.error == sbx.MEM_LIMIT
+    assert out.result.exit_code == 137
+
+
+async def test_a_flooding_command_is_bounded_not_fatal() -> None:
+    """Output is capped and flagged; the command itself still settles normally. The typed
+    spill reference (and an `output_limit` termination reason) is api §7.2 debt, tracked in
+    Phase TR P2.8 — this test records the behaviour that ships today, not the target."""
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(ws, "yes | head -c 3000000")
+    assert out.result.error is None
+    assert out.result.exit_code == 0
+    assert out.result.output_truncated is True
+    assert len(out.result.stdout) <= sbx.OUTPUT_MAX_BYTES
+
+
 async def test_a_credential_shaped_file_never_reaches_the_real_container() -> None:
     canary = "sherpa-kek-canary-MDEyMzQ1Njc4OWFiY2RlZg=="
     ws = await _ws({".env": f"KEK={canary}\n".encode(), "app.py": b"print(1)\n"})

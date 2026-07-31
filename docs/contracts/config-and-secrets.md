@@ -406,14 +406,15 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Projects (runtime) | `WORKING_COPY_IDLE_TTL_SECONDS` | `int` ≥ 60 | `86400` | No | No | Durable task working-copy idle expiry (ADR-040; expiry + reservation release are one atomic transition). |
 | Projects (runtime) | ~~`SANDBOX_WARM_TTL_SECONDS`~~ | — | — | — | — | **DELETED (ADR-047)** — warm containers were never implemented in code; superseded by `SANDBOX_RUNTIME_IDLE_TTL_SECONDS`. |
 | Projects (runtime) | ~~`SANDBOX_SCRATCH_ROOT`~~ | — | — | — | — | **DELETED (ADR-047)** — tar transport passes no host path to the daemon at all; this setting was the direct cause of backlog B-8. |
-| Projects (runtime) | `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` | `int` ≥ 30 | `600` | No | No | **`[target]`** RuntimeSession idle TTL; the container is closed after it, and the working copy survives. |
+| Projects (runtime) | `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` | `int` ≥ 30 | `600` | No | No | **`[target]`** RuntimeSession idle TTL; the container is closed after it, and the working copy survives. The setting exists after P3, but **nothing reads it until P4**. |
 | Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `2147483648` | No | No | Per-session tar ingress cap (2 GiB). |
 | Projects (runtime) | `WORKING_COPY_MAX_CHANGED_FILES` | `int` ≥ 1 | `5000` | No | No | Change-set bound: changed-file count; overflow ⇒ explicit truncated review. |
 | Projects (runtime) | `WORKING_COPY_MAX_CHANGED_BYTES` | `int` ≥ 1 | `524288000` | No | No | Change-set bound: total changed bytes (500 MiB). |
 | Projects (runtime) | `WORKING_COPY_MAX_ARTIFACT_BYTES` | `int` ≥ 1 | `209715200` | No | No | Change-set bound: total artifact bytes (200 MiB); artifacts charge quota only when kept. |
 | Projects (runtime) | `WORKING_COPY_MAX_DIFF_BYTES` | `int` ≥ 1 | `2097152` | No | No | Per-file spilled unified-diff cap (2 MiB); over ⇒ `diff_truncated`. |
 | Projects (runtime) | `SANDBOX_RUN_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Per-exec wall-clock deadline; over ⇒ `wall_timeout`. |
-| Projects (runtime) | `SANDBOX_IMAGE` | `str` | pinned `sherpa-sandbox-runner` digest | `worker` | No | **`[target]`** MUST be the repository's own runner image by digest (python + pytest + ruff + `capabilities.json`, no git, no network tooling) — never a stock upstream tag. |
+| Projects (runtime) | `SANDBOX_IMAGE` | `str` | pinned `sherpa-sandbox-runner` **image ID** digest | `worker` | No | **`[shipped]` (P3)** MUST be the repository's own runner image, pinned by `docker image inspect --format '{{.Id}}'` (python + pytest + ruff + `capabilities.json`, no git, no network tooling) — never a stock upstream tag, and **not** a registry `RepoDigest` (the image is never pushed). |
+| Projects (runtime) | `SANDBOX_MEM_MB` | `int` ≥ 1 | `1024` | `worker` | No | Container memory cap; exceeding it is reported as the named `mem_limit` (docker `State.OOMKilled`). Raised from 256 in P3 — `pytest` + `ruff` do not fit in 256 MiB. |
 | Tools | `TOOL_CATALOG_CORE_MAX_BYTES` | `int` ≥ 1024 | `6144` | No | No | **`[target]`** Hard cap on the serialized core tool-set bytes (ADR-046); startup fails above it. Pre-ADR-046 baseline was 19,848 bytes across 52 flat tools. |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
 | Observability | `OTEL_EXPORTER_OTLP_ENDPOINT` | `AnyHttpUrl` | None | No | No | OTLP endpoint (e.g. self-hosted Phoenix `http://phoenix:4317`); unset = console/in-memory exporter only. |
@@ -481,17 +482,18 @@ Design/contract-first (ADR-037); the settings above are frozen but **not yet wir
 
 ### 1.7 Sandbox transport / lifecycle / resource / network / credential boundary (ADR-039 isolation + ADR-047 transport + ADR-048 runtime)
 
-**STATUS (2026-07-30).** The `WORKING_COPY_*` change-set bounds and the hardened container
-are **`[shipped]`**. The **transport** is **`[target]`**: ADR-047 replaces the bind mount
-with tar injection, which deletes `SANDBOX_SCRATCH_ROOT` and adds
-`SANDBOX_RUNTIME_IDLE_TTL_SECONDS`; `SANDBOX_WARM_TTL_SECONDS` is deleted because warm
-containers were never implemented anywhere in the code. This section governs the one change
-the coding runtime makes to the ADR-025 sandbox: **it injects a disposable copy of the
-working copy and nothing else.**
+**STATUS (2026-07-31).** The `WORKING_COPY_*` change-set bounds and the hardened container
+were already **`[shipped]`**; **Phase TR P3 shipped the transport**, so the tar boundary, the
+credential strip, the untrusted-egress rules, the deletion of `SANDBOX_SCRATCH_ROOT` /
+`SANDBOX_WARM_TTL_SECONDS` and the first-party image boundary are now **`[shipped]`** too.
+`SANDBOX_RUNTIME_IDLE_TTL_SECONDS` exists as a setting but is **`[target]`** — nothing reads it
+until the P4 RuntimeSession lifecycle lands. This section governs the one change the coding
+runtime makes to the ADR-025 sandbox: **it injects a disposable copy of the working copy and
+nothing else.**
 
-- **Transport boundary (the core rule) `[target]`.** A runtime session materializes
+- **Transport boundary (the core rule) `[shipped]`.** A runtime session materializes
   `base snapshot + persisted overlay` into an **in-memory tar** and `put_archive`s it into
-  the container's **anonymous** `/work` volume (`nosuid,nodev`); the reverse boundary is
+  the container's **anonymous** `/work` volume; the reverse boundary is
   `get_archive`. **There is no bind mount and no host path in the container-create call at
   all.** The sandbox therefore has no path to, and cannot be pointed at, the Project
   `project_snapshots`/`project_snapshot_entries`, the MinIO/`storage_blobs` object store,
@@ -502,19 +504,36 @@ working copy and nothing else.**
   attack surface is structurally removed rather than guarded.* The socket-holding
   orchestrator remains the trust boundary and must never be influenced by agent/project
   content.
-- **Materialize from durable state, never from a live mount.** Ingress is bounded by
+  > ⚠️ **`nosuid,nodev` correction (2026-07-31).** This section previously specified the
+  > anonymous `/work` volume as `nosuid,nodev`. **That is not implementable as written and is
+  > NOT in effect:** Docker exposes those flags for *tmpfs* and *bind* mounts, but not for an
+  > anonymous volume declared by the image, which is what makes `/work` writable under a
+  > read-only rootfs without any host path. The equivalent protection is carried by
+  > `cap_drop=ALL` + `no-new-privileges` + a non-root user — a setuid binary cannot gain
+  > privilege and a device node cannot be created without `CAP_MKNOD`. `tmpfs /tmp` **does**
+  > carry `nosuid,nodev`. Recorded rather than papered over (owner decision D-2).
+- **Materialize from durable state, never from a live mount `[shipped]`.** Ingress is bounded by
   `SANDBOX_SCRATCH_MAX_BYTES`. The container and the prepared image are **rebuildable
   caches**, never a recovery source of truth (events §2.11). **No credential is ever written
   into the tar** — the materializer strips and then asserts the absence of `.env*`, `*.pem`,
-  `*.key`, `id_*` and `.git/config` before the archive is built.
-- **Untrusted archive on both directions.** The egress tar is untrusted input: expansion
-  rejects absolute paths, `..` traversal, NUL, device/FIFO nodes, hard links, and symlinks
-  resolving outside the project root, reusing the bounded expander already used for project
-  imports. A violation ends the exec with `path_escape`.
+  `*.key`, `id_*` and `.git/config` before the archive is built. Stripped paths are **merged
+  back before the delta is computed**, so holding a file back is never mistaken for the
+  sandbox deleting it; a credential-shaped path the *command* creates is dropped instead of
+  persisted. (Note: `id_*` is deliberately literal and therefore broad — it also matches an
+  innocent `id_utils.py`. The cost is bounded: the file stays in the working copy and is only
+  invisible to the sandbox.)
+- **Untrusted archive on both directions `[shipped]`.** The egress tar is untrusted input:
+  expansion rejects absolute paths, `..` traversal, NUL, device/FIFO nodes, hard links, and
+  symlinks resolving outside the project root, reusing the bounded expander already used for
+  project imports. A violation ends the exec with `path_escape` and persists **nothing the
+  container produced** (explicit host-side edits still persist — error is an observation, not
+  data loss). The `work/` prefix `get_archive` adds is stripped **before** validation;
+  validating with it attached would let a top-level escaping symlink resolve inside the root.
 - **Lifecycle + orphan sweep.** The orchestrator persists the overlay/change-set boundary
-  **before** teardown, then removes the container in a `finally` (`--rm`). A worker-startup
-  sweep purges containers labelled with this deployment's runtime label from crashed runs. A
-  runtime session idle for `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` is closed; a durable working
+  **before** teardown, then removes the container in a `finally` (`--rm`, `v=True`, which also
+  removes the anonymous volume). A worker-startup sweep purges containers labelled
+  `sherpa.runtime` from crashed runs **`[shipped]`**. A
+  runtime session idle for `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` is closed **`[target]`, P4**; a durable working
   copy idle for `WORKING_COPY_IDLE_TTL_SECONDS` expires, and idle-expiry release plus
   quota-reservation release are **one atomic transition**.
 - **Resource bounds (reuse ADR-025 + change-set caps).** Keep the ADR-025 hardened
@@ -524,23 +543,31 @@ working copy and nothing else.**
   `WORKING_COPY_MAX_*` change-set bounds (changed-file count, changed bytes, artifact bytes,
   per-file diff bytes) — overflow ⇒ a named termination reason + an **explicit truncated**
   change set, never a silent full-looking diff.
-- **Image boundary `[target]`.** `SANDBOX_IMAGE` MUST be a **pinned digest of the
+- **Image boundary `[shipped]`.** `SANDBOX_IMAGE` MUST be a **pinned digest of the
   repository's own `sandbox-runner` image**, not a stock upstream tag. The v1 image carries
   Python + `pytest` + `ruff` and a `capabilities.json` manifest that the orchestrator probes
-  at `runtime_open`; it deliberately contains **no `git` and no network tooling**. Node is a
-  later optional profile. Probed capabilities let a missing dependency return
-  `environment_missing_dependencies` **with the list of what is available**, instead of an
-  unexplained exit 127.
+  at `runtime_open` (**the probe itself is `[target]`, P4**); it deliberately contains **no
+  `git` and no network tooling**. Node is a later optional profile. Probed capabilities let a
+  missing dependency return `environment_missing_dependencies` **with the list of what is
+  available**, instead of an unexplained exit 127 — today the mapping exists (exit 127 ⇒
+  `environment_missing_dependencies`) but the "what IS available" list awaits the P4 probe.
+  > **Digest clarification (2026-07-31).** "Pinned digest" means the **image ID digest**
+  > (`docker image inspect --format '{{.Id}}'`), not a registry `RepoDigest`: the image is
+  > built locally and never pushed, so it has no `RepoDigests` at all (owner decision D-1).
 - **Network + dependency policy.** The sandbox stays **network-disabled**; there is **no
   egress and no package installation**. A command needing an unavailable runtime/dependency
   ends with `environment_missing_dependencies` (events §2.11) — the sandbox **never**
   silently enables network to fetch packages.
-- **Credential boundary (ADR-019/039).** No model/provider/storage/GitHub/KEK credential is
+- **Credential boundary (ADR-019/039) `[shipped]`.** No model/provider/storage/GitHub/KEK credential is
   ever passed into the sandbox environment, command line, tar, overlay, change set,
   artifact, snapshot, prompt, log, or tool result — reaffirming §1.5/§1.6 and the ADR-025
   rule "无任何密钥注入". A **canary test** asserts this: a synthetic KEK-shaped secret placed
   in a project tree must not appear in the tar, overlay, change set, artifact, log, prompt
-  or tool result.
+  or tool result. Verified three ways: in the transport unit tests, end to end through the
+  orchestration boundary with the secret in the **base snapshot**
+  (`tests/test_project_sandbox.py::test_credential_canary_never_crosses_the_sandbox_boundary`),
+  and inside a **real container** (`tests/test_runtime_docker.py`), which also asserts the
+  container sees no secret-shaped environment variable and no `docker.sock`.
 - **`docker.sock` / multi-user gate (ADR-039 do-not-ship conditions) — UNCHANGED.** The
   transport change makes the single-user dev posture *correct* rather than broken; it does
   **not** move the multi-user gate. **Do NOT ship multi-user or genuinely-untrusted-

@@ -15,7 +15,7 @@
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | ✅ done |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
-| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open · 🚧 Phase TR **P0 + P1 shipped** (named exits + logging; bookkeeping on the target tables); **mount still broken** |
+| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open · ✅ **symptom fixed by Phase TR P3 (2026-07-31)** — tar transport + first-party runner image + real-Docker lane; `project_run` really runs. **Still open: no human Run/Stop lane (P4 + P5)** |
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
 | B-10 | design | [Tool-surface slimming: dead tools, prose diet, and *vertical* (workflow) consolidation](#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation) | open — feeds [Phase TR](IMPLEMENTATION.md) **P2** |
 | B-11 | gap | [No tool-use evaluation harness (decisions are argued, not measured)](#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) | open |
@@ -235,7 +235,24 @@ change, not a rename — not done here.
 
 ## B-8 `project_run` always fails with `sandbox_unavailable`
 
-*Reported 2026-07-28 (manual test) · kind: bug · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-047](decisions.md#adr-047)/[ADR-048](decisions.md#adr-048)); **Phase TR P0 (named exits + logging) and P1 (baseline squash; bookkeeping moved to `project_runtime_sessions`/`project_exec_runs`) shipped 2026-07-30 — the mount is untouched and `project_run` still fails**; closes at the end of [Phase TR](IMPLEMENTATION.md) **P5***
+*Reported 2026-07-28 (manual test) · kind: bug · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-047](decisions.md#adr-047)/[ADR-048](decisions.md#adr-048)); **P0 (named exits + logging) + P1 (baseline squash) shipped 2026-07-30; P3 (tar transport + first-party runner image + real-Docker lane) shipped 2026-07-31 — the original symptom is GONE and `project_run` really runs**; still **open** because the close criterion is the *human* Run lane, which is [Phase TR](IMPLEMENTATION.md) **P5***
+
+> **✅ Phase TR P3 shipped 2026-07-31 — the reported symptom is fixed, the item is not closed.**
+> The bind mount is gone; the disposable copy is tar-injected into an anonymous `/work` volume,
+> so **no host path reaches the daemon at all**. Measured on the Windows + Docker Desktop dev
+> stack, three independent ways: `uv run pytest -m docker` (17 passed), a run driven *from
+> inside the worker container* over the mounted socket, and the chat lane against the real
+> provider — `pytest -q` → **real exit 1** → model fixes `calc.py` → **real exit 0**;
+> `ruff --version` → 0.6.9; `git --version` → **127** (mapped to
+> `environment_missing_dependencies`). The human lane was exercised on the existing Change
+> Review panel (real diff → Save selected → head advanced to `head_generation=1` with
+> `calc.py`/`test_calc.py` in the snapshot).
+>
+> **Why this stays open:** the close criterion below has two halves and P3 delivered one. There
+> is still **no Run control, no streaming log and no Stop** — `createSandboxRun` is *still* dead
+> code and secondary problem 2 below is *still* true, because moving execution to the worker
+> behind `202` + SSE is **P4** and the three-column UI is **P5**. Claiming B-8 closed now would
+> be exactly the kind of overclaim the ADR-045 root-cause note was written about.
 
 **Observed.** In a project-bound chat, "run the helloworld code" → the model calls `project_run({"command": "python main.py"})` and gets back
 `Sandbox run sandbox_unavailable (exit -1, state persisted). No file changes were produced.`
@@ -263,11 +280,11 @@ bind source path does not exist: /app/.sherpa/scratch/<run>
 **Three secondary problems found during triage (not in the original report):**
 1. **The human Run lane never existed.** `frontend/src/api.ts:1293` defines `createSandboxRun`, but it has **no call site anywhere in the frontend**. The capability matrix (`docs/11` §9) claimed UI ✅ — corrected.
 2. **Even with the mount fixed, the REST lane would still fail, for a different reason.** `app/api/projects.py::create_sandbox_run` executes `sbx_svc.run_sandbox(...)` **synchronously inside the web process**, but `SANDBOX_KIND=docker` is set **only on the worker** (`infra/docker-compose.yml:163`) and web has no Docker socket — so it defaults to `disabled`. It also blocks the HTTP request for up to 120 s, while the contract describes it as `202`. *(P0 makes this legible — the route now reports `sandbox_disabled` rather than `sandbox_unavailable` — but does not fix it; P4/P5 do.)*
-3. **The test suite is structurally blind to this.** `tests/test_project_sandbox.py` monkeypatches `_execute_in_scratch` and (until Phase TR P1 deleted it with `run_code`) `tests/test_sandbox.py` patched `_execute`; **no test in the repository ever starts a container**. That is why 297 green tests plus a two-lane Playwright pass did not catch it. P0 added a fake-docker-client lane that at least exercises the real classification branches of `_run_docker`; Phase TR **P3** still adds the real-Docker lane (`uv run pytest -m docker`) and a topology matrix, or the same failure mode returns.
+3. **The test suite is structurally blind to this.** `tests/test_project_sandbox.py` monkeypatches `_execute_in_scratch` and (until Phase TR P1 deleted it with `run_code`) `tests/test_sandbox.py` patched `_execute`; **no test in the repository ever starts a container**. That is why 297 green tests plus a two-lane Playwright pass did not catch it. P0 added a fake-docker-client lane that at least exercises the real classification branches of `_run_docker`; **✅ Phase TR P3 (2026-07-31) added the real-Docker lane** — `uv run pytest -m docker`, 17 tests, deselected by default and skipped with an actionable message when the daemon or image is missing. **It found a real bug on its very first run**: `TarTransport.build` emitted only the directories it was handed, so a file at `src/app.py` got an implicit parent created by docker as **root**, and the non-root runner could not write inside it. No fake-client test could ever have caught that — the fake has no filesystem and no uid.
 
-Also settled: `project_run` / `project_tree` / `project_read` / `run_code` are **deleted** (clean break, no shim) in favour of host-side `fs.*` plus an explicit `RuntimeSession` (`runtime_open` → `sh_exec` → `runtime_close`), so that **a sandbox outage costs the ability to run code, not the ability to edit it** — today it costs both. The `project_sandbox_runs` table is redesigned into `project_runtime_sessions` + `project_exec_runs`; `warm_until` is dropped because warm containers were never implemented in any code path.
+**Close criterion (Phase TR P5).** A real command executes in a real container on the Windows dev stack and returns a real exit code and stdout ✅ **(P3, 2026-07-31)**; every failure injection maps to exactly one named `termination_reason` with a worker log line — ✅ for 13 of 16 rows, with `cancelled` (P4), `output_limit` + spill (P2.8) and `pids_limit` (no daemon signal; needs a P4 decision) recorded as open in [`IMPLEMENTATION.md` TR.11](IMPLEMENTATION.md) rather than assumed; the credential canary passes ✅ **(P3, verified in unit tests, end to end through the orchestration boundary with the secret in the base snapshot, and inside a real container)**; and the human lane can press **Run**, watch streaming output, press **Stop**, and review the resulting change set — ⬜ **not started (P4 + P5)**.
 
-**Close criterion (Phase TR P5).** A real command executes in a real container on the Windows dev stack and returns a real exit code and stdout; every failure injection maps to exactly one named `termination_reason` with a worker log line; the credential canary passes; and the human lane can press **Run**, watch streaming output, press **Stop**, and review the resulting change set.
+Also settled: `project_run` / `project_tree` / `project_read` / `run_code` are **deleted** (clean break, no shim) in favour of host-side `fs.*` plus an explicit `RuntimeSession` (`runtime_open` → `sh_exec` → `runtime_close`), so that **a sandbox outage costs the ability to run code, not the ability to edit it** — today it costs both. The `project_sandbox_runs` table is redesigned into `project_runtime_sessions` + `project_exec_runs`; `warm_until` is dropped because warm containers were never implemented in any code path. *(P3 note: the degradation guarantee is already half-true — with `SANDBOX_KIND=disabled` the in-memory copy, the host-side edits and the delta all still work and still persist. What is still missing is the `fs_*` tool surface that would let the model use it, which is P4.)*
 
 ---
 

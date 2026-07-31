@@ -419,7 +419,9 @@ docker compose -f infra/docker-compose.yml down
 
 # sandbox runner image (new in P3)
 docker build -t sherpa-sandbox-runner:dev sandbox-runner/
-docker image inspect sherpa-sandbox-runner:dev --format '{{index .RepoDigests 0}}'
+# NOTE: the image is built locally and never pushed, so it has NO RepoDigests. Pin it by
+# IMAGE ID digest instead (owner decision D-1):
+docker image inspect sherpa-sandbox-runner:dev --format '{{.Id}}'
 ```
 
 ### TR.3 Destructive reset procedure (baseline squash) — **P1 only, and only once** — ✅ **RUN 2026-07-30**
@@ -599,22 +601,37 @@ measured and recorded, and no tool ships with a description over the byte cap.**
 > Vertical (workflow) consolidation candidates are parked in [B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)
 > and need B-11 evidence first.
 
-### TR.8 P3 — tar transport + first-party runner image (mechanical half of B-8)
+### TR.8 P3 — tar transport + first-party runner image (mechanical half of B-8) — ✅ **SHIPPED 2026-07-31**
 
 | # | Task | Paths | TDD / AC |
 |---|---|---|---|
-| P3.1 | Merge the two sandbox modules into one | `backend/app/sandbox/{runner,project_sandbox}.py` → `backend/app/sandbox/runtime.py` | One code path; `scope` distinguishes project vs ephemeral |
-| P3.2 | `WorkspaceTransport` + `TarTransport` (`put_archive`/`get_archive`), **delete every `Mount(type="bind")`**; `/work` becomes an anonymous volume with `nosuid,nodev` | `backend/app/sandbox/transport.py`, `backend/app/sandbox/runtime.py` | Test first with a **fake docker client**: round-trip preserves content, mode bits and the executable flag; grep proves no `type="bind"` remains |
-| P3.3 | Credential strip + assert before the tar is built | `backend/app/sandbox/transport.py` | **Canary test**: a synthetic KEK-shaped secret in `.env`, `id_rsa`, `key.pem` and `.git/config` must not appear in the tar bytes, the overlay, the change set, an artifact, the log, the prompt or a tool result |
-| P3.4 | Egress tar treated as untrusted | `backend/app/sandbox/transport.py` reusing `backend/app/services/archive.py` semantics | Rejects absolute paths, `..`, NUL, device/FIFO, hard links, escaping symlinks → `path_escape` |
-| P3.5 | First-party runner image | new `sandbox-runner/Dockerfile`, `sandbox-runner/capabilities.json`, `sandbox-runner/README.md` | Non-root, read-only-rootfs friendly, pinned versions, python + pytest + ruff, **no git, no curl/wget**; `SANDBOX_IMAGE` is a digest |
-| P3.6 | Config: drop `sandbox_scratch_root`/`sandbox_warm_ttl_seconds`, add `sandbox_runtime_idle_ttl_seconds` | `backend/app/config.py`, `.env.example`, `infra/docker-compose.yml` | Worker starts; no scratch path anywhere |
-| P3.7 | **Real-Docker test lane** | `backend/tests/conftest.py` (`docker` marker + auto-skip), new `backend/tests/test_runtime_docker.py`, `backend/pyproject.toml` marker registration | `uv run pytest -m docker` starts a real container, runs `python -c`, `pytest -q` and `ruff --version`, and asserts real exit codes |
-| P3.V | Topology matrix (TR.11) + failure injection (TR.10) | — | Windows/Docker-Desktop lane green |
+| P3.1 ✅ | Merge the two sandbox modules into one | `backend/app/sandbox/{runner,project_sandbox}.py` → `backend/app/sandbox/runtime.py` | Pure move, no behaviour change; 386 passed. `scope` still distinguishes project vs ephemeral at the model level — the `ephemeral` product path itself is P4. |
+| P3.2 ✅ | `WorkspaceTransport` + `TarTransport` (`put_archive`/`get_archive`), **delete every `Mount(type="bind")`**; `/work` becomes an anonymous volume ~~with `nosuid,nodev`~~ | `backend/app/sandbox/transport.py`, `backend/app/sandbox/runtime.py` | Round trip preserves content, mode bits and the executable flag; the no-bind canary greps **token-stripped** source (so the module may still *explain* the deleted mount). ⚠️ **`nosuid,nodev` NOT set** — docker exposes those flags for tmpfs/bind only, never for an image-declared anonymous volume. Equivalent protection = `cap_drop=ALL` + `no-new-privileges` + non-root. Recorded, not claimed (owner decision D-2). |
+| P3.3 ✅ | Credential strip + assert before the tar is built | `backend/app/sandbox/transport.py` | Canary runs **end to end through the orchestration boundary** with the secret in the base snapshot: absent from tar / overlay / change set / artifact / log / observation, **and not reported as deleted** (held-back paths are merged back before the delta). |
+| P3.4 ✅ | Egress tar treated as untrusted | `backend/app/sandbox/transport.py` reusing `backend/app/services/archive.py` semantics | Absolute, `..`, NUL, device/FIFO, hard link, escaping symlink → `path_escape`, and the boundary persists **nothing the container produced** while keeping explicit host-side edits. |
+| P3.5 ✅ | First-party runner image | new `sandbox-runner/Dockerfile`, `sandbox-runner/capabilities.json`, `.dockerignore`, rewritten `README.md` | Non-root (uid 10001), read-only-rootfs friendly, pinned python 3.11.9 + pytest 8.3.3 + ruff 0.6.9, no git/curl/wget. **`SANDBOX_IMAGE` is pinned by *image ID* digest, not a registry digest** — the image is never pushed, so it has no `RepoDigests` (owner decision D-1; the TR.2 command is corrected below). |
+| P3.6 ✅ | Config: drop `sandbox_scratch_root`/`sandbox_warm_ttl_seconds`, add `sandbox_runtime_idle_ttl_seconds` | `backend/app/config.py`, `.env.example`, `infra/docker-compose.yml`, `backend/tests/db_guard.py` | No scratch path anywhere; `SANDBOX_MEM_MB` 256 → **1024** (pytest+ruff do not fit in 256 MiB, D-3); orphan sweep now removes label-filtered **containers**. |
+| P3.7 ✅ | **Real-Docker test lane** | `backend/tests/conftest.py` (`docker_runner_image` fixture + auto-skip), new `backend/tests/test_runtime_docker.py`, `backend/pyproject.toml` marker + `addopts = "-q -m 'not docker'"` | `uv run pytest -m docker` → **17 passed**: real exit codes, real pytest fail→fix→pass, ruff, no network, uid 10001 + read-only rootfs, no secret env / no `docker.sock`, real OOM → `mem_limit`, real wall-clock kill, credential canary, container+volume removal, label-scoped sweep. **It found a real bug on first run** (implicit parent dirs created root-owned ⇒ the non-root runner could not write in them). |
+| P3.V ✅ | Failure injection (TR.11) + topology matrix (TR.12) | — | See the two tables' status columns below. Windows + Docker Desktop / DooD green; Linux DooD / DinD / rootless **NOT verified** (D-7). |
 
-**P3 exit:** a real command executes in a real container on the Windows dev stack and returns a real
-exit code and stdout; no bind mount and no host path is passed to the daemon anywhere; the canary
-test passes; `uv run pytest -m docker` exists and is green locally.
+**P3 exit — met (2026-07-31).** A real command executes in a real container on the Windows dev
+stack and returns a real exit code and stdout, driven both from `uv run pytest -m docker` and,
+live, from the worker container over DooD and from chat with the real provider
+(`pytest -q` → exit 1 → fix → exit 0; `ruff --version` → 0.6.9; `git --version` → 127). No bind
+mount and no host path reaches the daemon anywhere. The canary passes. `uv run pytest -m docker`
+exists and is green locally.
+
+**Still open after P3 — B-8 does NOT close here** (it closes at the end of P5):
+- no `runtime_open`/`sh_exec`/`fs_*` tools, no async `202`+SSE, no cancel (**P4**);
+- no human Run control / streaming log / Stop — `frontend/src/api.ts::createSandboxRun` is still
+  dead code (**P5**);
+- `cancelled` and `output_limit` (+ typed spill reference) are unimplemented; `pids_limit` has no
+  reliable daemon-side signal and is **not** mapped — a fork bomb surfaces as a plain non-zero
+  exit. All three are recorded in TR.11 rather than quietly assumed.
+
+**Correction to TR.2:** `docker image inspect ... --format '{{index .RepoDigests 0}}'` **cannot
+work** for this image — it is built locally and never pushed, so `RepoDigests` is empty. Use
+`--format '{{.Id}}'`.
 
 ### TR.9 P4 — RuntimeSession + `fs`/`sh`/`run` (product half of B-8)
 
@@ -655,33 +672,40 @@ non-❌ ⬜ cell for this program; UX review recorded.
 
 ### TR.11 Failure injection matrix (every row must map to exactly one named reason)
 
-| Injection | How | Expected |
-|---|---|---|
-| Daemon unreachable | point `DOCKER_HOST` at a dead socket | `runtime_daemon_unreachable` |
-| Image missing | `SANDBOX_IMAGE` = unknown digest | `runtime_image_missing` |
-| Container create fails | invalid resource limit | `runtime_start_failed` |
-| tar put/get fails | fake client raising mid-stream | `runtime_transport_failed` |
-| Sandbox disabled | `SANDBOX_KIND=disabled` | `sandbox_disabled`, **and `fs.*` still works** |
-| Wall timeout | `sleep 999` | `wall_timeout` |
-| OOM | allocate past `SANDBOX_MEM_MB` | `mem_limit` |
-| pids | fork bomb | `pids_limit` |
-| Output flood | 10⁶ lines | `output_limit` + spill reference |
-| Change-set overflow | write past `WORKING_COPY_MAX_*` | `changeset_bounds` + `truncated=true` |
-| Escaping symlink in egress | craft in `/work` | `path_escape` |
-| Stale fence | bump the lease behind a live session | `fence_lost`, overlay **not** published |
-| Head moved | Save from a second chat | `409 head_moved`, nothing applied |
-| Missing blob | delete a MinIO object | named error, no partial tar |
-| Cancel | press Stop mid-run | `cancelled`, boundary still persisted |
+**Status after P3 (measured 2026-07-31, real Docker unless noted).** ✅ = mapped and verified ·
+⬜ = not implemented yet, with the owning phase named. Nothing here is assumed.
+
+| Injection | How | Expected | Status |
+|---|---|---|---|
+| Daemon unreachable | point `DOCKER_HOST` at a dead socket | `runtime_daemon_unreachable` | ✅ real (`DOCKER_HOST=tcp://127.0.0.1:1`) |
+| Image missing | `SANDBOX_IMAGE` = unknown digest | `runtime_image_missing` | ✅ real |
+| Container create fails | invalid resource limit | `runtime_start_failed` | ✅ fake client (a real invalid limit is rejected client-side before the API call) |
+| tar put/get fails | fake client raising mid-stream | `runtime_transport_failed` | ✅ fake client |
+| Sandbox disabled | `SANDBOX_KIND=disabled` | `sandbox_disabled`, **and edits still persist** | ✅ (the `fs.*` half of this row is P4; the *degradation* is verified today) |
+| Wall timeout | `sleep 999` | `wall_timeout` | ✅ real |
+| OOM | allocate past `SANDBOX_MEM_MB` | `mem_limit` | ✅ real (docker `State.OOMKilled`, exit 137) |
+| pids | fork bomb | `pids_limit` | ⬜ **NOT mapped.** Measured: the limit *is* enforced (fork fails) but docker exposes no pids-kill signal, so it surfaces as a plain non-zero exit. Naming it would be a guess dressed as a fact. Needs a decision in **P4**. |
+| Output flood | 10⁶ lines | `output_limit` + spill reference | ⬜ **partial.** Output is capped at 1 MiB with `output_truncated=true`; there is no `output_limit` reason and no typed spill reference — that is api §7.2 debt, **P2.8**. |
+| Change-set overflow | write past `WORKING_COPY_MAX_*` | `changeset_bounds` + `truncated=true` | ✅ unit (DB) |
+| Escaping symlink in egress | craft in `/work` | `path_escape` | ✅ unit + end-to-end (persists nothing the container produced) |
+| Stale fence | bump the lease behind a live session | `fence_lost`, overlay **not** published | ✅ unit (pre-existing) |
+| Head moved | Save from a second chat | `409 head_moved`, nothing applied | ✅ unit (pre-existing) |
+| Missing blob | delete a MinIO object | named error (`blob_missing`), no partial tar | ✅ unit |
+| Cancel | press Stop mid-run | `cancelled`, boundary still persisted | ⬜ **P4** (no cancel path and no Stop control exist yet) |
+| Credential at the boundary | KEK-shaped `.env` in the project | never in tar/overlay/change set/artifact/log/observation | ✅ unit + end-to-end + real container |
 
 ### TR.12 Docker topology matrix (P3 gate)
 
-| Topology | Requirement |
-|---|---|
-| Windows + Docker Desktop + DooD (**the dev stack**) | `uv run pytest -m docker` green; real exit codes |
-| Linux + DooD | green |
-| Linux + DinD | green |
-| No Docker (CI default) | all docker-marked tests skip; `fs.*` tests green; `sandbox_disabled` observation is named and actionable |
-| rootless Docker | verified manually at least once, recorded in the phase exit note |
+**Status after P3 (2026-07-31).** Only the dev topology is verified. The rest are recorded as
+unverified rather than assumed green (owner decision D-7).
+
+| Topology | Requirement | Status |
+|---|---|---|
+| Windows + Docker Desktop + DooD (**the dev stack**) | `uv run pytest -m docker` green; real exit codes | ✅ **verified** — 17 passed, plus a live run *from inside the worker container* over the mounted socket, plus the chat lane with the real provider |
+| Linux + DooD | green | ⬜ **not verified** (no Linux host in this environment) |
+| Linux + DinD | green | ⬜ **not verified** |
+| No Docker (CI default) | all docker-marked tests skip; `sandbox_disabled` observation is named and actionable | ✅ verified — `addopts = "-q -m 'not docker'"` deselects 17; the `docker_runner_image` fixture skips with an actionable message when the daemon or image is missing |
+| rootless Docker | verified manually at least once, recorded in the phase exit note | ⬜ **not verified** |
 
 ### TR.13 Telemetry, budgets and canaries
 

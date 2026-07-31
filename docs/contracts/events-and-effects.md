@@ -804,12 +804,15 @@ is an owner user-level operation and emits no `project.lifecycle` event (it touc
 
 ### 2.11 Project RuntimeSession exec + working-copy save (ADR-040 · ADR-047 · ADR-048)
 
-> **STATUS (2026-07-30).** The **working copy / change set / Save-CAS** discipline below is
-> **`[shipped]`**. The **execution** discipline is **`[target]`**: `project_sandbox_runs` is
-> replaced by `project_runtime_sessions` + `project_exec_runs` (ADR-048), the scratch copy
-> is **tar-injected into an anonymous volume rather than bind-mounted** (ADR-047), and the
-> named-exit list is expanded so that a start failure, an unreachable daemon and a missing
-> image are no longer all reported as `sandbox_unavailable`. Project **file bytes and all
+> **STATUS (2026-07-31).** The **working copy / change set / Save-CAS** discipline below is
+> **`[shipped]`**. The **transport** half of the execution discipline is now **`[shipped]` too
+> (Phase TR P3)**: the disposable copy is **tar-injected into an anonymous volume rather than
+> bind-mounted** (ADR-047), `project_sandbox_runs` is replaced by `project_runtime_sessions` +
+> `project_exec_runs` (ADR-048), and the named-exit list is expanded so that a start failure,
+> an unreachable daemon and a missing image are no longer all reported as `sandbox_unavailable`.
+> The **product** half stays **`[target]`**: `runtime_open` / `sh_exec` / `runtime_close` as
+> tools, async `202` + SSE `runtime.output` frames, and cancel land in **P4**; the human Run
+> lane lands in **P5**. Project **file bytes and all
 > credentials never enter the append-only journal** — bytes live in immutable ADR-030
 > `storage_blobs`; the journal/log carries only ids + bounded metadata + named termination
 > reasons (ADR-016/019/021).
@@ -850,8 +853,8 @@ no-op (its `state='applied'` + `created_snapshot_id` are terminal). *Discard* re
 and leaves the head byte-identical to the base. Idle-expiry release and reservation release are **one
 atomic transition** (an open working copy cannot keep reserved bytes after an independent sweep).
 
-**④ Named termination reasons (every exit) `[target]`.** A `project_exec_runs.termination_reason` /
-`project_runtime_sessions.termination_reason` is one of:
+**④ Named termination reasons (every exit) — mostly `[shipped]`, three gaps named.** A
+`project_exec_runs.termination_reason` / `project_runtime_sessions.termination_reason` is one of:
 
 ```text
 done | cancelled | wall_timeout | mem_limit | pids_limit | output_limit
@@ -863,14 +866,22 @@ done | cancelled | wall_timeout | mem_limit | pids_limit | output_limit
 Every failing exit MUST also emit **one structured worker log line** and **one redacted tool
 observation** naming the same reason. This is the direct fix for backlog B-8, where every
 distinct failure — an unreachable daemon, a failed container create, a disabled sandbox —
-collapsed into one indistinguishable `sandbox_unavailable` with no log at all. **This
-paragraph is `[shipped]` as of Phase TR P0 (2026-07-30)** on the existing `project_sandbox_runs`
-path — `runtime_daemon_unreachable` / `runtime_image_missing` / `runtime_start_failed` /
-`runtime_transport_failed` / `sandbox_disabled` / `error:<class>` each emit one structured
-worker log line (carrying the bounded raw detail) and one static redacted observation for the
-model; the tables and the tar transport around it remain `[target]`. A missing
-dependency is an **explicit** `environment_missing_dependencies` carrying the image's probed
-capability list — the offline sandbox **never** silently enables network to fetch packages.
+collapsed into one indistinguishable `sandbox_unavailable` with no log at all. **Phase TR P0
+(2026-07-30)** shipped the vocabulary and the one-log-one-observation rule; **Phase TR P3
+(2026-07-31)** shipped the tables and the tar transport underneath it and verified the exits
+against a **real** daemon. Measured status, so the gaps are not assumed away:
+
+| Reason | Status |
+|---|---|
+| `done` · `sandbox_disabled` · `runtime_daemon_unreachable` · `runtime_image_missing` · `runtime_start_failed` · `runtime_transport_failed` · `wall_timeout` · `mem_limit` · `environment_missing_dependencies` · `changeset_bounds` · `path_escape` · `fence_lost` · `error:<class>` | **`[shipped]`**, each covered by a test (real Docker where a real daemon can produce it) |
+| `cancelled` | **`[target]` — P4.** No cancel path exists yet. |
+| `output_limit` | **`[target]` — P2.8.** Output *is* bounded (1 MiB) and flagged `output_truncated`, but there is no `output_limit` reason and no typed spill reference (api §7.2 debt). |
+| `pids_limit` | **`[target]` — P4.** The pids cap is enforced by the daemon, but docker exposes no pids-kill signal, so a fork bomb surfaces as a plain non-zero exit. Naming it today would be a guess. |
+
+A missing dependency is an **explicit** `environment_missing_dependencies`; carrying the image's
+**probed capability list** with it needs the `runtime_open` probe and is **`[target]` (P4)** —
+today the mapping is exit 127 ⇒ the named reason, without the "what IS available" list. The
+offline sandbox **never** silently enables network to fetch packages.
 Change-set bounds (`WORKING_COPY_MAX_*`, config §1.7) overflow ⇒ `changeset_bounds` + a
 `truncated` change set (explicit partial), never a silent full-looking diff.
 
