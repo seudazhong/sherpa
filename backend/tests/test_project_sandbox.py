@@ -27,8 +27,9 @@ import pytest
 from app.config import settings
 from app.db import SessionLocal, ping_db
 from app.models import Session as SessionModel
-from app.models import Tenant, User
+from app.models import StorageBlob, Tenant, User
 from app.sandbox import runtime as sbx
+from app.services import project_changes as changes_svc
 from app.services import project_sandbox as sbx_svc
 from app.services import project_workcopy as wc_svc
 from app.services import projects as projects_svc
@@ -512,5 +513,154 @@ async def test_run_sandbox_success_logs_nothing_and_has_no_note(monkeypatch, cap
             assert out.runtime_session.state == "closed"
             assert out.failure_note is None
             assert [r for r in caplog.records if r.name == "app.services.project_sandbox"] == []
+        finally:
+            await s.rollback()
+
+
+# --- credential canary + hostile egress, end to end (config §1.7, ADR-047) ---
+
+
+async def _artifact_bytes(s, ctx, wc):  # type: ignore[no-untyped-def]
+    """Every artifact this working copy produced, as raw bytes."""
+    from app.objectstore import build_object_store
+
+    store = build_object_store()
+    out: list[bytes] = []
+    for art in await changes_svc.list_artifacts(
+        s, ctx, project_id=wc.project_id, working_copy_id=wc.id
+    ):
+        blob = await s.get(StorageBlob, (ctx.tenant_id, wc.user_id, art.content_hash))
+        if blob is not None:
+            out.append(await store.get(blob.object_key))
+    return out
+
+
+@pytest.mark.asyncio
+async def test_credential_canary_never_crosses_the_sandbox_boundary(monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+    """config §1.7's canary, end to end through the real orchestration boundary.
+
+    A KEK-shaped secret sitting in the project tree must not appear in the tar, the change
+    set, an artifact, the worker log or the model-facing observation — and holding it back
+    must NOT be recorded as the sandbox deleting the user's file.
+    """
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    canary = "sherpa-kek-canary-MDEyMzQ1Njc4OWFiY2RlZg=="
+    client = patch_docker(monkeypatch, FakeSpec(stdout=b"ok\n"))
+    assert client is not None
+
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            project, wc = await _open_wc(s, ctx)
+            # Put the secret into the PROJECT itself: write it, then Save so it becomes part
+            # of the immutable base snapshot (head). That is the situation config §1.7
+            # describes — a secret sitting in the project tree the sandbox is asked to work
+            # on — and it is strictly stronger than leaving it as a pending overlay edit.
+            await sbx_svc.run_sandbox(
+                s,
+                ctx,
+                wc,
+                run_id=uuid.uuid4(),
+                request=sbx_svc.SandboxRequest(
+                    edits=[
+                        sbx.ScratchEdit(path=".env", op="write", data=f"KEK={canary}\n".encode()),
+                        sbx.ScratchEdit(path="deploy/id_rsa", op="write", data=canary.encode()),
+                    ]
+                ),
+            )
+            await wc_svc.save(s, ctx, wc)
+            wc = await wc_svc.open_working_copy(s, ctx, session_id=wc.session_id)
+            eff = await wc_svc.effective_tree(s, ctx, wc)
+            assert ".env" in eff and "deploy/id_rsa" in eff
+            assert wc.overlay_entry_count == 0  # the secret lives in the base, not the overlay
+
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG):
+                out = await sbx_svc.run_sandbox(
+                    s,
+                    ctx,
+                    wc,
+                    run_id=uuid.uuid4(),
+                    request=sbx_svc.SandboxRequest(command="python -c 'print(1)'"),
+                )
+            assert out.termination_reason == "done"
+
+            # 1. never in the tar that reached the daemon
+            container = client.containers.container
+            assert container is not None
+            assert canary.encode() not in container.ingested_tar
+            assert ".env" not in container.ingested
+            assert "deploy/id_rsa" not in container.ingested
+
+            # 2. never copied into the overlay — held back is NOT deleted, and NOT re-added
+            eff2 = await wc_svc.effective_tree(s, ctx, wc)
+            assert eff2[".env"].content_hash == eff[".env"].content_hash
+            assert eff2["deploy/id_rsa"].content_hash == eff["deploy/id_rsa"].content_hash
+            assert wc.overlay_entry_count == 0
+
+            # 3. never in the change set produced by this boundary
+            if out.change_set_id is not None:
+                cs = await changes_svc.get_change_set(
+                    s, ctx, project_id=wc.project_id, cs_id=out.change_set_id
+                )
+                entries, _ = await changes_svc.get_change_set_entries(s, ctx, cs)
+                assert {e.path for e in entries} & {".env", "deploy/id_rsa"} == set()
+
+            # 4. never in an artifact
+            for blob in await _artifact_bytes(s, ctx, wc):
+                assert canary.encode() not in blob
+
+            # 5. never in the worker log, and never in the model-facing observation
+            assert all(canary not in r.getMessage() for r in caplog.records)
+            assert out.failure_note is None
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_hostile_egress_persists_nothing_from_the_container(monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+    """An egress tar that tries to escape ends the boundary with ``path_escape`` and no
+    container-produced file reaches the overlay. The user's own explicit edit still
+    persists: error-is-observation, never a crash and never silent data loss."""
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for name in ("work/../../evil.txt", "work/planted.txt"):
+            info = tarfile.TarInfo(name)
+            info.size = 4
+            tf.addfile(info, io.BytesIO(b"evil"))
+    patch_docker(monkeypatch, FakeSpec(egress_tar=buf.getvalue()))
+
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            project, wc = await _open_wc(s, ctx)
+            caplog.clear()
+            with caplog.at_level(logging.WARNING, logger="app.services.project_sandbox"):
+                out = await sbx_svc.run_sandbox(
+                    s,
+                    ctx,
+                    wc,
+                    run_id=uuid.uuid4(),
+                    request=sbx_svc.SandboxRequest(
+                        edits=[sbx.ScratchEdit(path="mine.txt", op="write", data=b"mine\n")],
+                        command="python evil.py",
+                    ),
+                )
+            assert out.termination_reason == "path_escape"
+            assert out.failure_note is not None and "path_escape" in out.failure_note
+            records = [r for r in caplog.records if r.name == "app.services.project_sandbox"]
+            assert len(records) == 1
+
+            eff = await wc_svc.effective_tree(s, ctx, wc)
+            # Nothing the container produced landed; the explicit host-side edit did.
+            assert "planted.txt" not in eff
+            assert "evil.txt" not in eff
+            assert eff["mine.txt"].content_hash is not None
         finally:
             await s.rollback()
