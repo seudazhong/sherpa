@@ -52,6 +52,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -71,9 +72,23 @@ from app.sandbox.transport import (
 SANDBOX_DISABLED = "sandbox_disabled"
 RUNTIME_DAEMON_UNREACHABLE = "runtime_daemon_unreachable"
 RUNTIME_IMAGE_MISSING = "runtime_image_missing"
+RUNTIME_IMAGE_UNTRUSTED = "runtime_image_untrusted"
 RUNTIME_START_FAILED = "runtime_start_failed"
 RUNTIME_TRANSPORT_FAILED = "runtime_transport_failed"
 MEM_LIMIT = "mem_limit"
+
+#: An immutable image reference: a bare image ID digest (``sha256:<64 hex>``) or a
+#: repository digest (``name@sha256:<64 hex>``). A tag is deliberately NOT accepted — a tag
+#: can be re-pointed at different bytes after review, which is exactly what config §1.7's
+#: "pinned digest" rule exists to prevent.
+_IMAGE_DIGEST_RE = re.compile(r"^(?:[A-Za-z0-9][\w.\-/]*@)?sha256:[0-9a-f]{64}$")
+
+#: The runner image identifies itself with this OCI title label. Checking it means a
+#: *syntactically* immutable reference that points at some unrelated image is still refused:
+#: pinning proves the bytes cannot change, not that they are the right bytes.
+RUNNER_IMAGE_TITLE = "sherpa-sandbox-runner"
+RUNNER_TITLE_LABEL = "org.opencontainers.image.title"
+RUNNER_CAPABILITIES_LABEL = "sherpa.capabilities"
 
 #: One redacted, model-facing sentence per runtime reason. Static by construction: it names
 #: the reason and stays actionable, but carries no host path, image reference, daemon message
@@ -88,6 +103,10 @@ RUNTIME_FAILURE_NOTES: dict[str, str] = {
     RUNTIME_IMAGE_MISSING: (
         "the sandbox runner image is not available locally, and the offline sandbox never "
         "reaches the network to pull it, so no command was executed"
+    ),
+    RUNTIME_IMAGE_UNTRUSTED: (
+        "the configured sandbox runner image is not an approved, digest-pinned first-party "
+        "runner, so no command was executed"
     ),
     RUNTIME_START_FAILED: (
         "the sandbox container could not be created or started, so no command was executed"
@@ -191,6 +210,18 @@ class ScratchError(Exception):
         self.code = code
 
 
+@dataclasses.dataclass(frozen=True)
+class BaselineEntry:
+    """What a file looked like when the disposable copy was materialized.
+
+    The delta compares **content hash and executable bit**. Hash alone was not enough: a
+    `chmod +x` with byte-identical content produced an empty delta, so the mode change was
+    silently dropped instead of reaching the change set."""
+
+    content_hash: bytes
+    executable: bool = False
+
+
 @dataclasses.dataclass
 class Workspace:
     """The one-time disposable copy of the working copy — in memory, never on the host disk.
@@ -203,7 +234,7 @@ class Workspace:
 
     files: dict[str, WorkspaceFile] = dataclasses.field(default_factory=dict)
     dirs: set[str] = dataclasses.field(default_factory=set)
-    base_manifest: dict[str, bytes] = dataclasses.field(default_factory=dict)
+    base_manifest: dict[str, BaselineEntry] = dataclasses.field(default_factory=dict)
     held_back: set[str] = dataclasses.field(default_factory=set)
     total_bytes: int = 0
 
@@ -275,9 +306,10 @@ async def materialize(entries: list[MaterializeEntry], read_blob: BlobReader) ->
             raise ScratchError("scratch_too_large")
         ws.files[path] = WorkspaceFile(data=data, executable=e.executable)
         if e.entry_kind == "file" and e.content_hash is not None:
-            ws.base_manifest[path] = e.content_hash
+            digest = e.content_hash
         else:
-            ws.base_manifest[path] = hashlib.sha256(data).digest()
+            digest = hashlib.sha256(data).digest()
+        ws.base_manifest[path] = BaselineEntry(content_hash=digest, executable=e.executable)
         if is_credential_path(path):
             ws.held_back.add(path)
     return ws
@@ -334,7 +366,10 @@ def compute_delta(ws: Workspace, result_files: dict[str, WorkspaceFile]) -> Delt
         base = ws.base_manifest.get(rel)
         if base is None:
             kind = "added"
-        elif base != digest:
+        elif base.content_hash != digest or base.executable != f.executable:
+            # An executable-bit flip with byte-identical content IS a change: it is what
+            # `chmod +x` does, it is persisted in the overlay, and comparing hashes alone
+            # dropped it on the floor.
             kind = "modified"
         else:
             continue
@@ -395,6 +430,136 @@ def _transport_failure(exc: TransportError) -> RunResult:
     return RunResult("", "", -1, False, error=exc.code, error_detail=exc.detail[:DETAIL_MAX])
 
 
+def _is_read_timeout(exc: BaseException) -> bool:
+    """True only for a genuine *read timeout* on the wait call.
+
+    This needs care, and getting it wrong is how a broken daemon gets reported to the user as
+    "your command took too long". docker-py does **not** translate the timeout: measured
+    against a real daemon, ``container.wait(timeout=N)`` raises
+    ``requests.exceptions.ConnectionError(ReadTimeoutError(...))`` — the *same class* a
+    genuinely unreachable daemon raises. Class alone therefore cannot decide it; the
+    exception chain has to be walked for a timeout marker.
+    """
+    try:
+        import requests.exceptions as rexc
+        import urllib3.exceptions as uexc
+    except Exception:  # noqa: BLE001 - if these are absent nothing here can be a timeout
+        return False
+
+    timeout_types: tuple[type[BaseException], ...] = (
+        rexc.Timeout,
+        uexc.TimeoutError,
+        uexc.ReadTimeoutError,
+        TimeoutError,
+    )
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, timeout_types):
+            return True
+        # requests wraps the urllib3 cause in .args rather than __cause__ in this path.
+        nxt: BaseException | None = cur.__cause__ or cur.__context__
+        if nxt is None:
+            for arg in getattr(cur, "args", ()):
+                if isinstance(arg, BaseException):
+                    nxt = arg
+                    break
+        cur = nxt
+    return False
+
+
+def _classify_wait_failure(exc: BaseException) -> RunResult:
+    """Map a non-timeout ``container.wait`` failure onto its contract-named reason.
+
+    Note ``requests.exceptions.ConnectionError`` is **not** a builtin ``ConnectionError`` —
+    it inherits from ``OSError`` via ``RequestException`` — so it has to be named explicitly
+    rather than caught by the builtin.
+    """
+    from docker.errors import APIError, DockerException
+
+    if isinstance(exc, APIError):
+        # The daemon answered, and answered with an error: a transport/API fault, not an
+        # unreachable daemon.
+        return named_failure(RUNTIME_TRANSPORT_FAILED, exc)
+    try:
+        import requests.exceptions as rexc
+
+        if isinstance(exc, rexc.RequestException):
+            return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
+    except Exception:  # noqa: BLE001 - requests missing just means we fall through
+        pass
+    if isinstance(exc, DockerException | ConnectionError | OSError):
+        return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
+    return unmodelled_failure(exc)
+
+
+def _kill_quietly(container: Any) -> None:
+    """Best-effort kill. The caller has already decided the named reason; failing to kill a
+    container that may already be gone must not change it."""
+    try:
+        container.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def is_pinned_image_reference(ref: str) -> bool:
+    """True when ``ref`` names bytes that cannot change under us (config §1.7)."""
+    return bool(_IMAGE_DIGEST_RE.match(ref.strip()))
+
+
+def verify_runner_image(client: Any, ref: str) -> RunResult | None:
+    """Fail closed unless ``ref`` is a digest-pinned, first-party runner image.
+
+    Returns ``None`` when the image is approved, or the named failure to report. Two
+    independent checks, because either alone is insufficient:
+
+    1. **the reference is immutable** — a tag such as ``sherpa-sandbox-runner:dev`` is
+       rejected outright. Before this, "digest pinning" existed only in comments while every
+       default shipped a mutable tag, so the deployed sandbox ran whatever that tag pointed
+       at today;
+    2. **the image is ours** — it must carry the ``org.opencontainers.image.title`` label of
+       the first-party runner. Pinning proves the bytes are stable; the label is what proves
+       they are the *right* bytes, so a digest for some unrelated image is still refused.
+    """
+    from docker.errors import APIError, DockerException, ImageNotFound
+
+    ref = (ref or "").strip()
+    if not ref:
+        return named_failure(
+            RUNTIME_IMAGE_UNTRUSTED,
+            ValueError(
+                "SANDBOX_IMAGE is not set; build the runner "
+                "(docker build -t sherpa-sandbox-runner:dev sandbox-runner) and pin it by "
+                "digest (docker image inspect ... --format '{{.Id}}')"
+            ),
+        )
+    if not is_pinned_image_reference(ref):
+        return named_failure(
+            RUNTIME_IMAGE_UNTRUSTED,
+            ValueError(f"SANDBOX_IMAGE {ref!r} is not digest-pinned (expected sha256:<64 hex>)"),
+        )
+    try:
+        image = client.images.get(ref)
+    except ImageNotFound as exc:
+        return named_failure(RUNTIME_IMAGE_MISSING, exc)
+    except (APIError, DockerException) as exc:
+        return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
+    except Exception as exc:  # noqa: BLE001
+        return unmodelled_failure(exc)
+
+    labels = (image.labels or {}) if hasattr(image, "labels") else {}
+    if labels.get(RUNNER_TITLE_LABEL) != RUNNER_IMAGE_TITLE:
+        return named_failure(
+            RUNTIME_IMAGE_UNTRUSTED,
+            ValueError(
+                f"image {ref!r} is not the first-party runner "
+                f"({RUNNER_TITLE_LABEL}={labels.get(RUNNER_TITLE_LABEL)!r})"
+            ),
+        )
+    return None
+
+
 def _run_docker(ws: Workspace, command: str) -> ExecOutcome:
     """Create → tar in → start → wait → logs → tar out → remove. No mount, no host path."""
     import docker
@@ -406,6 +571,11 @@ def _run_docker(ws: Workspace, command: str) -> ExecOutcome:
         return ExecOutcome(named_failure(RUNTIME_DAEMON_UNREACHABLE, exc))
     except Exception as exc:  # noqa: BLE001 - classify and observe, never crash the loop
         return ExecOutcome(unmodelled_failure(exc))
+
+    # Fail closed BEFORE anything is created: an unpinned or foreign image never runs.
+    rejected = verify_runner_image(client, settings.sandbox_image)
+    if rejected is not None:
+        return ExecOutcome(rejected)
 
     try:
         container = client.containers.create(
@@ -454,13 +624,16 @@ def _run_docker(ws: Workspace, command: str) -> ExecOutcome:
         try:
             res = container.wait(timeout=settings.sandbox_run_timeout_seconds)
             exit_code = int(res.get("StatusCode", -1))
-        except Exception:  # noqa: BLE001 - any wait failure is a wall-clock kill for us
+        except Exception as exc:  # noqa: BLE001 - classify, never crash the loop
+            _kill_quietly(container)
+            if not _is_read_timeout(exc):
+                # A daemon that died, a dropped connection or an API error is NOT a wall
+                # clock kill. Reporting it as `wall_timeout` told the user their command was
+                # too slow when the truth was that the runtime broke underneath it.
+                return ExecOutcome(_classify_wait_failure(exc))
             timed_out = True
             exit_code = -1
-            try:
-                container.kill()
-            except Exception:  # noqa: BLE001
-                pass
+            _kill_quietly(container)
 
         try:
             container.reload()
@@ -538,8 +711,15 @@ async def run_workspace(ws: Workspace, command: str) -> ExecOutcome:
 
 def sweep_orphan_containers() -> int:
     """Remove sandbox containers left behind by a crashed worker. Containers are rebuildable
-    caches — removing one never loses a persisted boundary. Only containers carrying this
-    deployment's label are touched. Returns the count removed."""
+    caches — removing one never loses a persisted boundary. Returns the count removed.
+
+    ⚠️ **Scope caveat, stated rather than glossed:** the filter is the ``sherpa.runtime``
+    label, which is *this software's* label, **not this deployment's**. Two Sherpa workers
+    sharing one Docker daemon would sweep each other's live containers. That is out of scope
+    here (v1 is single-user self-hosted, ADR-022) but it is a real constraint, not a
+    hypothetical: it needs a per-deployment label value before any multi-worker or
+    multi-tenant deployment, which ADR-039's do-not-ship conditions already gate.
+    """
     if settings.sandbox_kind != "docker":
         return 0
     try:

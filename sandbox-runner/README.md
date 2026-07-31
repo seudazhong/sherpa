@@ -36,7 +36,7 @@ Sherpa 编码沙箱的 **自建执行镜像**（ADR-047 §决策4，负责人拍
 所以今天**没有设**。等效防护由 `cap_drop=ALL` + `no-new-privileges` + 非 root 承担
 （setuid 提不了权，无 `CAP_MKNOD` 建不了设备节点）。不写成"已设"。
 
-## 构建与固定（按 image ID digest）
+## 构建与固定（按 image ID digest）—— **强制，不是建议**
 
 镜像是本地构建、**不推送**的，因此没有 registry `RepoDigests`——用 **image ID digest** 固定：
 
@@ -46,8 +46,28 @@ docker image inspect sherpa-sandbox-runner:dev --format '{{.Id}}'
 # 把输出的 sha256:... 写进 .env 的 SANDBOX_IMAGE
 ```
 
-worker 启动时会检查 `SANDBOX_IMAGE` 是否存在；不存在则该次执行返回
-`runtime_image_missing`（断网沙箱不会去拉）。
+**运行时对此是 fail-closed 强制的**（`app/sandbox/runtime.py::verify_runner_image`，
+在创建容器**之前**执行）。两道独立检查：
+
+1. **引用必须不可变** —— `sherpa-sandbox-runner:dev` 这样的 **tag 会被直接拒绝**，
+   返回具名出口 `runtime_image_untrusted`。tag 随时可以被重新指向别的字节，
+   而"评审过的镜像"和"实际跑的镜像"必须是同一个。
+2. **镜像必须是我们自己的** —— 必须带 `org.opencontainers.image.title=sherpa-sandbox-runner`
+   标签。固定只证明字节不会变，标签才证明它是**对的**字节；随便一个合法 digest
+   （比如 stock `python`）同样会被拒。
+
+因此 `SANDBOX_IMAGE` **没有可用的默认值**：全新 checkout 会明确失败，而不是"看起来能跑"
+却在跑一个可变 tag 指向的未知镜像。
+
+区分两种失败：**已固定但本地没有** → `runtime_image_missing`（断网沙箱不会去拉）；
+**未固定 / 不是我们的镜像** → `runtime_image_untrusted`。
+
+> ⚠️ **勘误（2026-07-31）**：本节此前写 "worker 启动时会检查 `SANDBOX_IMAGE` 是否存在"。
+> **没有这样的启动期预检**——检查发生在**每次执行前**，不是进程启动时。已按实际行为改写。
+
+基础镜像也按 **registry digest** 固定（`python:3.11.9-slim-bookworm@sha256:8fb09919…`），
+理由同上：上游每次安全重建都会把 tag 指向新字节。刷新时显式执行 `docker pull` +
+`docker image inspect ... --format '{{index .RepoDigests 0}}'` 后改 Dockerfile。
 
 ## 运行约束（由编排方施加，见 `backend/app/sandbox/runtime.py`）
 
@@ -55,6 +75,11 @@ worker 启动时会检查 `SANDBOX_IMAGE` 是否存在；不存在则该次执�
 只读 rootfs + tmpfs `/tmp`（`nosuid,nodev`）· mem/pids/cpu 上限 ·
 墙钟上限（`SANDBOX_RUN_TIMEOUT_SECONDS`）· `--rm` · **无任何密钥注入**。
 `.env*` / `*.pem` / `*.key` / `id_*` / `.git/config` 在打包前就被拦下，永不进 tar。
+
+**镜像不由 compose 构建。** `infra/docker-compose.yml` 里没有 `sandbox-runner` 服务，
+`docker compose up --build` **不会**构建它——它是被 worker 通过 docker socket 启动的
+兄弟容器，不是编排的一部分。改了本目录任何文件之后，必须手动重跑上面的
+`docker build` 并**重新固定 digest**，否则跑的还是旧镜像（或者 digest 对不上而失败）。
 
 ## 不在本镜像范围内
 

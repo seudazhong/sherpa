@@ -143,14 +143,16 @@ class Settings(BaseSettings):
     # SANDBOX_RUN_TIMEOUT_SECONDS below.
     #
     # SANDBOX_IMAGE MUST be the repository's own sandbox-runner image, pinned by digest
-    # (config §1.7) — never a stock upstream tag, which has no pytest/ruff, no /work volume
-    # and no capabilities manifest. It is built locally and never pushed, so it has no
-    # registry RepoDigest; pin it by IMAGE ID digest:
+    # (config §1.7), and this is enforced fail-closed at run time by
+    # app/sandbox/runtime.verify_runner_image — an unpinned tag or a foreign image is
+    # refused with `runtime_image_untrusted` rather than silently executed. It is built
+    # locally and never pushed, so it has no registry RepoDigest; pin it by IMAGE ID digest:
     #   docker build -t sherpa-sandbox-runner:dev sandbox-runner
     #   docker image inspect sherpa-sandbox-runner:dev --format '{{.Id}}'
-    # The tag below is only the default a fresh checkout starts from.
+    # The default is EMPTY on purpose: a fresh checkout must not appear to work by running
+    # whatever a mutable tag happens to point at today.
     sandbox_kind: str = "disabled"
-    sandbox_image: str = "sherpa-sandbox-runner:dev"
+    sandbox_image: str = ""
     sandbox_mem_mb: int = 1024
     sandbox_pids_limit: int = 128
 
@@ -163,7 +165,13 @@ class Settings(BaseSettings):
     # actually needs is SANDBOX_RUNTIME_IDLE_TTL_SECONDS (wired by P4).
     working_copy_idle_ttl_seconds: int = 86400  # durable working-copy idle expiry
     sandbox_runtime_idle_ttl_seconds: int = 600  # RuntimeSession idle TTL (P4 lifecycle)
-    sandbox_scratch_max_bytes: int = 2 * 1024 * 1024 * 1024  # per-session tar cap (2 GiB)
+    # Bounds the tar in BOTH directions, and therefore the worker's peak memory while it
+    # transfers a workspace: the whole archive is streamed, but every retained file is held
+    # in memory. 512 MiB, not the earlier 2 GiB, for two reasons that both point the same
+    # way: the worker would otherwise be asked to hold multiples of its own footprint, and
+    # 2 GiB was internally incoherent with WORKING_COPY_MAX_CHANGED_BYTES (500 MiB), which
+    # rejects any change set that large downstream anyway.
+    sandbox_scratch_max_bytes: int = 512 * 1024 * 1024  # per-session tar cap (512 MiB)
     working_copy_max_changed_files: int = 5000  # change-set bound: changed-file count
     working_copy_max_changed_bytes: int = 500 * 1024 * 1024  # change-set bound: changed bytes
     working_copy_max_artifact_bytes: int = 200 * 1024 * 1024  # change-set bound: artifact bytes

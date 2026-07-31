@@ -859,9 +859,31 @@ atomic transition** (an open working copy cannot keep reserved bytes after an in
 ```text
 done | cancelled | wall_timeout | mem_limit | pids_limit | output_limit
 | environment_missing_dependencies | changeset_bounds | path_escape | fence_lost
-| runtime_start_failed | runtime_image_missing | runtime_daemon_unreachable
-| runtime_transport_failed | sandbox_disabled | error:<class>
+| runtime_start_failed | runtime_image_missing | runtime_image_untrusted
+| runtime_daemon_unreachable | runtime_transport_failed | sandbox_disabled | error:<class>
 ```
+
+> **`runtime_image_untrusted` added 2026-07-31** (P3 review fix). The configured runner image
+> is not an approved, digest-pinned first-party runner, so **nothing was created or executed**.
+> It is deliberately distinct from `runtime_image_missing`: "not built yet" and "not allowed
+> to run" are different operator problems with different fixes, and collapsing them is the
+> same mistake `sandbox_unavailable` made. See config §1.7 "Image boundary".
+
+**Classification rules that are part of this contract, not implementation detail.** Two of
+these were violated by the first P3 implementation and are written down so the mistake cannot
+recur:
+
+- **A wall-clock overrun is the *only* thing that may be reported as `wall_timeout`.** The
+  runtime library does not translate its own timeouts — a real daemon surfaces a `wait`
+  timeout as `ConnectionError(ReadTimeoutError(...))`, the *same class* an unreachable daemon
+  raises — so the implementation MUST distinguish them by inspecting the exception chain, not
+  by class alone. A daemon that dies mid-run is `runtime_daemon_unreachable`; an API error is
+  `runtime_transport_failed`; anything unrecognized is `error:<class>`. Reporting an outage as
+  `wall_timeout` tells the user their command was too slow when the runtime broke underneath
+  it, which sends them to debug the wrong thing.
+- **A runtime fault must not be dressed up as a command outcome.** When the boundary fails for
+  a runtime reason, it reports no exit code and no egress tree; `exit_code`/`timed_out` are
+  only meaningful when the command actually ran.
 
 Every failing exit MUST also emit **one structured worker log line** and **one redacted tool
 observation** naming the same reason. This is the direct fix for backlog B-8, where every
@@ -873,7 +895,7 @@ against a **real** daemon. Measured status, so the gaps are not assumed away:
 
 | Reason | Status |
 |---|---|
-| `done` · `sandbox_disabled` · `runtime_daemon_unreachable` · `runtime_image_missing` · `runtime_start_failed` · `runtime_transport_failed` · `wall_timeout` · `mem_limit` · `environment_missing_dependencies` · `changeset_bounds` · `path_escape` · `fence_lost` · `error:<class>` | **`[shipped]`**, each covered by a test (real Docker where a real daemon can produce it) |
+| `done` · `sandbox_disabled` · `runtime_daemon_unreachable` · `runtime_image_missing` · `runtime_image_untrusted` · `runtime_start_failed` · `runtime_transport_failed` · `wall_timeout` · `mem_limit` · `environment_missing_dependencies` · `changeset_bounds` · `path_escape` · `fence_lost` · `error:<class>` | **`[shipped]`**, each covered by a test (real Docker where a real daemon can produce it) |
 | `cancelled` | **`[target]` — P4.** No cancel path exists yet. |
 | `output_limit` | **`[target]` — P2.8.** Output *is* bounded (1 MiB) and flagged `output_truncated`, but there is no `output_limit` reason and no typed spill reference (api §7.2 debt). |
 | `pids_limit` | **`[target]` — P4.** The pids cap is enforced by the daemon, but docker exposes no pids-kill signal, so a fork bomb surfaces as a plain non-zero exit. Naming it today would be a guess. |

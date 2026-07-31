@@ -170,7 +170,10 @@ async def test_a_missing_tool_is_reported_as_a_missing_dependency_not_a_download
 
 
 async def test_a_missing_image_is_its_own_named_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "sandbox_image", "sherpa-sandbox-runner:does-not-exist-xyz")
+    """A digest-pinned image that is simply not built must say so. "Not built yet" and "not
+    allowed" are different operator problems and must not collapse into one name — so the
+    reference here is deliberately well-formed and absent, not a tag."""
+    monkeypatch.setattr(settings, "sandbox_image", "sha256:" + "1e" * 32)
     ws = await _ws({"a.txt": b"a\n"})
     out = await sbx.run_workspace(ws, "true")
     assert out.result.error == sbx.RUNTIME_IMAGE_MISSING
@@ -261,3 +264,100 @@ async def test_a_workspace_file_keeps_its_executable_bit_in_a_real_container() -
     assert out.result.error is None, out.result.error_detail
     assert out.result.exit_code == 0
     assert "ran" in out.result.stdout
+
+
+async def test_a_real_chmod_plus_x_is_detected_without_a_content_change() -> None:
+    """Blocker 3 against a real container: ``chmod +x`` alone, bytes untouched.
+
+    The baseline used to store only a content hash, so this produced an **empty delta** and
+    the mode change was silently dropped on the way to the change set."""
+    ws = await _ws({"run.sh": b"#!/bin/sh\necho hi\n"})
+    assert ws.files["run.sh"].executable is False
+    out = await sbx.run_workspace(ws, "chmod +x run.sh && ls -l run.sh")
+    assert out.result.error is None, out.result.error_detail
+    assert out.result.exit_code == 0
+    assert out.files is not None
+    assert out.files["run.sh"].executable is True
+    assert out.files["run.sh"].data == ws.files["run.sh"].data  # content really is identical
+
+    delta = sbx.compute_delta(ws, out.files)
+    assert {e.path: e.change_kind for e in delta.entries} == {"run.sh": "modified"}
+    assert delta.entries[0].executable is True
+
+
+async def test_a_real_chmod_minus_x_is_detected_without_a_content_change() -> None:
+    ws = await _ws({"run.sh": b"#!/bin/sh\necho hi\n"})
+    ws.files["run.sh"] = WorkspaceFile(data=ws.files["run.sh"].data, executable=True)
+    ws.base_manifest["run.sh"] = sbx.BaselineEntry(
+        content_hash=ws.base_manifest["run.sh"].content_hash, executable=True
+    )
+    out = await sbx.run_workspace(ws, "chmod -x run.sh && ls -l run.sh")
+    assert out.result.error is None, out.result.error_detail
+    assert out.files is not None
+    assert out.files["run.sh"].executable is False
+    delta = sbx.compute_delta(ws, out.files)
+    assert {e.path: e.change_kind for e in delta.entries} == {"run.sh": "modified"}
+    assert delta.entries[0].executable is False
+
+
+async def test_a_real_untouched_workspace_produces_no_delta() -> None:
+    """The other half: comparing the mode must not invent phantom churn on a real round trip."""
+    ws = await _ws({"a.txt": b"a\n", "run.sh": b"#!/bin/sh\n"})
+    out = await sbx.run_workspace(ws, "true")
+    assert out.result.error is None, out.result.error_detail
+    assert out.files is not None
+    assert sbx.compute_delta(ws, out.files).entries == []
+
+
+async def test_a_mutable_tag_is_refused_against_a_real_daemon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blocker 2 against a real daemon: the tag exists and is pullable locally, and must
+    still be refused, because a tag can be re-pointed at different bytes after review."""
+    monkeypatch.setattr(settings, "sandbox_image", "sherpa-sandbox-runner:dev")
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(ws, "true")
+    assert out.result.error == sbx.RUNTIME_IMAGE_UNTRUSTED
+
+
+async def test_a_real_foreign_image_is_refused_even_when_digest_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real, immutable digest for an image that is not our runner must not run."""
+    import docker
+    from docker.errors import ImageNotFound
+
+    client = docker.from_env()
+    try:
+        foreign = client.images.get("python:3.11-slim")
+    except ImageNotFound:
+        pytest.skip("python:3.11-slim not present locally")
+    monkeypatch.setattr(settings, "sandbox_image", str(foreign.id))
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(ws, "true")
+    assert out.result.error == sbx.RUNTIME_IMAGE_UNTRUSTED
+
+
+async def test_the_real_runner_advertises_the_identity_labels_we_check(
+    docker_runner_image: str,
+) -> None:
+    """If the image ever stops carrying these, every sandbox run fails closed — so the
+    contract between the Dockerfile and `verify_runner_image` is asserted explicitly."""
+    import docker
+
+    client = docker.from_env()
+    labels = client.images.get(docker_runner_image).labels
+    assert labels.get(sbx.RUNNER_TITLE_LABEL) == sbx.RUNNER_IMAGE_TITLE
+    assert labels.get(sbx.RUNNER_CAPABILITIES_LABEL)
+
+
+async def test_a_real_read_timeout_is_reported_as_a_timeout_not_an_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blocker 4 against a real daemon: a genuine wall-clock overrun must set ``timed_out``
+    and must NOT be reported as a daemon/transport failure."""
+    monkeypatch.setattr(settings, "sandbox_run_timeout_seconds", 3)
+    ws = await _ws({"a.txt": b"a\n"})
+    out = await sbx.run_workspace(ws, "sleep 999")
+    assert out.result.timed_out is True
+    assert out.result.error is None

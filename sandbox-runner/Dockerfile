@@ -19,17 +19,28 @@
 #     orchestrator so a missing tool can be reported with the list of what IS available
 #     instead of a bare exit 127.
 #
-# Build + pin (the image is local-only, so it is pinned by image ID digest, not a registry
-# RepoDigest — an unpushed image has none):
+# Build + pin. The runtime **refuses to run an unpinned or foreign image** (fail-closed in
+# app/sandbox/runtime.verify_runner_image), so this is a required step, not a nicety:
 #
 #   docker build -t sherpa-sandbox-runner:dev sandbox-runner/
 #   docker image inspect sherpa-sandbox-runner:dev --format '{{.Id}}'
 #   # put that sha256:... in SANDBOX_IMAGE
 #
+# The image is local-only and never pushed, so it is pinned by image ID digest rather than a
+# registry RepoDigest. The `org.opencontainers.image.title` label below is what the runtime
+# checks to confirm the pinned bytes are actually *this* runner: pinning proves the bytes
+# cannot change, the label proves they are the right ones.
+#
 # Node is a later optional profile (O-6). Production isolation (gVisor / microVM, no shared
 # docker.sock) remains ADR-039's do-not-ship gate and is NOT addressed by this image.
 
-FROM python:3.11.9-slim-bookworm
+# The base is pinned by **registry digest**, not by the `3.11.9-slim-bookworm` tag. A tag is
+# re-pointed at new bytes on every security rebuild upstream, so a tag-based FROM means the
+# runner that was reviewed and the runner that ships are not necessarily the same image —
+# which is the same property SANDBOX_IMAGE is pinned for one level up. Refresh deliberately:
+#   docker pull python:3.11.9-slim-bookworm
+#   docker image inspect python:3.11.9-slim-bookworm --format '{{index .RepoDigests 0}}'
+FROM python:3.11.9-slim-bookworm@sha256:8fb099199b9f2d70342674bd9dbccd3ed03a258f26bbd1d556822c6dfc60c317
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

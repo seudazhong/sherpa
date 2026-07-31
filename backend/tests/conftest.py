@@ -65,13 +65,21 @@ async def _dispose_engine_between_tests() -> AsyncIterator[None]:
 
 @pytest.fixture
 def docker_runner_image() -> str:
-    """The real sandbox-runner image, or skip.
+    """The real sandbox-runner image, pinned by digest, or skip.
 
     ``-m docker`` selects the lane; this fixture is what makes it *safe* to select on a
     machine that has no daemon or has not built the image yet — it skips with an actionable
     message instead of failing with a docker traceback.
+
+    It resolves the locally built tag to its **image ID digest**, because the runtime refuses
+    an unpinned reference (config §1.7, enforced by ``verify_runner_image``). Resolving here
+    rather than requiring `SANDBOX_IMAGE` in the environment keeps the lane runnable straight
+    after `docker build`, while the production gate itself is tested separately and
+    adversarially in ``tests/test_runtime_hardening.py``.
     """
-    image = settings.sandbox_image
+    from app.sandbox.runtime import is_pinned_image_reference
+
+    configured = (settings.sandbox_image or "").strip()
     try:
         import docker
         from docker.errors import ImageNotFound
@@ -80,11 +88,15 @@ def docker_runner_image() -> str:
         client.ping()
     except Exception as exc:  # noqa: BLE001 - any daemon problem is a skip, not a failure
         pytest.skip(f"docker daemon not reachable: {exc}")
+
+    candidate = configured or "sherpa-sandbox-runner:dev"
     try:
-        client.images.get(image)
+        image = client.images.get(candidate)
     except ImageNotFound:
         pytest.skip(
-            f"sandbox runner image {image!r} not built — run: "
+            f"sandbox runner image {candidate!r} not built — run: "
             "docker build -t sherpa-sandbox-runner:dev sandbox-runner"
         )
-    return image
+    if is_pinned_image_reference(candidate):
+        return candidate
+    return str(image.id)

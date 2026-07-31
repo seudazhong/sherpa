@@ -162,10 +162,12 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-sherpa-files}
       SANDBOX_KIND: ${SANDBOX_KIND:-docker}
       # ADR-047: the runner image is this repo's own sandbox-runner, built locally
-      # (`docker build -t sherpa-sandbox-runner:dev sandbox-runner`) and pinned by image
-      # ID digest in .env. A stock upstream tag has no pytest/ruff and no /work volume,
-      # so it can only ever produce environment_missing_dependencies.
-      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-sherpa-sandbox-runner:dev}
+      # (`docker build -t sherpa-sandbox-runner:dev sandbox-runner`) and **pinned by image
+      # ID digest** in .env. There is deliberately NO default: an unpinned or foreign image
+      # is refused at run time with `runtime_image_untrusted` rather than executed, so a
+      # stack that was never configured fails loudly instead of running a mutable tag.
+      #   docker image inspect sherpa-sandbox-runner:dev --format '{{.Id}}'
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-}
       SANDBOX_MEM_MB: ${SANDBOX_MEM_MB:-1024}
       EMAIL_KIND: ${EMAIL_KIND:-recording}
       AGENTMAIL_API_KEY: ${AGENTMAIL_API_KEY:-}

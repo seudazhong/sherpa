@@ -22,6 +22,17 @@ from typing import Any
 
 from app.sandbox.transport import WORK_DIR, WorkspaceFile
 
+#: A syntactically valid, digest-pinned reference for the fake runner. Tests that exercise
+#: the happy path must use a pinned reference, because the real code now refuses anything
+#: else before it creates a container (config §1.7, enforced in `verify_runner_image`).
+FAKE_IMAGE_DIGEST = "sha256:" + "ab" * 32
+
+#: What the first-party runner image is required to advertise about itself.
+RUNNER_LABELS = {
+    "org.opencontainers.image.title": "sherpa-sandbox-runner",
+    "sherpa.capabilities": "python,pytest,ruff",
+}
+
 
 def tar_to_files(raw: bytes, *, prefix: str = "") -> dict[str, WorkspaceFile]:
     """Expand a tar into ``{path: WorkspaceFile}`` (test-side, no validation)."""
@@ -74,6 +85,10 @@ class FakeSpec:
     wait_error: Exception | None = None
     logs_error: Exception | None = None
     get_error: Exception | None = None
+    #: Labels the fake runner image advertises. Override to model a foreign image.
+    image_labels: dict[str, str] | None = None
+    #: Raised by ``images.get`` — models a missing or unreachable image.
+    image_error: Exception | None = None
 
 
 class FakeContainer:
@@ -154,15 +169,42 @@ class FakeContainers:
         return []
 
 
+class FakeImage:
+    def __init__(self, labels: dict[str, str]) -> None:
+        self.labels = labels
+        self.id = FAKE_IMAGE_DIGEST
+        self.attrs: dict[str, Any] = {"Config": {"Labels": labels}}
+
+
+class FakeImages:
+    def __init__(self, spec: FakeSpec) -> None:
+        self._spec = spec
+        self.requested: list[str] = []
+
+    def get(self, name: str) -> FakeImage:
+        self.requested.append(name)
+        if self._spec.image_error is not None:
+            raise self._spec.image_error
+        labels = self._spec.image_labels
+        return FakeImage(dict(RUNNER_LABELS) if labels is None else labels)
+
+
 class FakeDockerClient:
     def __init__(self, spec: FakeSpec) -> None:
         self.containers = FakeContainers(spec)
+        self.images = FakeImages(spec)
 
 
 def patch_docker(
-    monkeypatch: Any, spec: FakeSpec | None = None, *, from_env_error: Exception | None = None
+    monkeypatch: Any,
+    spec: FakeSpec | None = None,
+    *,
+    from_env_error: Exception | None = None,
+    image: str = FAKE_IMAGE_DIGEST,
 ) -> FakeDockerClient | None:
-    """Point ``docker.from_env`` at the fake and force ``SANDBOX_KIND=docker``."""
+    """Point ``docker.from_env`` at the fake, force ``SANDBOX_KIND=docker``, and pin a valid
+    runner reference by default so tests exercise the path under test rather than tripping
+    the (separately tested) image gate."""
     import docker
 
     from app.config import settings
@@ -176,5 +218,6 @@ def patch_docker(
         return client
 
     monkeypatch.setattr(settings, "sandbox_kind", "docker")
+    monkeypatch.setattr(settings, "sandbox_image", image)
     monkeypatch.setattr(docker, "from_env", _from_env)
     return client

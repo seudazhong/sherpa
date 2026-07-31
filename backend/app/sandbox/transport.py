@@ -17,8 +17,19 @@ Three rules this module enforces:
   audited semantics of :mod:`app.services.archive` (the same expander the Project import
   path uses): absolute paths, ``..`` traversal, NUL, device/FIFO/block nodes, hard links
   and symlinks resolving outside the root are rejected → ``path_escape``.
-* **Both directions are bounded** by ``SANDBOX_SCRATCH_MAX_BYTES``; overflow is a named
-  exit, never a silent truncation.
+* **Both directions are bounded** by ``SANDBOX_SCRATCH_MAX_BYTES``, and egress is bounded
+  *before* it allocates: the archive is streamed rather than buffered, and a member is
+  refused on its declared size before a byte of it is copied. Overflow is a named exit,
+  never a silent truncation.
+
+**Known semantic loss: symlinks do not round-trip.** ``materialize`` writes a symlink as a
+regular file containing its target text, and egress drops symlink members entirely (they
+carry no persistable bytes, and the overlay has no symlink representation). So a symlink in
+the project is visible to the command as an ordinary file, and a symlink the *command*
+creates is silently not persisted. This is a deliberate safety trade — never materializing a
+real link means no link can be followed out of the tree — but it is a real limitation and is
+recorded here rather than implied away. Restoring fidelity would need an overlay entry kind,
+which is a data-model change and therefore out of P3's scope.
 
 The ``work/`` prefix that ``get_archive`` puts on every member is stripped **before**
 validation — validating with the prefix still attached would make a top-level escaping
@@ -65,7 +76,20 @@ CREDENTIAL_BASENAME_PATTERNS = (".env*", "*.pem", "*.key", "id_*")
 
 MAX_PATH_DEPTH = 64
 MAX_PATH_LENGTH = 1024
-MAX_ENTRIES = 200_000
+MAX_ENTRIES = 100_000
+
+#: Bytes copied per read when draining a member. Peak memory is dominated by the retained
+#: workspace, not by this, but it keeps a single huge member from being pulled in one slab.
+COPY_CHUNK_BYTES = 256 * 1024
+
+#: Read-ahead `tarfile` is allowed while parsing the stream. Must be a multiple of 512. This
+#: is the only *unconditional* allocation in the egress path — it is a constant, not a
+#: fraction of the archive, which is precisely the property the bounded-egress tests assert.
+TAR_STREAM_BUFSIZE = 32 * 1024
+
+#: How much the wire reader may hold beyond the caller's budget while it looks for the end
+#: of the archive. Small and constant: the reader stops as soon as the budget is exceeded.
+_WIRE_SLACK_BYTES = 1024 * 1024
 
 
 class TransportError(Exception):
@@ -79,10 +103,25 @@ class TransportError(Exception):
 
 @dataclasses.dataclass(frozen=True)
 class WorkspaceFile:
-    """One regular file in the disposable workspace copy."""
+    """One regular file in the disposable workspace copy.
+
+    ``executable`` is the only permission bit that survives into the overlay and the change
+    set (``project_working_copy_entries.executable``), so it — not ``mode`` — is what the
+    delta compares. ``mode`` is carried for round-trip fidelity so a file that came back from
+    the container with, say, ``0o600`` is not silently rewritten to ``0o644`` on the next
+    ingress.
+    """
 
     data: bytes
     executable: bool = False
+    mode: int | None = None
+
+    def effective_mode(self) -> int:
+        """The mode to write into the tar: the observed one when known, else the default for
+        this file's executable bit."""
+        if self.mode is not None:
+            return self.mode
+        return 0o755 if self.executable else 0o644
 
 
 def is_credential_path(path: str) -> bool:
@@ -151,12 +190,15 @@ class TarTransport:
                     raise TransportError("scratch_too_large", "ingress cap exceeded")
                 info = tarfile.TarInfo(path)
                 info.size = len(f.data)
-                info.mode = 0o755 if f.executable else 0o644
+                info.mode = f.effective_mode()
                 info.mtime = _MTIME
                 info.uid = RUNNER_UID
                 info.gid = RUNNER_GID
                 tf.addfile(info, io.BytesIO(f.data))
-        return buf.getvalue()
+        raw = buf.getvalue()
+        if len(raw) > self._max_bytes:
+            raise TransportError("scratch_too_large", "ingress archive exceeds the transfer cap")
+        return raw
 
     def ingest(
         self, container: Any, files: Mapping[str, WorkspaceFile], dirs: Iterable[str]
@@ -168,34 +210,58 @@ class TarTransport:
     # --- egress -------------------------------------------------------------
 
     def egress(self, container: Any) -> dict[str, WorkspaceFile]:
+        """Stream `/work` back out of the container under a hard peak-memory budget.
+
+        The archive is **never** materialized as a single object: the chunk iterator is
+        adapted into a non-seekable file object, `tarfile` reads it in streaming mode, and
+        each member is copied out in bounded pieces. Nothing is allocated for a member until
+        its declared size has been checked against the remaining budget.
+        """
         stream, _stat = container.get_archive(WORK_DIR)
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in stream:
-            total += len(chunk)
-            if total > self._max_bytes:
-                raise TransportError("scratch_too_large", "egress cap exceeded")
-            chunks.append(chunk)
-        return self.expand(b"".join(chunks))
+        return self._expand_stream(_ChunkStream(stream, max_bytes=self._wire_cap()))
 
     def expand(self, raw: bytes) -> dict[str, WorkspaceFile]:
+        """Expand an already-materialized egress tar (tests, and any caller that legitimately
+        holds the bytes). Shares one implementation with :meth:`egress`, so the bounds and the
+        unsafe-member rules cannot drift between the two entry points."""
+        if len(raw) > self._wire_cap():
+            raise TransportError("scratch_too_large", "egress archive exceeds the transfer cap")
+        return self._expand_stream(io.BytesIO(raw))
+
+    def _wire_cap(self) -> int:
+        """Wire bytes are capped by the same budget as content. A tar only ever *adds* to
+        what it carries, so bounding the wire strictly bounds the content too — and it is
+        the wire that determines peak memory while reading."""
+        return self._max_bytes
+
+    def _expand_stream(self, fileobj: Any) -> dict[str, WorkspaceFile]:
         """Expand an **untrusted** egress tar into validated regular files.
 
         Directory and symlink members carry no persistable bytes and are dropped (the
         materializer writes a symlink as a regular file recording its target, so a symlink
-        the *command* created has no round-trip representation). Credential-shaped paths the
-        command may have created are dropped too: they never enter the change set.
+        the *command* created has no round-trip representation — see the module docstring).
+        Credential-shaped paths the command may have created are dropped too: they never
+        enter the change set.
+
+        ``mode="r|"`` is deliberate and load-bearing: it is **uncompressed streaming only**.
+        Streaming means the whole archive is never held at once; refusing compression means a
+        decompression bomb cannot expand past the budget between two size checks. Docker's
+        ``get_archive`` always returns an uncompressed tar, so nothing legitimate is lost.
         """
         files: dict[str, WorkspaceFile] = {}
         total = 0
         entries = 0
         try:
-            with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
+            with tarfile.open(fileobj=fileobj, mode="r|", bufsize=TAR_STREAM_BUFSIZE) as tf:
                 for member in tf:
                     if member.ischr() or member.isblk() or member.isfifo() or member.isdev():
                         raise TransportError("path_escape", "device/fifo node")
                     if member.islnk():
                         raise TransportError("path_escape", "hard link")
+                    if member.type == tarfile.GNUTYPE_SPARSE:
+                        # A sparse member's on-wire size understates what it expands to; the
+                        # budget check below would be reasoning about the wrong number.
+                        raise TransportError("path_escape", "sparse member")
                     rel = _strip_work_prefix(member.name)
                     if rel is None:
                         continue  # the '/work' root member itself
@@ -214,14 +280,18 @@ class TarTransport:
                         continue
                     if not member.isfile():
                         raise TransportError("path_escape", "unsupported member type")
-                    fh = tf.extractfile(member)
-                    data = fh.read() if fh is not None else b""
-                    total += len(data)
-                    if total > self._max_bytes:
+
+                    # BEFORE any allocation: refuse a member that cannot fit in what is left.
+                    remaining = self._max_bytes - total
+                    if member.size > remaining:
                         raise TransportError("scratch_too_large", "egress cap exceeded")
+                    data = _drain_member(tf, member, remaining)
+                    total += len(data)
                     if is_credential_path(path):
                         continue
-                    files[path] = WorkspaceFile(data=data, executable=bool(member.mode & 0o111))
+                    files[path] = WorkspaceFile(
+                        data=data, executable=bool(member.mode & 0o111), mode=member.mode & 0o7777
+                    )
         except ArchiveError as exc:
             raise TransportError("path_escape", str(exc)) from exc
         except TransportError:
@@ -229,6 +299,84 @@ class TarTransport:
         except (tarfile.TarError, OSError, EOFError) as exc:
             raise TransportError("runtime_transport_failed", str(exc)) from exc
         return files
+
+
+def _drain_member(tf: tarfile.TarFile, member: tarfile.TarInfo, budget: int) -> bytes:
+    """Copy one member out with a **single**, exactly-sized allocation.
+
+    The declared size was already checked against the budget, but it is attacker-supplied
+    metadata, so this also refuses a member that turns out to carry more than it declared.
+    Reading into a preallocated buffer (rather than growing one and copying) is what keeps
+    peak memory at one member rather than a multiple of the archive."""
+    fh = tf.extractfile(member)
+    if fh is None:
+        return b""
+    size = member.size
+    if size < 0 or size > budget:
+        raise TransportError("scratch_too_large", "member exceeds the remaining budget")
+    buf = bytearray(size)
+    view = memoryview(buf)
+    got = 0
+    while got < size:
+        try:
+            n = fh.readinto(view[got:])  # type: ignore[attr-defined]
+        except AttributeError:  # pragma: no cover - defensive, tarfile provides readinto
+            chunk = fh.read(min(COPY_CHUNK_BYTES, size - got))
+            n = len(chunk)
+            view[got : got + n] = chunk
+        if not n:
+            break
+        got += n
+    if got != size:
+        raise TransportError("runtime_transport_failed", "truncated member")
+    if fh.read(1):
+        # The header understated the payload: reject rather than silently keep the prefix.
+        raise TransportError("scratch_too_large", "member exceeded its declared size")
+    return bytes(buf)
+
+
+class _ChunkStream(io.RawIOBase):
+    """A non-seekable, read-only file object over docker's ``get_archive`` chunk iterator.
+
+    Two jobs: let `tarfile` stream (so the archive is never one object in memory), and stop
+    pulling from the wire the moment the budget is exceeded — the cap is enforced *while*
+    reading rather than after a full download."""
+
+    def __init__(self, chunks: Any, *, max_bytes: int) -> None:
+        super().__init__()
+        self._chunks = iter(chunks)
+        self._max_bytes = max_bytes
+        self._buf = bytearray()
+        self._pulled = 0
+        self._eof = False
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def _pull(self) -> bool:
+        try:
+            chunk = next(self._chunks)
+        except StopIteration:
+            self._eof = True
+            return False
+        self._pulled += len(chunk)
+        if self._pulled > self._max_bytes + _WIRE_SLACK_BYTES:
+            raise TransportError("scratch_too_large", "egress archive exceeds the transfer cap")
+        self._buf += chunk
+        return True
+
+    def readinto(self, b: Any) -> int:
+        want = len(b)
+        while len(self._buf) < want and not self._eof:
+            if not self._pull():
+                break
+        take = min(want, len(self._buf))
+        b[:take] = self._buf[:take]
+        del self._buf[:take]
+        return take
 
 
 def _all_parents(files: Mapping[str, WorkspaceFile], dirs: Iterable[str]) -> set[str]:

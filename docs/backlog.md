@@ -657,3 +657,9 @@ why nothing notices. A real fix needs a decision:
 
 Recommend folding this into the same janitor as the api §7.2 spill retention (currently parked in
 Phase TR **P2.8**) rather than inventing a second sweeper.
+
+> **Status note (2026-07-31, P3 review).** This is **not fixed and not scheduled**. What shipped
+> was only the *exemption* that stops live diffs being deleted; the unbounded growth is real,
+> ongoing, and invisible to the user (the objects charge no quota, which is exactly why nothing
+> surfaces it). Recording it plainly so the closed half of B-12 is not mistaken for the whole:
+> **`project-diff/` currently grows without bound.**

@@ -141,19 +141,20 @@ class Settings(BaseSettings):
     github_archive_timeout_seconds: int = Field(default=120, ge=1)          # bounded archive fetch deadline
 
     # Projects — Workspace W3 (ADR-040 product/data + ADR-039 isolation): task working copy +
-    # one-time scratch-copy coding runtime + change review. STATUS: the WORKING_COPY_* change-set
-    # bounds are SHIPPED; the transport settings are TARGET (ADR-047 replaces the bind mount with tar
-    # injection). The sandbox receives ONLY a tar-injected disposable copy of the working copy in an
-    # anonymous /work volume, and mounts NO host path at all — never the Project snapshot/blob
-    # store/credentials/another Project/Drive (see §1.7). Reuses the hardened offline
-    # container from ADR-025 (network_disabled, cap_drop ALL, no-new-privileges, non-root, read-only
-    # rootfs + tmpfs, mem/pids/cpu/wall caps).
+    # one-time disposable copy + change review. STATUS: the WORKING_COPY_* change-set bounds AND
+    # the ADR-047 tar transport are SHIPPED (Phase TR P3). The sandbox receives ONLY a
+    # tar-injected disposable copy of the working copy in an anonymous /work volume, and mounts
+    # NO host path at all — never the Project snapshot/blob store/credentials/another
+    # Project/Drive (see §1.7). Reuses the hardened offline container from ADR-025
+    # (network_disabled, cap_drop ALL, no-new-privileges, non-root, read-only rootfs + tmpfs,
+    # mem/pids/cpu/wall caps).
     working_copy_idle_ttl_seconds: int = Field(default=86400, ge=60)        # durable working-copy idle expiry (24h)
     # DELETED (ADR-047): sandbox_warm_ttl_seconds — warm containers were never implemented; the
     # concept is now the RuntimeSession idle TTL below.
     # DELETED (ADR-047): sandbox_scratch_root — tar transport has no host scratch path at all.
+    sandbox_image: str = Field(default="")                                  # digest-pinned first-party runner; no default (fail closed)
     sandbox_runtime_idle_ttl_seconds: int = Field(default=600, ge=30)       # [target] RuntimeSession idle TTL (10m)
-    sandbox_scratch_max_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1)  # per-session tar ingress cap (2 GiB)
+    sandbox_scratch_max_bytes: int = Field(default=512 * 1024 * 1024, ge=1)  # per-session tar cap, BOTH directions (512 MiB)
     working_copy_max_changed_files: int = Field(default=5000, ge=1)         # change-set bound: changed-file count
     working_copy_max_changed_bytes: int = Field(default=500 * 1024 * 1024, ge=1)  # change-set bound: total changed bytes
     working_copy_max_artifact_bytes: int = Field(default=200 * 1024 * 1024, ge=1) # change-set bound: total artifact bytes
@@ -407,13 +408,13 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Projects (runtime) | ~~`SANDBOX_WARM_TTL_SECONDS`~~ | — | — | — | — | **DELETED (ADR-047)** — warm containers were never implemented in code; superseded by `SANDBOX_RUNTIME_IDLE_TTL_SECONDS`. |
 | Projects (runtime) | ~~`SANDBOX_SCRATCH_ROOT`~~ | — | — | — | — | **DELETED (ADR-047)** — tar transport passes no host path to the daemon at all; this setting was the direct cause of backlog B-8. |
 | Projects (runtime) | `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` | `int` ≥ 30 | `600` | No | No | **`[target]`** RuntimeSession idle TTL; the container is closed after it, and the working copy survives. The setting exists after P3, but **nothing reads it until P4**. |
-| Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `2147483648` | No | No | Per-session tar ingress cap (2 GiB). |
 | Projects (runtime) | `WORKING_COPY_MAX_CHANGED_FILES` | `int` ≥ 1 | `5000` | No | No | Change-set bound: changed-file count; overflow ⇒ explicit truncated review. |
 | Projects (runtime) | `WORKING_COPY_MAX_CHANGED_BYTES` | `int` ≥ 1 | `524288000` | No | No | Change-set bound: total changed bytes (500 MiB). |
 | Projects (runtime) | `WORKING_COPY_MAX_ARTIFACT_BYTES` | `int` ≥ 1 | `209715200` | No | No | Change-set bound: total artifact bytes (200 MiB); artifacts charge quota only when kept. |
 | Projects (runtime) | `WORKING_COPY_MAX_DIFF_BYTES` | `int` ≥ 1 | `2097152` | No | No | Per-file spilled unified-diff cap (2 MiB); over ⇒ `diff_truncated`. |
 | Projects (runtime) | `SANDBOX_RUN_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Per-exec wall-clock deadline; over ⇒ `wall_timeout`. |
-| Projects (runtime) | `SANDBOX_IMAGE` | `str` | pinned `sherpa-sandbox-runner` **image ID** digest | `worker` | No | **`[shipped]` (P3)** MUST be the repository's own runner image, pinned by `docker image inspect --format '{{.Id}}'` (python + pytest + ruff + `capabilities.json`, no git, no network tooling) — never a stock upstream tag, and **not** a registry `RepoDigest` (the image is never pushed). |
+| Projects (runtime) | `SANDBOX_IMAGE` | `str` (digest) | **none — must be set** | `worker` | No | **`[shipped]` (P3)** MUST be the repository's own runner image, pinned by `docker image inspect --format '{{.Id}}'`. **Enforced fail-closed**: a tag, an empty value or an image without the first-party title label is refused with `runtime_image_untrusted` before any container is created. No default, so a fresh checkout fails loudly instead of running a mutable tag. |
+| Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `536870912` | No | No | Per-session tar cap (512 MiB), enforced in **both** directions and **before** allocation. Reduced from 2 GiB in the P3 review fix: it must stay ≥ `WORKING_COPY_MAX_CHANGED_BYTES` and small enough for the worker to hold. |
 | Projects (runtime) | `SANDBOX_MEM_MB` | `int` ≥ 1 | `1024` | `worker` | No | Container memory cap; exceeding it is reported as the named `mem_limit` (docker `State.OOMKilled`). Raised from 256 in P3 — `pytest` + `ruff` do not fit in 256 MiB. |
 | Tools | `TOOL_CATALOG_CORE_MAX_BYTES` | `int` ≥ 1024 | `6144` | No | No | **`[target]`** Hard cap on the serialized core tool-set bytes (ADR-046); startup fails above it. Pre-ADR-046 baseline was 19,848 bytes across 52 flat tools. |
 | Observability | `OTEL_ENABLED` | `bool` | `false` | No | No | Emit OpenTelemetry `gen_ai` spans (ADR-033); a derived diagnostic layer over the journal, never a source of truth. |
@@ -512,9 +513,15 @@ nothing else.**
   > `cap_drop=ALL` + `no-new-privileges` + a non-root user — a setuid binary cannot gain
   > privilege and a device node cannot be created without `CAP_MKNOD`. `tmpfs /tmp` **does**
   > carry `nosuid,nodev`. Recorded rather than papered over (owner decision D-2).
-- **Materialize from durable state, never from a live mount `[shipped]`.** Ingress is bounded by
-  `SANDBOX_SCRATCH_MAX_BYTES`. The container and the prepared image are **rebuildable
-  caches**, never a recovery source of truth (events §2.11). **No credential is ever written
+- **Materialize from durable state, never from a live mount `[shipped]`.** Ingress **and
+  egress** are bounded by `SANDBOX_SCRATCH_MAX_BYTES`, and the bound is enforced *before*
+  allocation: the egress archive is **streamed, never buffered whole**, and a member is
+  refused on its declared size before any of it is copied. The transfer is **uncompressed
+  only** — a compressed archive is rejected rather than expanded, so a decompression bomb
+  cannot grow past the budget between two checks — and sparse members are rejected because
+  their declared size does not describe what they expand to. The container and the prepared
+  image are **rebuildable caches**, never a recovery source of truth (events §2.11).
+  **No credential is ever written
   into the tar** — the materializer strips and then asserts the absence of `.env*`, `*.pem`,
   `*.key`, `id_*` and `.git/config` before the archive is built. Stripped paths are **merged
   back before the delta is computed**, so holding a file back is never mistaken for the
@@ -522,6 +529,12 @@ nothing else.**
   persisted. (Note: `id_*` is deliberately literal and therefore broad — it also matches an
   innocent `id_utils.py`. The cost is bounded: the file stays in the working copy and is only
   invisible to the sandbox.)
+  > **Cap reduced 2 GiB → 512 MiB (2026-07-31, P3 review fix).** 2 GiB was incoherent with
+  > this contract's own `WORKING_COPY_MAX_CHANGED_BYTES` (500 MiB), which rejects any change
+  > set that large downstream anyway, and it sized a worker-side buffer against a number the
+  > worker cannot hold. The bound now sits just above the change-set bound, and the
+  > invariant `SANDBOX_SCRATCH_MAX_BYTES >= WORKING_COPY_MAX_CHANGED_BYTES` is asserted in
+  > tests so the two cannot drift apart again.
 - **Untrusted archive on both directions `[shipped]`.** The egress tar is untrusted input:
   expansion rejects absolute paths, `..` traversal, NUL, device/FIFO nodes, hard links, and
   symlinks resolving outside the project root, reusing the bounded expander already used for
@@ -543,17 +556,32 @@ nothing else.**
   `WORKING_COPY_MAX_*` change-set bounds (changed-file count, changed bytes, artifact bytes,
   per-file diff bytes) — overflow ⇒ a named termination reason + an **explicit truncated**
   change set, never a silent full-looking diff.
-- **Image boundary `[shipped]`.** `SANDBOX_IMAGE` MUST be a **pinned digest of the
-  repository's own `sandbox-runner` image**, not a stock upstream tag. The v1 image carries
+- **Image boundary `[shipped]`, enforced fail-closed.** `SANDBOX_IMAGE` MUST be a **pinned
+  digest of the repository's own `sandbox-runner` image**, not a stock upstream tag. This is
+  **enforced at run time before any container is created**, not merely documented: an
+  unpinned reference (a tag), an unset value, or an image that does not advertise
+  `org.opencontainers.image.title=sherpa-sandbox-runner` is refused with
+  `runtime_image_untrusted` and nothing executes. Both checks are required and neither is
+  sufficient alone — pinning proves the bytes cannot change after review, the label proves
+  they are the *right* bytes, so a valid digest for stock `python` is still refused.
+  There is deliberately **no working default**: a fresh checkout fails loudly rather than
+  appearing to work while running whatever a mutable tag points at today. The v1 image carries
   Python + `pytest` + `ruff` and a `capabilities.json` manifest that the orchestrator probes
   at `runtime_open` (**the probe itself is `[target]`, P4**); it deliberately contains **no
   `git` and no network tooling**. Node is a later optional profile. Probed capabilities let a
   missing dependency return `environment_missing_dependencies` **with the list of what is
   available**, instead of an unexplained exit 127 — today the mapping exists (exit 127 ⇒
   `environment_missing_dependencies`) but the "what IS available" list awaits the P4 probe.
-  > **Digest clarification (2026-07-31).** "Pinned digest" means the **image ID digest**
-  > (`docker image inspect --format '{{.Id}}'`), not a registry `RepoDigest`: the image is
-  > built locally and never pushed, so it has no `RepoDigests` at all (owner decision D-1).
+  The runner's **base image is pinned by registry digest** in `sandbox-runner/Dockerfile` for
+  the same reason one level down: an upstream security rebuild re-points the tag.
+  > **Digest clarification.** "Pinned digest" means the **image ID digest**
+  > (`docker image inspect --format '{{.Id}}'`) or an equally immutable repository digest
+  > (`name@sha256:…`), not a tag: the runner is built locally and never pushed, so it has no
+  > registry `RepoDigests` of its own (owner decision D-1).
+  > **Not built by compose.** `infra/docker-compose.yml` has no `sandbox-runner` service and
+  > `docker compose up --build` does **not** build it — the runner is a sibling container the
+  > worker starts through the Docker socket, not part of the orchestration. It must be built
+  > and re-pinned by hand after any change to `sandbox-runner/`.
 - **Network + dependency policy.** The sandbox stays **network-disabled**; there is **no
   egress and no package installation**. A command needing an unavailable runtime/dependency
   ends with `environment_missing_dependencies` (events §2.11) — the sandbox **never**
