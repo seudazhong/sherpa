@@ -47,20 +47,33 @@ docker image inspect sherpa-sandbox-runner:dev --format '{{.Id}}'
 ```
 
 **运行时对此是 fail-closed 强制的**（`app/sandbox/runtime.py::verify_runner_image`，
-在创建容器**之前**执行）。两道独立检查：
+在创建容器**之前**执行）。两道检查，但**它们的分量完全不同**：
 
-1. **引用必须不可变** —— `sherpa-sandbox-runner:dev` 这样的 **tag 会被直接拒绝**，
+1. **引用必须不可变（这是唯一的安全根）** —— `sherpa-sandbox-runner:dev` 这样的 **tag 会被直接拒绝**，
    返回具名出口 `runtime_image_untrusted`。tag 随时可以被重新指向别的字节，
    而"评审过的镜像"和"实际跑的镜像"必须是同一个。
-2. **镜像必须是我们自己的** —— 必须带 `org.opencontainers.image.title=sherpa-sandbox-runner`
-   标签。固定只证明字节不会变，标签才证明它是**对的**字节；随便一个合法 digest
-   （比如 stock `python`）同样会被拒。
+   **`SANDBOX_IMAGE` 里那个由运维选定的 digest 就是本部署的信任根 / 白名单（且只有一项）。**
+2. **标签必须像我们的 runner（这是**防手滑**，不是安全控制）** —— 必须带
+   `org.opencontainers.image.title=sherpa-sandbox-runner`。
+   ⚠️ **OCI 标签是普通镜像元数据，任何能构建镜像的人都能随便写，因此可伪造。**
+   能让运维把恶意 digest 配进去的攻击者，同样能给那个 digest 写上这个标签。
+   它的价值只在于：把"digest 粘错了"变成**一条清晰的拒绝**，而不是启动一个没有 `/work` 卷、
+   没有 pytest/ruff、用户还是 root 的容器，在很后面以莫名其妙的方式失败。
+
+> **我们不做、也不声称做**签名或 attestation 验证。**没有任何来源证明（provenance）被校验。**
+> 真正的供应链验证（cosign / in-toto 式签名或 attestation，以及"谁有权签名"的策略）
+> **明确不在 v1 范围内**，作为已知缺口记录在 `docs/contracts/config-and-secrets.md §1.7`，
+> 归入 ADR-039 的生产 runner 工作（那条线本来就卡住多用户/不可信代码上线）。
 
 因此 `SANDBOX_IMAGE` **没有可用的默认值**：全新 checkout 会明确失败，而不是"看起来能跑"
 却在跑一个可变 tag 指向的未知镜像。
 
-区分两种失败：**已固定但本地没有** → `runtime_image_missing`（断网沙箱不会去拉）；
-**未固定 / 不是我们的镜像** → `runtime_image_untrusted`。
+区分三种失败：**已固定但本地没有** → `runtime_image_missing`（断网沙箱不会去拉）；
+**未固定 / 标签对不上** → `runtime_image_untrusted`；
+**守护进程应答了但报错** → `runtime_transport_failed`（连不上才是 `runtime_daemon_unreachable`）。
+
+引用形态：裸 image ID digest（`sha256:<64位小写hex>`）或仓库 digest
+（`[主机[:端口]/]名字@sha256:<64位小写hex>`，**支持带端口的私有 registry**）。digest 部分校验从严。
 
 > ⚠️ **勘误（2026-07-31）**：本节此前写 "worker 启动时会检查 `SANDBOX_IMAGE` 是否存在"。
 > **没有这样的启动期预检**——检查发生在**每次执行前**，不是进程启动时。已按实际行为改写。

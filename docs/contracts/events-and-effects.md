@@ -877,7 +877,11 @@ recur:
   runtime library does not translate its own timeouts — a real daemon surfaces a `wait`
   timeout as `ConnectionError(ReadTimeoutError(...))`, the *same class* an unreachable daemon
   raises — so the implementation MUST distinguish them by inspecting the exception chain, not
-  by class alone. A daemon that dies mid-run is `runtime_daemon_unreachable`; an API error is
+  by class alone. **A connect timeout is explicitly NOT a wall timeout**, even though
+  `requests.ConnectTimeout` subclasses `Timeout` and `urllib3.ConnectTimeoutError` subclasses
+  urllib3's `TimeoutError`: by the time the wait is issued the client has already created and
+  started the container over the same connection pool, so a later failure to *connect* is an
+  outage (`runtime_daemon_unreachable`), never the command running long. An API error is
   `runtime_transport_failed`; anything unrecognized is `error:<class>`. Reporting an outage as
   `wall_timeout` tells the user their command was too slow when the runtime broke underneath
   it, which sends them to debug the wrong thing.

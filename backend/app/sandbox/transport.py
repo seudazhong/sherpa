@@ -78,18 +78,30 @@ MAX_PATH_DEPTH = 64
 MAX_PATH_LENGTH = 1024
 MAX_ENTRIES = 100_000
 
-#: Bytes copied per read when draining a member. Peak memory is dominated by the retained
-#: workspace, not by this, but it keeps a single huge member from being pulled in one slab.
+#: Bytes read per call when draining a member. This is the **only** transient allocation the
+#: drain loop makes, and it is a constant: ``tarfile``'s ``_FileInFile.readinto`` allocates a
+#: bytes object the size of the view it is handed, so handing it the whole member would
+#: allocate the whole member a second time. Views are therefore chunk-sized.
 COPY_CHUNK_BYTES = 256 * 1024
 
 #: Read-ahead `tarfile` is allowed while parsing the stream. Must be a multiple of 512. This
-#: is the only *unconditional* allocation in the egress path — it is a constant, not a
-#: fraction of the archive, which is precisely the property the bounded-egress tests assert.
+#: is a constant, not a fraction of the archive, which is the property the bounded-egress
+#: tests assert.
 TAR_STREAM_BUFSIZE = 32 * 1024
 
 #: How much the wire reader may hold beyond the caller's budget while it looks for the end
 #: of the archive. Small and constant: the reader stops as soon as the budget is exceeded.
 _WIRE_SLACK_BYTES = 1024 * 1024
+
+#: Buffers carried through the sandbox layer.
+#:
+#: Egress hands over **ownership** of the ``bytearray`` it filled rather than copying it into
+#: an immutable ``bytes``: ``bytes(buf)`` on a near-cap member is a second full-size
+#: allocation, and copies like that are exactly what made egress peak at ~3x the largest
+#: member. Everything downstream of the transport treats this as **read-only** — nothing
+#: mutates it — and the one place that genuinely needs immutability (the content-addressed
+#: blob store) converts once, per file, at its own boundary.
+ByteBuffer = bytes | bytearray
 
 
 class TransportError(Exception):
@@ -110,9 +122,12 @@ class WorkspaceFile:
     delta compares. ``mode`` is carried for round-trip fidelity so a file that came back from
     the container with, say, ``0o600`` is not silently rewritten to ``0o644`` on the next
     ingress.
+
+    ``data`` may be a ``bytearray`` whose ownership egress handed over (see
+    :data:`ByteBuffer`). **Treat it as read-only.**
     """
 
-    data: bytes
+    data: ByteBuffer
     executable: bool = False
     mode: int | None = None
 
@@ -258,9 +273,9 @@ class TarTransport:
                         raise TransportError("path_escape", "device/fifo node")
                     if member.islnk():
                         raise TransportError("path_escape", "hard link")
-                    if member.type == tarfile.GNUTYPE_SPARSE:
-                        # A sparse member's on-wire size understates what it expands to; the
-                        # budget check below would be reasoning about the wrong number.
+                    if _is_sparse(member):
+                        # A sparse member's on-wire size understates what it expands to, so
+                        # the budget check below would be reasoning about the wrong number.
                         raise TransportError("path_escape", "sparse member")
                     rel = _strip_work_prefix(member.name)
                     if rel is None:
@@ -296,18 +311,51 @@ class TarTransport:
             raise TransportError("path_escape", str(exc)) from exc
         except TransportError:
             raise
-        except (tarfile.TarError, OSError, EOFError) as exc:
+        except (tarfile.TarError, OSError, EOFError, ValueError) as exc:
+            # ``ValueError`` matters: tarfile raises it (not TarError) while parsing some
+            # malformed PAX sparse maps, and an uncaught one would propagate out of the
+            # sandbox boundary as a crash instead of a named observation.
             raise TransportError("runtime_transport_failed", str(exc)) from exc
         return files
 
 
-def _drain_member(tf: tarfile.TarFile, member: tarfile.TarInfo, budget: int) -> bytes:
-    """Copy one member out with a **single**, exactly-sized allocation.
+def _is_sparse(member: tarfile.TarInfo) -> bool:
+    """True for a sparse member in **any** of the encodings tarfile understands.
+
+    Checking only ``GNUTYPE_SPARSE`` missed the PAX encoding entirely: a PAX sparse member
+    keeps an ordinary ``REGTYPE`` header and records its real extent in ``GNU.sparse.*``
+    headers, so ``member.size`` describes the *stored* extent while ``GNU.sparse.realsize``
+    describes what it expands to. That is precisely the mismatch the budget check must not
+    be reasoning about, so every encoding is refused rather than accounted for.
+    """
+    if member.type == tarfile.GNUTYPE_SPARSE:
+        return True
+    if getattr(member, "sparse", None) is not None:
+        return True
+    pax = getattr(member, "pax_headers", None) or {}
+    return any(key.startswith("GNU.sparse") for key in pax)
+
+
+def _drain_member(tf: tarfile.TarFile, member: tarfile.TarInfo, budget: int) -> ByteBuffer:
+    """Copy one member out with **one** full-size allocation and constant transients.
+
+    Peak accounting for a member of size ``S``, which is the whole point of this function:
+
+    * one ``bytearray(S)`` — this **becomes the result**; ownership is handed to the caller,
+      so it is retained, not transient;
+    * one ``COPY_CHUNK_BYTES`` bytes object per read, allocated inside ``readinto`` and
+      immediately released;
+    * whatever ``BufferedReader`` holds internally, a constant.
+
+    So peak ≈ ``S + O(COPY_CHUNK_BYTES)``. The previous version allocated ``bytearray(S)``,
+    then handed ``readinto`` a view the size of the *whole remaining member* (which makes
+    ``tarfile`` allocate ``S`` again internally), then copied once more with ``bytes(buf)``
+    — three full-size allocations, measured at **3.01x** the member. Reading in chunk-sized
+    views and transferring ownership removes two of the three.
 
     The declared size was already checked against the budget, but it is attacker-supplied
-    metadata, so this also refuses a member that turns out to carry more than it declared.
-    Reading into a preallocated buffer (rather than growing one and copying) is what keeps
-    peak memory at one member rather than a multiple of the archive."""
+    metadata, so this also refuses a member that carries more than it declared.
+    """
     fh = tf.extractfile(member)
     if fh is None:
         return b""
@@ -317,22 +365,21 @@ def _drain_member(tf: tarfile.TarFile, member: tarfile.TarInfo, budget: int) -> 
     buf = bytearray(size)
     view = memoryview(buf)
     got = 0
-    while got < size:
-        try:
-            n = fh.readinto(view[got:])  # type: ignore[attr-defined]
-        except AttributeError:  # pragma: no cover - defensive, tarfile provides readinto
-            chunk = fh.read(min(COPY_CHUNK_BYTES, size - got))
-            n = len(chunk)
-            view[got : got + n] = chunk
-        if not n:
-            break
-        got += n
-    if got != size:
-        raise TransportError("runtime_transport_failed", "truncated member")
-    if fh.read(1):
+    try:
+        while got < size:
+            end = min(got + COPY_CHUNK_BYTES, size)
+            n = fh.readinto(view[got:end])  # type: ignore[attr-defined]
+            if not n:
+                break
+            got += n
+        if got != size:
+            raise TransportError("runtime_transport_failed", "truncated member")
         # The header understated the payload: reject rather than silently keep the prefix.
-        raise TransportError("scratch_too_large", "member exceeded its declared size")
-    return bytes(buf)
+        if fh.read(1):
+            raise TransportError("scratch_too_large", "member exceeded its declared size")
+    finally:
+        view.release()
+    return buf
 
 
 class _ChunkStream(io.RawIOBase):

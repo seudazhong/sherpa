@@ -413,7 +413,7 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Projects (runtime) | `WORKING_COPY_MAX_ARTIFACT_BYTES` | `int` ≥ 1 | `209715200` | No | No | Change-set bound: total artifact bytes (200 MiB); artifacts charge quota only when kept. |
 | Projects (runtime) | `WORKING_COPY_MAX_DIFF_BYTES` | `int` ≥ 1 | `2097152` | No | No | Per-file spilled unified-diff cap (2 MiB); over ⇒ `diff_truncated`. |
 | Projects (runtime) | `SANDBOX_RUN_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Per-exec wall-clock deadline; over ⇒ `wall_timeout`. |
-| Projects (runtime) | `SANDBOX_IMAGE` | `str` (digest) | **none — must be set** | `worker` | No | **`[shipped]` (P3)** MUST be the repository's own runner image, pinned by `docker image inspect --format '{{.Id}}'`. **Enforced fail-closed**: a tag, an empty value or an image without the first-party title label is refused with `runtime_image_untrusted` before any container is created. No default, so a fresh checkout fails loudly instead of running a mutable tag. |
+| Projects (runtime) | `SANDBOX_IMAGE` | `str` (digest) | **none — must be set** | `worker` | No | **`[shipped]` (P3)** MUST be the repository's own runner image, pinned by `docker image inspect --format '{{.Id}}'`. **Enforced fail-closed**: a tag or an empty value is refused with `runtime_image_untrusted` before any container is created. The digest **is** the trust root (an allowlist of one immutable image); the additional OCI title-label check is a **forgeable misconfiguration guard, not provenance** — signature/attestation verification is out of scope for v1. No default, so a fresh checkout fails loudly instead of running a mutable tag. |
 | Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `536870912` | No | No | Per-session tar cap (512 MiB), enforced in **both** directions and **before** allocation. Reduced from 2 GiB in the P3 review fix: it must stay ≥ `WORKING_COPY_MAX_CHANGED_BYTES` and small enough for the worker to hold. |
 | Projects (runtime) | `SANDBOX_MEM_MB` | `int` ≥ 1 | `1024` | `worker` | No | Container memory cap; exceeding it is reported as the named `mem_limit` (docker `State.OOMKilled`). Raised from 256 in P3 — `pytest` + `ruff` do not fit in 256 MiB. |
 | Tools | `TOOL_CATALOG_CORE_MAX_BYTES` | `int` ≥ 1024 | `6144` | No | No | **`[target]`** Hard cap on the serialized core tool-set bytes (ADR-046); startup fails above it. Pre-ADR-046 baseline was 19,848 bytes across 52 flat tools. |
@@ -518,9 +518,10 @@ nothing else.**
   allocation: the egress archive is **streamed, never buffered whole**, and a member is
   refused on its declared size before any of it is copied. The transfer is **uncompressed
   only** — a compressed archive is rejected rather than expanded, so a decompression bomb
-  cannot grow past the budget between two checks — and sparse members are rejected because
-  their declared size does not describe what they expand to. The container and the prepared
-  image are **rebuildable caches**, never a recovery source of truth (events §2.11).
+  cannot grow past the budget between two checks — and **sparse members are rejected in
+  every encoding** (GNU type, `TarInfo.sparse`, and PAX `GNU.sparse.*` headers) because a
+  sparse member's stored size does not describe what it expands to. The container and the
+  prepared image are **rebuildable caches**, never a recovery source of truth (events §2.11).
   **No credential is ever written
   into the tar** — the materializer strips and then asserts the absence of `.env*`, `*.pem`,
   `*.key`, `id_*` and `.git/config` before the archive is built. Stripped paths are **merged
@@ -529,6 +530,17 @@ nothing else.**
   persisted. (Note: `id_*` is deliberately literal and therefore broad — it also matches an
   innocent `id_utils.py`. The cost is bounded: the file stays in the working copy and is only
   invisible to the sandbox.)
+  > **Peak-memory assumption, stated exactly (it is a contract, not an implementation
+  > detail).** Egress peak ≈ **the retained workspace + O(constant)**, where the constant is
+  > the drain chunk (256 KiB), tarfile's stream read-ahead (32 KiB) and the wire reader's
+  > slack (1 MiB) — none of which scale with the archive or with the largest member. This is
+  > achieved by reading each member in chunk-sized views (so `tarfile` never allocates a
+  > whole member internally) and by **handing over ownership** of the filled buffer instead
+  > of copying it. The first implementation did neither and measured **3.01x the largest
+  > member** on a single-large-file archive; a multi-member archive hid it, so the regression
+  > test uses the single-large-member shape and asserts the overhead does not grow with the
+  > member. One immutable copy is still made **per changed file** at the blob-store boundary,
+  > which is bounded by the `WORKING_COPY_MAX_*` change-set caps.
   > **Cap reduced 2 GiB → 512 MiB (2026-07-31, P3 review fix).** 2 GiB was incoherent with
   > this contract's own `WORKING_COPY_MAX_CHANGED_BYTES` (500 MiB), which rejects any change
   > set that large downstream anyway, and it sized a worker-side buffer against a number the
@@ -559,25 +571,39 @@ nothing else.**
 - **Image boundary `[shipped]`, enforced fail-closed.** `SANDBOX_IMAGE` MUST be a **pinned
   digest of the repository's own `sandbox-runner` image**, not a stock upstream tag. This is
   **enforced at run time before any container is created**, not merely documented: an
-  unpinned reference (a tag), an unset value, or an image that does not advertise
-  `org.opencontainers.image.title=sherpa-sandbox-runner` is refused with
-  `runtime_image_untrusted` and nothing executes. Both checks are required and neither is
-  sufficient alone — pinning proves the bytes cannot change after review, the label proves
-  they are the *right* bytes, so a valid digest for stock `python` is still refused.
-  There is deliberately **no working default**: a fresh checkout fails loudly rather than
-  appearing to work while running whatever a mutable tag points at today. The v1 image carries
-  Python + `pytest` + `ruff` and a `capabilities.json` manifest that the orchestrator probes
-  at `runtime_open` (**the probe itself is `[target]`, P4**); it deliberately contains **no
-  `git` and no network tooling**. Node is a later optional profile. Probed capabilities let a
-  missing dependency return `environment_missing_dependencies` **with the list of what is
-  available**, instead of an unexplained exit 127 — today the mapping exists (exit 127 ⇒
-  `environment_missing_dependencies`) but the "what IS available" list awaits the P4 probe.
-  The runner's **base image is pinned by registry digest** in `sandbox-runner/Dockerfile` for
-  the same reason one level down: an upstream security rebuild re-points the tag.
+  unpinned reference (a tag) or an unset value is refused with `runtime_image_untrusted` and
+  nothing executes. There is deliberately **no working default**: a fresh checkout fails
+  loudly rather than appearing to work while running whatever a mutable tag points at today.
+  The v1 image carries Python + `pytest` + `ruff` and a `capabilities.json` manifest that the
+  orchestrator probes at `runtime_open` (**the probe itself is `[target]`, P4**); it
+  deliberately contains **no `git` and no network tooling**. Node is a later optional profile.
+  Probed capabilities let a missing dependency return `environment_missing_dependencies`
+  **with the list of what is available**, instead of an unexplained exit 127 — today the
+  mapping exists (exit 127 ⇒ `environment_missing_dependencies`) but the "what IS available"
+  list awaits the P4 probe. The runner's **base image is pinned by registry digest** in
+  `sandbox-runner/Dockerfile` for the same reason one level down: an upstream security
+  rebuild re-points the tag.
+
+  **Where the trust actually comes from (stated precisely, because it is easy to overclaim).**
+  The security property rests on **one** thing: `SANDBOX_IMAGE` is an **operator-chosen
+  immutable digest** — an allowlist of exactly one set of bytes — which is what makes "the
+  image that was reviewed is the image that runs" true, and why a tag is refused.
+  The additional check that the image advertises
+  `org.opencontainers.image.title=sherpa-sandbox-runner` is **NOT a second security
+  control**: OCI labels are ordinary image metadata and are **forgeable** by anyone who can
+  build an image, so an attacker able to get a hostile digest configured can equally set its
+  labels. That check exists as a **compatibility / misconfiguration guard** — it turns "the
+  operator pasted the wrong digest" into one clear refusal instead of a container with no
+  `/work` volume, no tooling and a root user failing confusingly later.
+  **No provenance, signature or attestation is verified, and none is claimed.**
+  Cryptographic supply-chain verification (cosign/in-toto style signature or attestation
+  checking, and a policy for who may sign) is **explicitly out of scope for v1** and is
+  recorded here as a known gap rather than implied by the label check. It belongs with the
+  ADR-039 production-runner work, which already gates multi-user/untrusted-code deployment.
   > **Digest clarification.** "Pinned digest" means the **image ID digest**
   > (`docker image inspect --format '{{.Id}}'`) or an equally immutable repository digest
-  > (`name@sha256:…`), not a tag: the runner is built locally and never pushed, so it has no
-  > registry `RepoDigests` of its own (owner decision D-1).
+  > (`[host[:port]/]name@sha256:…`), not a tag: the runner is built locally and never pushed,
+  > so it has no registry `RepoDigests` of its own (owner decision D-1).
   > **Not built by compose.** `infra/docker-compose.yml` has no `sandbox-runner` service and
   > `docker compose up --build` does **not** build it — the runner is a sibling container the
   > worker starts through the Docker socket, not part of the orchestration. It must be built

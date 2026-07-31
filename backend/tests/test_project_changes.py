@@ -305,3 +305,98 @@ async def test_the_orphan_gc_does_not_delete_change_set_diff_spills() -> None:
                 assert "def add" in diff, f"diff spill was swept (removed={swept})"
         finally:
             await s.rollback()
+
+
+async def _snapshot_entry(s, ctx, snapshot_id, path):  # type: ignore[no-untyped-def]
+    """Read the persisted head-snapshot row directly — stronger than trusting a lazily
+    loaded relationship, and it is the row the next materialize actually reads."""
+    from sqlalchemy import select
+
+    from app.models import ProjectSnapshotEntry
+
+    row = (
+        await s.execute(
+            select(ProjectSnapshotEntry).where(
+                ProjectSnapshotEntry.tenant_id == ctx.tenant_id,
+                ProjectSnapshotEntry.snapshot_id == snapshot_id,
+                ProjectSnapshotEntry.path == path,
+            )
+        )
+    ).scalar_one()
+    return row
+
+
+@pytest.mark.asyncio
+async def test_the_executable_bit_survives_the_change_set_save_and_head_snapshot() -> None:
+    """Regression cover for the Phase TR P3 review fix, end to end through the database.
+
+    `chmod +x` with byte-identical content used to produce an **empty delta**, because the
+    materialized baseline stored only a content hash. That was verified by hand in the
+    browser (change-set `exec` badge, `executable=t` in the saved snapshot); this pins the
+    same result automatically so it cannot silently regress.
+
+    The whole chain is exercised, because each link could drop the bit independently:
+    sandbox delta -> overlay entry -> change-set entry -> Save/CAS -> head snapshot row.
+    """
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            ctx = await _seed(s)
+            _project, _sid, wc = await _open_wc(s, ctx)
+
+            # 1. create the file NON-executable and save it, so the executable change in
+            #    step 2 is measured against a committed head rather than a pending edit.
+            body = b"#!/bin/sh\necho hi\n"
+            await sbx_svc.run_sandbox(
+                s,
+                ctx,
+                wc,
+                run_id=uuid.uuid4(),
+                request=sbx_svc.SandboxRequest(
+                    edits=[ScratchEdit(path="run.sh", op="write", data=body, executable=False)]
+                ),
+            )
+            await changes_svc.build_change_set(s, ctx, wc, run_id=uuid.uuid4())
+            first = await wc_svc.save(s, ctx, wc)
+            base_row = await _snapshot_entry(s, ctx, first.snapshot.id, "run.sh")
+            assert base_row.executable is False
+            base_hash = base_row.content_hash
+
+            wc = await wc_svc.open_working_copy(s, ctx, session_id=wc.session_id)
+            eff = await wc_svc.effective_tree(s, ctx, wc)
+            assert eff["run.sh"].executable is False
+
+            # 2. flip ONLY the executable bit — identical bytes.
+            out = await sbx_svc.run_sandbox(
+                s,
+                ctx,
+                wc,
+                run_id=uuid.uuid4(),
+                request=sbx_svc.SandboxRequest(
+                    edits=[ScratchEdit(path="run.sh", op="write", data=body, executable=True)]
+                ),
+            )
+            assert out.termination_reason == "done"
+
+            # The overlay records it as a real change even though the content is unchanged.
+            eff2 = await wc_svc.effective_tree(s, ctx, wc)
+            assert eff2["run.sh"].executable is True
+            assert eff2["run.sh"].content_hash == base_hash, "content must be untouched"
+
+            # 3. it reaches the reviewable change set...
+            cs = await changes_svc.build_change_set(s, ctx, wc, run_id=uuid.uuid4())
+            assert cs is not None
+            entries, _ = await changes_svc.get_change_set_entries(s, ctx, cs)
+            entry = next(e for e in entries if e.path == "run.sh")
+            assert entry.change_kind == "modified"
+            assert entry.executable is True
+            assert entry.old_content_hash == entry.new_content_hash
+
+            # 4. ...and survives Save into the new head snapshot row.
+            saved = await wc_svc.save(s, ctx, wc)
+            head_row = await _snapshot_entry(s, ctx, saved.snapshot.id, "run.sh")
+            assert head_row.executable is True
+            assert head_row.content_hash == base_hash
+        finally:
+            await s.rollback()

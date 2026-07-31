@@ -26,10 +26,11 @@
 #   docker image inspect sherpa-sandbox-runner:dev --format '{{.Id}}'
 #   # put that sha256:... in SANDBOX_IMAGE
 #
-# The image is local-only and never pushed, so it is pinned by image ID digest rather than a
-# registry RepoDigest. The `org.opencontainers.image.title` label below is what the runtime
-# checks to confirm the pinned bytes are actually *this* runner: pinning proves the bytes
-# cannot change, the label proves they are the right ones.
+# The `org.opencontainers.image.title` label below is what the runtime checks as a
+# **misconfiguration guard** — it catches a digest pasted from the wrong image. It is NOT a
+# security control and proves nothing about origin: labels are plain metadata that anyone
+# building an image can set. The security property comes from SANDBOX_IMAGE being an
+# operator-chosen immutable digest.
 #
 # Node is a later optional profile (O-6). Production isolation (gVisor / microVM, no shared
 # docker.sock) remains ADR-039's do-not-ship gate and is NOT addressed by this image.
@@ -40,6 +41,10 @@
 # which is the same property SANDBOX_IMAGE is pinned for one level up. Refresh deliberately:
 #   docker pull python:3.11.9-slim-bookworm
 #   docker image inspect python:3.11.9-slim-bookworm --format '{{index .RepoDigests 0}}'
+#
+# NOTE: pinning fixes *which bytes*, it does not authenticate *who produced them*. No
+# signature or attestation is verified anywhere in this build; see the runner README and
+# config §1.7, where that gap is recorded explicitly rather than implied away.
 FROM python:3.11.9-slim-bookworm@sha256:8fb099199b9f2d70342674bd9dbccd3ed03a258f26bbd1d556822c6dfc60c317
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

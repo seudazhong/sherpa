@@ -61,6 +61,7 @@ from app.sandbox.transport import (
     RUNNER_GID,
     RUNNER_UID,
     WORK_DIR,
+    ByteBuffer,
     TarTransport,
     TransportError,
     WorkspaceFile,
@@ -78,14 +79,25 @@ RUNTIME_TRANSPORT_FAILED = "runtime_transport_failed"
 MEM_LIMIT = "mem_limit"
 
 #: An immutable image reference: a bare image ID digest (``sha256:<64 hex>``) or a
-#: repository digest (``name@sha256:<64 hex>``). A tag is deliberately NOT accepted — a tag
-#: can be re-pointed at different bytes after review, which is exactly what config §1.7's
-#: "pinned digest" rule exists to prevent.
-_IMAGE_DIGEST_RE = re.compile(r"^(?:[A-Za-z0-9][\w.\-/]*@)?sha256:[0-9a-f]{64}$")
+#: repository digest (``[host[:port]/]name@sha256:<64 hex>``). A tag is deliberately NOT
+#: accepted — a tag can be re-pointed at different bytes after review, which is exactly what
+#: config §1.7's "pinned digest" rule exists to prevent. The name part allows a registry
+#: host with a port; the digest part stays strict (lowercase hex, exactly 64).
+_IMAGE_DIGEST_RE = re.compile(
+    r"^(?:[A-Za-z0-9][A-Za-z0-9._\-]*(?::[0-9]+)?(?:/[A-Za-z0-9._\-]+)*@)?sha256:[0-9a-f]{64}$"
+)
 
-#: The runner image identifies itself with this OCI title label. Checking it means a
-#: *syntactically* immutable reference that points at some unrelated image is still refused:
-#: pinning proves the bytes cannot change, not that they are the right bytes.
+#: The runner image advertises this OCI title.
+#:
+#: ⚠️ **This label is a compatibility guard, not a security control.** Labels are plain
+#: image metadata: anyone who can build an image can set them, so the check cannot prove
+#: provenance and is not claimed to. Its job is to catch *accidental misconfiguration* — a
+#: digest pasted from the wrong image, which would otherwise start a container that has no
+#: ``/work`` volume, no ``pytest``/``ruff``, and a root user, and fail in a confusing way
+#: much later. **The real trust root is the operator-chosen digest in ``SANDBOX_IMAGE``**:
+#: it is an allowlist of exactly one immutable image, and it is what makes "the bytes that
+#: were reviewed are the bytes that run" true. Cryptographic provenance (signature or
+#: attestation verification) is deliberately **out of scope** here — see config §1.7.
 RUNNER_IMAGE_TITLE = "sherpa-sandbox-runner"
 RUNNER_TITLE_LABEL = "org.opencontainers.image.title"
 RUNNER_CAPABILITIES_LABEL = "sherpa.capabilities"
@@ -191,7 +203,11 @@ class ScratchEdit:
 class DeltaEntry:
     path: str
     change_kind: str  # added | modified | deleted
-    data: bytes | None  # None for deleted
+    #: ``None`` for a deletion. May be a ``bytearray`` whose ownership egress handed over
+    #: (:data:`~app.sandbox.transport.ByteBuffer`) — **read-only**. The persist boundary
+    #: converts to immutable ``bytes`` once, per file, because the content-addressed blob
+    #: store requires it.
+    data: ByteBuffer | None
     size_bytes: int
     executable: bool
 
@@ -431,7 +447,7 @@ def _transport_failure(exc: TransportError) -> RunResult:
 
 
 def _is_read_timeout(exc: BaseException) -> bool:
-    """True only for a genuine *read timeout* on the wait call.
+    """True only for a genuine *read* timeout on the wait call.
 
     This needs care, and getting it wrong is how a broken daemon gets reported to the user as
     "your command took too long". docker-py does **not** translate the timeout: measured
@@ -439,6 +455,16 @@ def _is_read_timeout(exc: BaseException) -> bool:
     ``requests.exceptions.ConnectionError(ReadTimeoutError(...))`` — the *same class* a
     genuinely unreachable daemon raises. Class alone therefore cannot decide it; the
     exception chain has to be walked for a timeout marker.
+
+    **Connect timeouts are excluded, and that exclusion is load-bearing.** Both
+    ``requests.ConnectTimeout`` (which subclasses ``Timeout``) and
+    ``urllib3.ConnectTimeoutError`` (which subclasses urllib3's ``TimeoutError``) satisfy a
+    naive "is this a timeout?" test, so an outage that stalled at connect time was being
+    reported as the user's command running too long. A connect timeout means we never
+    reached the daemon — and by the time ``wait`` is called this client has already created
+    and started the container through the same connection pool, so the daemon *was*
+    reachable a moment ago. Failing to reach it now is an outage, never a wall-clock
+    expiry.
     """
     try:
         import requests.exceptions as rexc
@@ -446,18 +472,25 @@ def _is_read_timeout(exc: BaseException) -> bool:
     except Exception:  # noqa: BLE001 - if these are absent nothing here can be a timeout
         return False
 
-    timeout_types: tuple[type[BaseException], ...] = (
-        rexc.Timeout,
-        uexc.TimeoutError,
-        uexc.ReadTimeoutError,
-        TimeoutError,
+    #: Checked FIRST: these are timeouts, but not *this* timeout.
+    connect_types: tuple[type[BaseException], ...] = (
+        rexc.ConnectTimeout,
+        uexc.ConnectTimeoutError,
     )
+    #: A read timeout on an established connection — the wall-clock expiry we want.
+    read_types: tuple[type[BaseException], ...] = (
+        rexc.ReadTimeout,
+        uexc.ReadTimeoutError,
+    )
+    #: Generic timeouts, accepted only when nothing in the chain says "connect".
+    generic_types: tuple[type[BaseException], ...] = (rexc.Timeout, TimeoutError)
+
+    chain: list[BaseException] = []
     seen: set[int] = set()
     cur: BaseException | None = exc
     while cur is not None and id(cur) not in seen:
         seen.add(id(cur))
-        if isinstance(cur, timeout_types):
-            return True
+        chain.append(cur)
         # requests wraps the urllib3 cause in .args rather than __cause__ in this path.
         nxt: BaseException | None = cur.__cause__ or cur.__context__
         if nxt is None:
@@ -466,21 +499,26 @@ def _is_read_timeout(exc: BaseException) -> bool:
                     nxt = arg
                     break
         cur = nxt
-    return False
+
+    if any(isinstance(node, connect_types) for node in chain):
+        return False
+    if any(isinstance(node, read_types) for node in chain):
+        return True
+    return any(isinstance(node, generic_types) for node in chain)
 
 
-def _classify_wait_failure(exc: BaseException) -> RunResult:
-    """Map a non-timeout ``container.wait`` failure onto its contract-named reason.
+def _classify_daemon_failure(exc: BaseException) -> RunResult:
+    """Map a docker client failure onto its contract-named reason.
 
-    Note ``requests.exceptions.ConnectionError`` is **not** a builtin ``ConnectionError`` —
-    it inherits from ``OSError`` via ``RequestException`` — so it has to be named explicitly
-    rather than caught by the builtin.
+    The distinction that matters to an operator: an ``APIError`` means the daemon **answered**
+    and answered with an error (a transport/API fault), while a connection failure means it
+    could not be reached at all. Note ``requests.exceptions.ConnectionError`` is **not** a
+    builtin ``ConnectionError`` — it inherits from ``OSError`` via ``RequestException`` — so
+    it has to be named explicitly rather than caught by the builtin.
     """
     from docker.errors import APIError, DockerException
 
     if isinstance(exc, APIError):
-        # The daemon answered, and answered with an error: a transport/API fault, not an
-        # unreachable daemon.
         return named_failure(RUNTIME_TRANSPORT_FAILED, exc)
     try:
         import requests.exceptions as rexc
@@ -489,9 +527,23 @@ def _classify_wait_failure(exc: BaseException) -> RunResult:
             return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
     except Exception:  # noqa: BLE001 - requests missing just means we fall through
         pass
+    try:
+        import urllib3.exceptions as uexc
+
+        # A bare urllib3 error can surface when docker-py does not wrap it. It is a
+        # transport-layer failure to reach the daemon, not an unmodelled internal bug.
+        if isinstance(exc, uexc.HTTPError):
+            return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
+    except Exception:  # noqa: BLE001
+        pass
     if isinstance(exc, DockerException | ConnectionError | OSError):
         return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
     return unmodelled_failure(exc)
+
+
+def _classify_wait_failure(exc: BaseException) -> RunResult:
+    """A non-timeout ``container.wait`` failure. Same taxonomy as any other client call."""
+    return _classify_daemon_failure(exc)
 
 
 def _kill_quietly(container: Any) -> None:
@@ -509,20 +561,27 @@ def is_pinned_image_reference(ref: str) -> bool:
 
 
 def verify_runner_image(client: Any, ref: str) -> RunResult | None:
-    """Fail closed unless ``ref`` is a digest-pinned, first-party runner image.
+    """Fail closed unless ``ref`` is a digest-pinned image that looks like our runner.
 
-    Returns ``None`` when the image is approved, or the named failure to report. Two
-    independent checks, because either alone is insufficient:
+    Returns ``None`` when the image is accepted, or the named failure to report.
 
-    1. **the reference is immutable** — a tag such as ``sherpa-sandbox-runner:dev`` is
-       rejected outright. Before this, "digest pinning" existed only in comments while every
-       default shipped a mutable tag, so the deployed sandbox ran whatever that tag pointed
-       at today;
-    2. **the image is ours** — it must carry the ``org.opencontainers.image.title`` label of
-       the first-party runner. Pinning proves the bytes are stable; the label is what proves
-       they are the *right* bytes, so a digest for some unrelated image is still refused.
+    **Threat boundary, stated honestly.** The security property comes from **one** thing:
+    ``SANDBOX_IMAGE`` is an operator-chosen **immutable digest**, i.e. an allowlist of
+    exactly one set of bytes. That is what makes "what was reviewed is what runs" true, and
+    it is why a tag is refused outright — a tag can be re-pointed after review.
+
+    The label check that follows is **not** a second security control. Labels are ordinary,
+    forgeable image metadata; an attacker who can make the operator configure a hostile
+    digest can equally set that digest's labels. It is a **compatibility / typo guard**:
+    it turns "operator pasted the wrong digest" into one clear refusal instead of a
+    container with no ``/work`` volume and no tooling failing confusingly later.
+
+    No provenance or attestation is verified here, and none is claimed. Real supply-chain
+    verification (cosign/in-toto style signature or attestation checking) is **out of
+    scope** for v1 and is recorded as such in config §1.7 rather than implied by this
+    check.
     """
-    from docker.errors import APIError, DockerException, ImageNotFound
+    from docker.errors import ImageNotFound
 
     ref = (ref or "").strip()
     if not ref:
@@ -543,18 +602,20 @@ def verify_runner_image(client: Any, ref: str) -> RunResult | None:
         image = client.images.get(ref)
     except ImageNotFound as exc:
         return named_failure(RUNTIME_IMAGE_MISSING, exc)
-    except (APIError, DockerException) as exc:
-        return named_failure(RUNTIME_DAEMON_UNREACHABLE, exc)
-    except Exception as exc:  # noqa: BLE001
-        return unmodelled_failure(exc)
+    except Exception as exc:  # noqa: BLE001 - classify, never crash the loop
+        # An APIError means the daemon answered and answered with an error (transport/API
+        # fault); a connection failure means we could not reach it at all. Collapsing both
+        # into "unreachable" sent the operator to check the wrong thing.
+        return _classify_daemon_failure(exc)
 
     labels = (image.labels or {}) if hasattr(image, "labels") else {}
     if labels.get(RUNNER_TITLE_LABEL) != RUNNER_IMAGE_TITLE:
         return named_failure(
             RUNTIME_IMAGE_UNTRUSTED,
             ValueError(
-                f"image {ref!r} is not the first-party runner "
-                f"({RUNNER_TITLE_LABEL}={labels.get(RUNNER_TITLE_LABEL)!r})"
+                f"image {ref!r} does not look like the Sherpa runner "
+                f"({RUNNER_TITLE_LABEL}={labels.get(RUNNER_TITLE_LABEL)!r}); this is a "
+                "misconfiguration guard, not a provenance check"
             ),
         )
     return None

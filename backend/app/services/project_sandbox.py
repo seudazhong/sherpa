@@ -350,9 +350,15 @@ async def run_sandbox(
         overlay: list[wc_svc.OverlayDelta] = []
         for d in delta.entries:
             if d.change_kind in ("added", "modified"):
+                # The transport hands over a read-only ``bytearray`` (transport.ByteBuffer)
+                # so egress needs no full-size copy; the content-addressed blob store needs
+                # immutable bytes, so the single conversion happens here — once, for one
+                # file at a time, bounded by the WORKING_COPY_MAX_* change-set caps.
+                payload = bytes(d.data) if d.data is not None else b""
                 h, _ = await drive_svc.ensure_blob(
-                    db, ctx, wc.user_id, data=d.data or b"", content_type="application/octet-stream"
+                    db, ctx, wc.user_id, data=payload, content_type="application/octet-stream"
                 )
+                del payload
                 overlay.append(
                     wc_svc.OverlayDelta(
                         path=d.path,
