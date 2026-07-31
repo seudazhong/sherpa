@@ -332,7 +332,7 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研�
 
 ---
 
-## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 🚧 **P0 + P1 SHIPPED · P2–P5 NOT STARTED**
+## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 🚧 **P0 · P1 · P3 SHIPPED · P2 DEFERRED (owner) · P4–P5 NOT STARTED**
 
 > Closes backlog **B-2** (52 flat tools) and **B-8** (`project_run` always fails) as one program.
 > Architecture approved by the owner 2026-07-30 ([ADR-045](decisions.md#adr-045) umbrella,
@@ -340,7 +340,14 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研�
 > [ADR-048](decisions.md#adr-048) RuntimeSession). **Execution plan approved by the owner
 > 2026-07-30.** **P0 (TR.5, honesty pass) and P1 (TR.6, baseline squash + legacy deletion) are
 > shipped**, and the destructive baseline reset of TR.3 **has been run** (once, as designed —
-> the schema is now the single `0001_baseline`). P2–P5 have not started.
+> the schema is now the single `0001_baseline`).
+>
+> **Status as of 2026-08-01.** P0 · P1 · the P2 partials (P2.0a dead-tool sweep, P2.2
+> `domain_verb` rename) shipped; **✅ P3 (TR.8) COMPLETE and owner-accepted**, including its
+> 128 MiB workspace/change-set cap as the intentional trade-off for the 1 GiB worker budget;
+> **P2's catalog deferred by owner decision (2026-07-31)**; **P4 and P5 not started**.
+> Neither backlog item is closed: **B-2** waits on the P2 catalog, **B-8** on the P5 human
+> Run/Stop lane.
 
 ### TR.0 Owner approval checklist — defaults already approved (2026-07-30)
 
@@ -601,7 +608,7 @@ measured and recorded, and no tool ships with a description over the byte cap.**
 > Vertical (workflow) consolidation candidates are parked in [B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)
 > and need B-11 evidence first.
 
-### TR.8 P3 — tar transport + first-party runner image (mechanical half of B-8) — ✅ **SHIPPED 2026-07-31**
+### TR.8 P3 — tar transport + first-party runner image (mechanical half of B-8) — ✅ **COMPLETE — owner-accepted 2026-08-01**
 
 | # | Task | Paths | TDD / AC |
 |---|---|---|---|
@@ -614,12 +621,20 @@ measured and recorded, and no tool ships with a description over the byte cap.**
 | P3.7 ✅ | **Real-Docker test lane** | `backend/tests/conftest.py` (`docker_runner_image` fixture + auto-skip), new `backend/tests/test_runtime_docker.py`, `backend/pyproject.toml` marker + `addopts = "-q -m 'not docker'"` | `uv run pytest -m docker` → **30 passed**: real exit codes, real pytest fail→fix→pass, ruff, no network, uid 10001 + read-only rootfs, no secret env / no `docker.sock`, real OOM → `mem_limit`, real wall-clock kill, credential canary, container+volume removal, **ownership-scoped + liveness-guarded sweep incl. a live run surviving a concurrent sweeper**, real `chmod +x/-x` deltas, and a real mutable tag / foreign digest both refused. **It found a real bug on first run** (implicit parent dirs created root-owned ⇒ the non-root runner could not write in them), and a later run **caught a confirmed sweep race** (the dev worker's cron deleting a live test container → `409 dead or marked for removal`). |
 | P3.V ✅ | Failure injection (TR.11) + topology matrix (TR.12) | — | See the two tables' status columns below. Windows + Docker Desktop / DooD green; Linux DooD / DinD / rootless **NOT verified** (D-7). |
 
-**P3 exit — met (2026-07-31).** A real command executes in a real container on the Windows dev
+**P3 exit — met (2026-07-31), owner-accepted (2026-08-01).** A real command executes in a real
+container on the Windows dev
 stack and returns a real exit code and stdout, driven both from `uv run pytest -m docker` and,
 live, from the worker container over DooD and from chat with the real provider
 (`pytest -q` → exit 1 → fix → exit 0; `ruff --version` → 0.6.9; `git --version` → 127). No bind
 mount and no host path reaches the daemon anywhere. The canary passes. `uv run pytest -m docker`
 exists and is green locally.
+
+**Owner decision (2026-08-01): the 128 MiB workspace / change-set cap is ACCEPTED** as the
+intentional product trade-off for the current 1 GiB worker memory budget. It is no longer a
+pending question. The trade-off is explicit: a Project whose *changed* bytes in one boundary
+exceed 128 MiB is refused with `changeset_bounds` rather than risking the worker. Raising it is
+a deliberate act that **requires raising the compose worker's `mem_limit` by twice the delta**
+(peak ≈ 2 × cap + ~40 MiB — see config §1.7), not a number to nudge.
 
 **Still open after P3 — B-8 does NOT close here** (it closes at the end of P5):
 - no `runtime_open`/`sh_exec`/`fs_*` tools, no async `202`+SSE, no cancel (**P4**);

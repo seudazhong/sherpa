@@ -188,6 +188,11 @@ class Settings(BaseSettings):
     # 512 MiB implied ~1 GiB, which was not a claim this worker could honour — the compose
     # worker now declares a 1 GiB limit, so raising this cap REQUIRES raising that limit by
     # twice the delta. `WORKING_COPY_MAX_CHANGED_BYTES` must stay <= the transfer cap.
+    #
+    # OWNER-APPROVED 2026-08-01: 128 MiB is the accepted product trade-off for the current
+    # 1 GiB worker budget, not a placeholder. A boundary whose changed bytes exceed it is
+    # refused with `changeset_bounds` and nothing is persisted. Do not raise it without
+    # raising the worker's mem_limit with it (config §1.7).
     sandbox_scratch_max_bytes: int = 128 * 1024 * 1024  # per-session tar cap (128 MiB)
     working_copy_max_changed_files: int = 5000  # change-set bound: changed-file count
     working_copy_max_changed_bytes: int = 128 * 1024 * 1024  # change-set bound: changed bytes

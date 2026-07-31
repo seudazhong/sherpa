@@ -15,13 +15,13 @@
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | ✅ done |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
-| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | open · ✅ **symptom fixed by Phase TR P3 (2026-07-31)** — tar transport + first-party runner image + real-Docker lane; `project_run` really runs. **Still open: no human Run/Stop lane (P4 + P5)** |
+| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | **open** · ✅ **symptom fixed; Phase TR P3 COMPLETE and owner-accepted 2026-08-01** — tar transport + first-party runner image + real-Docker lane; `project_run` really runs. **Still open: no human Run/Stop lane (P4 + P5)** |
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
 | B-10 | design | [Tool-surface slimming: dead tools, prose diet, and *vertical* (workflow) consolidation](#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation) | open — feeds [Phase TR](IMPLEMENTATION.md) **P2** |
 | B-11 | gap | [No tool-use evaluation harness (decisions are argued, not measured)](#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) | open |
 | B-12 | bug | [The Drive orphan GC deletes change-set diff spills](#b-12-the-drive-orphan-gc-deletes-change-set-diff-spills) | ✅ fixed 2026-07-31 (retention question still open) |
 
-Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2 + B-8 together** — triaged 2026-07-30 and found to be **one architecture problem, not two** (see both entries below). The owner approved the unified **clean-break** architecture ([ADR-045](decisions.md#adr-045) umbrella · [ADR-046](decisions.md#adr-046) tool catalog · [ADR-047](decisions.md#adr-047) tar transport · [ADR-048](decisions.md#adr-048) RuntimeSession); the execution plan is [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Neither item is fixed**: B-2 closes at the end of Phase TR **P2**, B-8 at the end of **P5**. The owner approved the Phase TR execution plan on 2026-07-30 and **P0 (the honesty pass) + P1 (baseline squash + legacy deletion, including the one-time destructive dev rebuild) are shipped**; P2–P5 have not started. P1 removed the duplicate `file_*` stack and `run_code` (**52 → 47 tools / 19,848 → 18,397 B — deletion, not the catalog**) and moved the sandbox bookkeeping onto `project_runtime_sessions`/`project_exec_runs`, but it changed **no** execution path: `project_run` still bind-mounts and still fails.
+Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2 + B-8 together** — triaged 2026-07-30 and found to be **one architecture problem, not two** (see both entries below). The owner approved the unified **clean-break** architecture ([ADR-045](decisions.md#adr-045) umbrella · [ADR-046](decisions.md#adr-046) tool catalog · [ADR-047](decisions.md#adr-047) tar transport · [ADR-048](decisions.md#adr-048) RuntimeSession); the execution plan is [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Neither item is fixed**: B-2 closes at the end of Phase TR **P2**, B-8 at the end of **P5**. The owner approved the Phase TR execution plan on 2026-07-30. **Status as of 2026-08-01: P0, P1 and the P2 partials (P2.0a + P2.2) are shipped; ✅ P3 is COMPLETE and owner-accepted (including its 128 MiB workspace cap); P2's catalog is deferred by owner decision; P4 + P5 have not started.** P1 removed the duplicate `file_*` stack and `run_code` (**52 → 47 tools / 19,848 → 18,397 B — deletion, not the catalog**) and moved the sandbox bookkeeping onto `project_runtime_sessions`/`project_exec_runs` without changing any execution path; **P3 then replaced the bind mount with tar transport, so `project_run` really runs**. Neither backlog item is closed: B-2 still waits on the P2 catalog, B-8 on the P5 human Run/Stop lane.
 
 ---
 
@@ -247,6 +247,10 @@ change, not a rename — not done here.
 > `environment_missing_dependencies`). The human lane was exercised on the existing Change
 > Review panel (real diff → Save selected → head advanced to `head_generation=1` with
 > `calc.py`/`test_calc.py` in the snapshot).
+>
+> **Owner decision (2026-08-01): Phase TR P3 is accepted as COMPLETE**, including its 128 MiB
+> workspace/change-set cap as the intentional trade-off for the 1 GiB worker budget. **B-8 itself
+> is NOT closed by that acceptance** — P3 was always only the mechanical half.
 >
 > **Why this stays open:** the close criterion below has two halves and P3 delivered one. There
 > is still **no Run control, no streaming log and no Stop** — `createSandboxRun` is *still* dead

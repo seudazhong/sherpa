@@ -410,12 +410,12 @@ The implementation MAY split this model into role-specific subclasses, but the e
 | Projects (runtime) | ~~`SANDBOX_SCRATCH_ROOT`~~ | — | — | — | — | **DELETED (ADR-047)** — tar transport passes no host path to the daemon at all; this setting was the direct cause of backlog B-8. |
 | Projects (runtime) | `SANDBOX_RUNTIME_IDLE_TTL_SECONDS` | `int` ≥ 30 | `600` | No | No | **`[target]`** RuntimeSession idle TTL; the container is closed after it, and the working copy survives. The setting exists after P3, but **nothing reads it until P4**. |
 | Projects (runtime) | `WORKING_COPY_MAX_CHANGED_FILES` | `int` ≥ 1 | `5000` | No | No | Change-set bound: changed-file count; overflow ⇒ explicit truncated review. |
-| Projects (runtime) | `WORKING_COPY_MAX_CHANGED_BYTES` | `int` ≥ 1 | `134217728` | No | No | Change-set bound: total changed bytes (**128 MiB**); must stay ≤ `SANDBOX_SCRATCH_MAX_BYTES`, since both bound the same in-memory trees. |
-| Projects (runtime) | `WORKING_COPY_MAX_ARTIFACT_BYTES` | `int` ≥ 1 | `209715200` | No | No | Change-set bound: total artifact bytes (200 MiB); artifacts charge quota only when kept. |
+| Projects (runtime) | `WORKING_COPY_MAX_CHANGED_BYTES` | `int` ≥ 1 | `134217728` | No | No | Change-set bound: total changed bytes (**128 MiB**, **owner-approved 2026-08-01**); must stay ≤ `SANDBOX_SCRATCH_MAX_BYTES`, since both bound the same in-memory trees. Over ⇒ `changeset_bounds`, nothing persisted. |
+| Projects (runtime) | `WORKING_COPY_MAX_ARTIFACT_BYTES` | `int` ≥ 1 | `209715200` | No | No | **`[target]` — declared, not yet read by any code.** A per-working-copy **storage** quota over artifacts already persisted as blobs; artifacts charge quota only when kept. Deliberately **not** bounded by the 128 MiB *memory* budget — different axis, not an inconsistency. |
 | Projects (runtime) | `WORKING_COPY_MAX_DIFF_BYTES` | `int` ≥ 1 | `2097152` | No | No | Per-file spilled unified-diff cap (2 MiB); over ⇒ `diff_truncated`. |
 | Projects (runtime) | `SANDBOX_RUN_TIMEOUT_SECONDS` | `int` ≥ 1 | `120` | No | No | Per-exec wall-clock deadline; over ⇒ `wall_timeout`. |
 | Projects (runtime) | `SANDBOX_IMAGE` | `str` (digest) | **none — must be set** | `worker` | No | **`[shipped]` (P3)** MUST be the repository's own runner image, pinned by `docker image inspect --format '{{.Id}}'`. **Enforced fail-closed**: a tag or an empty value is refused with `runtime_image_untrusted` before any container is created. The digest **is** the trust root (an allowlist of one immutable image); the additional OCI title-label check is a **forgeable misconfiguration guard, not provenance** — signature/attestation verification is out of scope for v1. No default, so a fresh checkout fails loudly instead of running a mutable tag. |
-| Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `134217728` | No | No | Per-session tar cap (**128 MiB**), enforced in **both** directions and **before** allocation. This is a **memory budget**: peak ≈ 2× this + ~40 MiB, i.e. ~296 MiB of worker RSS against the compose worker's `mem_limit: 1g`. Raising it requires raising that limit by twice the delta. Must stay ≥ `WORKING_COPY_MAX_CHANGED_BYTES`. History: 2 GiB → 512 MiB → 128 MiB, each step forced by a measurement. |
+| Projects (runtime) | `SANDBOX_SCRATCH_MAX_BYTES` | `int` ≥ 1 | `134217728` | No | No | Per-session tar cap (**128 MiB**, **owner-approved 2026-08-01**), enforced in **both** directions and **before** allocation. This is a **memory budget**: peak ≈ 2× this + ~40 MiB, i.e. ~296 MiB of worker RSS against the compose worker's `mem_limit: 1g`. Raising it requires raising that limit by twice the delta. Must stay ≥ `WORKING_COPY_MAX_CHANGED_BYTES`. History: 2 GiB → 512 MiB → 128 MiB, each step forced by a measurement. |
 | Projects (runtime) | `SANDBOX_OWNER_ID` | `str` | derived | `worker` | No | **`[shipped]`** Which deployment owns a sandbox container; the orphan sweeper removes **only** containers carrying this id. Empty derives a stable id from the data-plane identity (database URL + bucket), so the ADR-044 test harness is automatically distinct from a dev worker on the same daemon. Set explicitly only when two deployments share one database. Sweeping without this scope was a confirmed defect (a live test container deleted mid-run → `409 dead or marked for removal`). |
 | Projects (runtime) | `SANDBOX_MEM_MB` | `int` ≥ 1 | `1024` | `worker` | No | Container memory cap; exceeding it is reported as the named `mem_limit` (docker `State.OOMKilled`). Raised from 256 in P3 — `pytest` + `ruff` do not fit in 256 MiB. |
 | Tools | `TOOL_CATALOG_CORE_MAX_BYTES` | `int` ≥ 1024 | `6144` | No | No | **`[target]`** Hard cap on the serialized core tool-set bytes (ADR-046); startup fails above it. Pre-ADR-046 baseline was 19,848 bytes across 52 flat tools. |
@@ -556,12 +556,22 @@ nothing else.**
   > storage boundary, which is what keeps content-addressed blobs immutable while the caller
   > is free to hand over a mutable buffer.
   >
-  > **The caps are therefore a memory budget.** `SANDBOX_SCRATCH_MAX_BYTES` = **128 MiB**
+  > **The caps are therefore a memory budget, and the budget is owner-approved.**
+  > `SANDBOX_SCRATCH_MAX_BYTES` = **128 MiB**
   > budgets ≈ 296 MiB of worker RSS; the compose `worker` declares `mem_limit: 1g`, leaving
-  > room for the model loop, embeddings and ingestion. **Raising the cap REQUIRES raising
-  > that limit by twice the delta**, and `WORKING_COPY_MAX_CHANGED_BYTES` must stay ≤ the
-  > transfer cap. The history is worth keeping: 2 GiB → 512 MiB → 128 MiB, each step because
+  > room for the model loop, embeddings and ingestion. **The owner accepted this cap on
+  > 2026-08-01** as the intentional product trade-off for the current 1 GiB worker budget —
+  > it is a settled decision, not an open question. The trade-off is explicit: a boundary
+  > whose changed bytes exceed 128 MiB is refused with `changeset_bounds` rather than risking
+  > the worker. **Raising the cap REQUIRES raising that limit by twice the delta**, and
+  > `WORKING_COPY_MAX_CHANGED_BYTES` must stay ≤ the transfer cap. The history is worth
+  > keeping: 2 GiB → 512 MiB → 128 MiB, each step because
   > a measurement contradicted the previous claim rather than because the number felt large.
+  > *(`WORKING_COPY_MAX_ARTIFACT_BYTES` is 200 MiB and deliberately **not** bounded by this
+  > budget: it is a per-working-copy storage quota over artifacts already persisted as blobs,
+  > not an in-memory tree. It is also **`[target]` — declared but not yet read by any code**,
+  > so it constrains nothing today. Recorded here so the larger number is not mistaken for an
+  > inconsistency with the 128 MiB memory budget.)*
   > Guards: `tests/test_sandbox_memory_e2e.py` (RSS bound + marginal-cost bound + bounded
   > reads), `tests/test_blob_nocopy.py` (no-copy mechanism),
   > `tests/test_project_changes.py::test_build_change_set_never_full_reads_an_oversized_file`.
