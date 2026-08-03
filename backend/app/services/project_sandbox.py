@@ -298,7 +298,9 @@ async def run_sandbox(
                 runtime_session_id=rs.id,
                 run_id=run_id,
                 seq=1,
+                command_text=request.command,
                 command_preview=request.command[:COMMAND_PREVIEW_MAX],
+                timeout_seconds=settings.sandbox_run_timeout_seconds,
                 state="running",
             )
             db.add(er)

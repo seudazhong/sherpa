@@ -225,6 +225,36 @@ async def open_runtime(
     scope: str = "project",
     reason: str | None = None,
 ) -> RuntimeAction:
+    action, needs_activation = await prepare_runtime(
+        db,
+        ctx,
+        session_id=session_id,
+        scope=scope,
+        reason=reason,
+    )
+    if not needs_activation:
+        return action
+    return await activate_runtime(
+        db,
+        ctx,
+        session_id=session_id,
+        runtime_session_id=action.runtime_session.id,
+    )
+
+
+async def prepare_runtime(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    session_id: uuid.UUID,
+    scope: str = "project",
+    reason: str | None = None,
+) -> tuple[RuntimeAction, bool]:
+    """Persist an opening RuntimeSession without touching Docker.
+
+    Returns ``(action, needs_activation)`` so REST can enqueue the worker only when
+    this call created or re-opened the container cache.
+    """
     del reason  # bounded audit prose is carried by the tool/event, not a schema column
     if scope not in ("project", "ephemeral"):
         raise Invalid("bad runtime scope")
@@ -256,6 +286,12 @@ async def open_runtime(
         )
         if existing is not None:
             if existing.state == "ready":
+                if existing.container_ref is None:
+                    existing.state = "opening"
+                    existing.expires_at = _operation_expiry(settings.sandbox_run_timeout_seconds)
+                    await db.commit()
+                    await _publish_state(existing)
+                    return RuntimeAction(existing), True
                 existing.expires_at = _idle_expiry()
             if existing.state == "ready" and existing.working_copy_id is not None:
                 existing_wc = await db.get(
@@ -264,7 +300,7 @@ async def open_runtime(
                 if existing_wc is not None:
                     existing_wc.lease_expires_at = existing.expires_at
             await db.commit()
-            return RuntimeAction(existing)
+            return RuntimeAction(existing), False
         fence = await wc_svc.acquire_lease(
             db,
             wc,
@@ -294,6 +330,28 @@ async def open_runtime(
     db.add(runtime)
     await db.commit()  # durable row before Docker create/ingress/start
     await _publish_state(runtime)
+    return RuntimeAction(runtime), True
+
+
+async def activate_runtime(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    session_id: uuid.UUID,
+    runtime_session_id: uuid.UUID,
+) -> RuntimeAction:
+    runtime = await _owned_runtime(
+        db,
+        ctx,
+        runtime_session_id=runtime_session_id,
+        session_id=session_id,
+        lock=True,
+    )
+    if runtime.state == "ready" and runtime.container_ref is not None:
+        return RuntimeAction(runtime)
+    if runtime.state != "opening":
+        raise Conflict("runtime_not_opening")
+    await db.commit()
     try:
         workspace = await _workspace(db, ctx, runtime)
     except sbx.ScratchError as exc:
@@ -486,7 +544,9 @@ async def exec_runtime(
         run_id=run_id,
         invocation_id=invocation_id,
         seq=int(last_seq or 0) + 1,
+        command_text=command,
         command_preview=command[:_COMMAND_PREVIEW_MAX],
+        timeout_seconds=timeout,
         state="running",
     )
     db.add(exec_run)

@@ -216,7 +216,9 @@ async def test_cancel_signal_and_expired_runtime_recovery(
                 id=uuid.uuid4(),
                 runtime_session_id=runtime.id,
                 seq=1,
+                command_text="sleep 999",
                 command_preview="sleep 999",
+                timeout_seconds=120,
                 state="running",
             )
             session.add(exec_run)

@@ -60,6 +60,11 @@ agent `invocation_id` with a unique partial index and composite FK, bounded
 `project_exec_runs`. Human runs keep `invocation_id=NULL`; agent execution can now key recovery to
 the persist-before-dispatch effect invocation.
 
+**✅ P4.1b durable async exec request shipped (2026-08-03).** Migration `0005` adds
+`command_text` (1..4000) and `timeout_seconds` (1..900) to `project_exec_runs`. Redis jobs now
+need carry only the exec row id; the worker never reconstructs work from queue payloads or a
+truncated preview. The full command remains outside journal/log/API projections.
+
 **✅ P4.2 + P4.4 core RuntimeSession shipped (2026-08-03; REST job adapter still pending).**
 `runtime_open` creates a durable opening row before Docker, tar-injects the effective tree into one
 hardened long-lived container, probes `capabilities.json`, and returns a reusable runtime id.

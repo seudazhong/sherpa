@@ -31,6 +31,8 @@ async def test_project_exec_run_dispatch_columns_and_unique_index_exist() -> Non
         )
         assert {
             "invocation_id",
+            "command_text",
+            "timeout_seconds",
             "stdout_head",
             "stderr_tail",
             "cancel_requested_at",

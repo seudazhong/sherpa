@@ -3179,7 +3179,9 @@ CREATE TABLE project_exec_runs (
     run_id           uuid,                            -- durable model-loop run (event journal), if any
     invocation_id    uuid,                            -- effect invocation for agent-driven exec; NULL for human
     seq              integer NOT NULL,                -- 1-based order within the session
+    command_text     text NOT NULL,                   -- durable worker input; <=4000, never journal/log
     command_preview  text NOT NULL,                   -- bounded, redacted; the approval preview shows this
+    timeout_seconds  integer NOT NULL,                -- 1..900
     state            text NOT NULL DEFAULT 'queued',  -- queued|running|persisted|failed|cancelled
     exit_code        integer,
     timed_out        boolean NOT NULL DEFAULT false,
@@ -3202,6 +3204,8 @@ CREATE TABLE project_exec_runs (
     CONSTRAINT fk_per_invocation FOREIGN KEY (tenant_id, invocation_id)
         REFERENCES effect_invocations (tenant_id, invocation_id),
     CONSTRAINT uq_per_seq UNIQUE (tenant_id, runtime_session_id, seq),
+    CONSTRAINT ck_per_command CHECK (char_length(command_text) BETWEEN 1 AND 4000),
+    CONSTRAINT ck_per_timeout CHECK (timeout_seconds BETWEEN 1 AND 900),
     CONSTRAINT ck_per_state CHECK (state IN ('queued','running','persisted','failed','cancelled'))
 );
 CREATE INDEX ix_per_rs ON project_exec_runs (tenant_id, runtime_session_id, seq);
@@ -3262,6 +3266,10 @@ Notes:
   durable until `persisted_boundary_at` is set (overlay + change set committed).
   `uq_prs_live` enforces at most one live runtime session per working copy, mirroring the
   single-writer lease.
+- **Durable async request.** `command_text` + `timeout_seconds` are the worker's recovery
+  input for REST `202` execs; Redis carries only the row id. The full command is bounded and
+  never copied into the journal, logs, approval projection or API response. Those surfaces use
+  `command_preview`.
 - **Runtime liveness/recovery.** `project_runtime_sessions.expires_at` is a lease-like deadline:
   ready sessions use the configured idle TTL; opening/executing sessions extend it past their
   bounded operation deadline. Maintenance fails expired live rows, clears/removes their

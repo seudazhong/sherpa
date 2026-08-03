@@ -967,6 +967,12 @@
 > `sh_exec` 从最新 overlay 重新物化；④ runtime 工具在执行容器动作前必须先提交
 > effect invocation / tool-call，`project_exec_runs` 以 `invocation_id` 去重，避免崩溃恢复时
 > 盲目重跑。
+>
+> **修订 D（2026-08-03，worker-owned REST 的 durable request）**：`202` 路径不能把
+> Redis job 参数当恢复真相源，也不能从截断的 `command_preview` 重建命令。
+> `project_exec_runs` 因此持久化有界 `command_text`（≤4000）和
+> `timeout_seconds`（1..900）；worker 只从该行执行。API/UI/审批仍只投影有界
+> `command_preview`，`command_text` 不进入 journal、日志或工具结果。
 
 - **核心判断：file 与 shell 必须分层，不能一刀切**：
 
