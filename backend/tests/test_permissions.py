@@ -25,7 +25,7 @@ from app.core import execute_run
 from app.db import SessionLocal, ping_db
 from app.effects import args_hash, begin_invocation
 from app.main import app
-from app.models import ApprovalEnvelope, EffectInvocation, EventJournal, Run, Tenant, User
+from app.models import ApprovalEnvelope, EffectInvocation, EventJournal, Message, Run, Tenant, User
 from app.models import Session as SessionModel
 from app.permissions import request_approval
 from app.permissions.service import build_preview
@@ -104,7 +104,9 @@ async def test_loop_gates_send_email_without_executing() -> None:
             reason = await execute_run(
                 s, run=run, provider=provider, registry=build_default_registry(), tier="full"
             )
-            assert reason == "completed"
+            assert reason == "awaiting_approval"
+            assert run.status == "running"
+            assert run.settled_at is None
 
             # A pending envelope is bound to this run and its invocation.
             env = (
@@ -134,6 +136,17 @@ async def test_loop_gates_send_email_without_executing() -> None:
                 .all()
             )
             assert "permission.asked" in types
+            assert "run.settled" not in types
+            assistant_count = await s.scalar(
+                select(text("count(*)"))
+                .select_from(Message)
+                .where(
+                    Message.tenant_id == tid,
+                    Message.run_id == run.id,
+                    Message.role == "assistant",
+                )
+            )
+            assert assistant_count == 0
 
             inv = (
                 await s.execute(

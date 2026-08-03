@@ -118,12 +118,29 @@ def _replay_run_events(events: list[EventJournal], out: list[dict[str, object]])
     """Replay one run's journal events (run_seq order) into provider messages."""
     text_parts: list[str] = []
     tool_calls: list[dict[str, object]] = []
+    terminal_by_call: dict[str, EventJournal] = {}
+    for event in events:
+        if event.event_type in (_TOOL_RESULT, _TOOL_ERROR):
+            call_id = str((event.payload_redacted or {}).get("id", ""))
+            if call_id:
+                terminal_by_call[call_id] = event
+    consumed_terminal: set[str] = set()
 
     def flush() -> None:
         if text_parts or tool_calls:
             out.append(_assistant_message(text_parts, list(tool_calls)))
         text_parts.clear()
         tool_calls.clear()
+
+    def append_tool_event(event: EventJournal) -> None:
+        payload = event.payload_redacted or {}
+        out.append(
+            {
+                "role": "tool",
+                "tool_call_id": str(payload.get("id", "")),
+                "content": str(payload.get("output", "")),
+            }
+        )
 
     for event in events:
         payload = event.payload_redacted or {}
@@ -144,21 +161,23 @@ def _replay_run_events(events: list[EventJournal], out: list[dict[str, object]])
         elif etype == _TURN_END:
             flush()
         elif etype in (_TOOL_RESULT, _TOOL_ERROR):
-            out.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": str(payload.get("id", "")),
-                    "content": str(payload.get("output", "")),
-                }
-            )
+            call_id = str(payload.get("id", ""))
+            if call_id not in consumed_terminal:
+                append_tool_event(event)
         elif etype == _PERMISSION_ASKED:
-            out.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": str(payload.get("id", "")),
-                    "content": str(payload.get("observation") or _PENDING_APPROVAL_OBSERVATION),
-                }
-            )
+            call_id = str(payload.get("id", ""))
+            terminal = terminal_by_call.get(call_id)
+            if terminal is not None:
+                append_tool_event(terminal)
+                consumed_terminal.add(call_id)
+            else:
+                out.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": str(payload.get("observation") or _PENDING_APPROVAL_OBSERVATION),
+                    }
+                )
         # run.started / run.settled / compaction / other events carry no
         # conversation content — the loop re-compacts as needed.
     flush()  # trailing turn without a turn.end (e.g. crashed mid-turn)

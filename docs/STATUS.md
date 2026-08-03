@@ -6,7 +6,7 @@
 >
 > ✅ **Phase TR product/runtime program complete.** P0/P1/P3/P4/P5 and the P2 partials are shipped. B-8 is closed. P2 remains an independently deferred catalog/token-surface task; current FULL-flat is 48 tools.
 >
-> Last updated: 2026-08-03 · Phase: **Phase TR P5 COMPLETE; B-8 CLOSED**. P0/P1/P3/P4/P5 and the P2 partials are shipped. The Project-bound human workspace now has effective-tree editing, worker-owned Run/stream/Stop, Changes/Runs/Artifacts and explicit rebase-review.
+> Last updated: 2026-08-03 · Phase: **Phase TR P5 COMPLETE; B-8 CLOSED + approval-continuation acceptance fix**. P0/P1/P3/P4/P5 and the P2 partials are shipped. The Project-bound human workspace now has effective-tree editing, worker-owned Run/stream/Stop, Changes/Runs/Artifacts and explicit rebase-review.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -31,6 +31,24 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 ## ▶ Next ready task
 **Owner choice:** resume deferred **P2 tool catalog/resolver** to close B-2, or proceed to
 **W4 GitHub sync/push/PR** (own ADR + approval boundary).
+
+**✅ B-8 manual-acceptance follow-up fixed (2026-08-03).** Owner testing found that an
+approval-gated `sh_exec` really executed after Approve, but `approval_resume_job` stopped after
+writing the `tool-result`; the model was never called again, so Chat stayed at
+“Approved — running…” and never reported stdout. The run now suspends at `permission.asked`
+without emitting `run.settled`; approval atomically claims and executes/rejects the exact bound
+invocation, then requeues the same run after all of its approvals are terminal. Provider-history
+replay replaces the pending placeholder with the terminal result at the original tool-call
+position, giving the model one bounded continuation turn even when approval occurred at the
+nominal turn limit. Recovery covers decision/result commit→Redis gaps, duplicate deliveries,
+stale dispatched approvals (`effect_unknown`, never blind retry), and queued agent runs; event
+sequence allocation is serialized for concurrent approvals. The UI distinguishes waiting from
+resuming and clears resolved cards when the continued run settles. Full gate: **566 passed**
+(+32 Docker deselected), ruff/format/mypy and frontend lint/build clean. Real-browser acceptance
+with `gpt-5.5`: an expired runtime produced a truthful tool error, the model opened a replacement
+runtime and requested approval again, then `python main.py` returned exit `0`; the final assistant
+message displayed the exact stdout (`hello, sherpa` / `欢迎来到 helloworld 项目！` / remaining
+program lines).
 
 **✅ P5.1 Project workspace shell shipped (2026-08-03).** A Project-bound Chat now renders
 desktop Files / conversation / Workspace columns; General Chat remains the prior single-column

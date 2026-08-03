@@ -13,10 +13,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.admission import admit_prompt
+from app.core.lease import claim_run_lease, refresh_run_lease
 from app.db import SessionLocal, ping_db
 from app.models import EventJournal, Message, Run, Tenant, User
 from app.models import Session as SessionModel
-from app.worker import WorkerSettings, project_workcopy_maintenance, run_job
+from app.worker import (
+    WorkerSettings,
+    approval_resume_tick,
+    project_workcopy_maintenance,
+    queued_run_tick,
+    run_job,
+)
 from tests.db_guard import drop_tenant
 
 
@@ -92,6 +99,116 @@ async def test_run_job_executes_admitted_prompt() -> None:
             assert {"run.started", "turn.end", "run.settled"} <= types
     finally:
         await _drop(tid)
+
+
+@pytest.mark.asyncio
+async def test_queued_run_tick_recovers_commit_to_enqueue_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        tid, uid, sid = await _seed(s)
+        adm = await admit_prompt(
+            s,
+            tenant_id=tid,
+            session_id=sid,
+            user_id=uid,
+            client_message_id=uuid.uuid4(),
+            text="recover me",
+        )
+        gmail_run_id = uuid.uuid4()
+        s.add(
+            Run(
+                tenant_id=tid,
+                id=gmail_run_id,
+                run_kind="gmail_sync",
+                prompt_version="gmail_sync.v1",
+            )
+        )
+        await s.commit()
+
+    queued: list[uuid.UUID] = []
+
+    async def leader(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def enqueue(run_id: uuid.UUID) -> None:
+        queued.append(run_id)
+
+    monkeypatch.setattr("app.worker.try_acquire_leader", leader)
+    monkeypatch.setattr("app.worker.queue.enqueue_run", enqueue)
+    try:
+        assert (await queued_run_tick({})).startswith("redispatched=")
+        assert adm.run_id in queued
+        assert gmail_run_id not in queued
+    finally:
+        await _drop(tid)
+
+
+@pytest.mark.asyncio
+async def test_suspended_run_rejects_stale_heartbeat() -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        tid, uid, sid = await _seed(s)
+        adm = await admit_prompt(
+            s,
+            tenant_id=tid,
+            session_id=sid,
+            user_id=uid,
+            client_message_id=uuid.uuid4(),
+            text="pause me",
+        )
+        await s.commit()
+
+    worker_id = "test-worker"
+    try:
+        assert await claim_run_lease(adm.run_id, worker_id) == (tid, sid)
+        async with SessionLocal() as s:
+            run = await s.get(Run, (tid, adm.run_id))
+            assert run is not None
+            run.worker_id = None
+            run.lease_expires_at = None
+            await s.commit()
+
+        assert not await refresh_run_lease(adm.run_id, worker_id)
+        async with SessionLocal() as s:
+            run = await s.get(Run, (tid, adm.run_id))
+            assert run is not None and run.lease_expires_at is None
+    finally:
+        await _drop(tid)
+
+
+@pytest.mark.asyncio
+async def test_approval_resume_tick_settles_stale_scheduled_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    stale_run_id = uuid.uuid4()
+    delivered: list[uuid.UUID] = []
+
+    async def leader(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def recover(*_args: object, **_kwargs: object) -> list[uuid.UUID]:
+        return [stale_run_id]
+
+    async def deliver(run_id: uuid.UUID) -> None:
+        delivered.append(run_id)
+
+    async def enqueue(_correlation_id: uuid.UUID) -> None:
+        return None
+
+    monkeypatch.setattr("app.worker.try_acquire_leader", leader)
+    monkeypatch.setattr("app.worker.recover_stale_approval_resumes", recover)
+    monkeypatch.setattr("app.worker._deliver_scheduled_task", deliver)
+    monkeypatch.setattr("app.worker.queue.enqueue_approval_resume", enqueue)
+
+    result = await approval_resume_tick({})
+    assert result.endswith("effect_unknown=1")
+    assert delivered == [stale_run_id]
 
 
 @pytest.mark.asyncio

@@ -245,6 +245,17 @@ change, not a rename — not done here.
 > Live acceptance: real provider used the new tools for pytest exit 1 → fix → exit 0; the user-facing
 > Change Review diff and Save selected still work. There is deliberately no claim that the missing
 > Run/stream/Stop UI exists.
+>
+> **Manual acceptance follow-up fixed 2026-08-03.** The P5 UI and runtime worked, but an
+> approval-gated agent `sh_exec` had a separate continuation bug: Approve executed the command and
+> persisted `tool-result`, then `approval_resume_job` ended without calling the model again. Chat
+> therefore stayed at “Approved — running…” and never showed the result. The same run now suspends
+> without settling, resumes only after the exact invocation is terminal, reconstructs the provider
+> history with the real result in place of the pending placeholder, and produces the final assistant
+> response. Duplicate/concurrent approval jobs are atomically claimed; commit→enqueue gaps have
+> recovery ticks; stale dispatched effects become `effect_unknown` rather than being retried; event
+> sequence allocation is concurrency-safe. Real browser acceptance ran `python main.py` through the
+> approval path and the assistant returned exit `0` plus the exact stdout.
 
 > **✅ Phase TR P3 shipped 2026-07-31 — the reported symptom is fixed, the item is not closed.**
 > The bind mount is gone; the disposable copy is tar-injected into an anonymous `/work` volume,

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import execute_run
 from app.core.history import assemble_provider_history
 from app.db import SessionLocal, ping_db
+from app.events import append_event
 from app.models import Message, Part, Run, Tenant, User
 from app.models import Session as SessionModel
 from app.providers import (
@@ -207,5 +208,109 @@ async def test_second_run_provider_sees_prior_tool_use() -> None:
             assert any(
                 m.get("role") == "tool" and m.get("tool_call_id") == "c1" for m in first_call
             )
+        finally:
+            await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_resolved_approval_replaces_pending_tool_placeholder() -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    async with SessionLocal() as s:
+        try:
+            tid, uid, sid = await _seed_session(s)
+            run = await _add_prompt_run(s, tid, uid, sid, 1, "run the project")
+            call_id = "call-approved"
+            await append_event(
+                s,
+                tenant_id=tid,
+                run_id=run.id,
+                session_id=sid,
+                event_type="run.started",
+                payload={"run_kind": "web_chat"},
+            )
+            await append_event(
+                s,
+                tenant_id=tid,
+                run_id=run.id,
+                session_id=sid,
+                event_type="tool-call",
+                payload={"id": call_id, "name": "sh_exec", "args": {"command": "python main.py"}},
+            )
+            await append_event(
+                s,
+                tenant_id=tid,
+                run_id=run.id,
+                session_id=sid,
+                event_type="turn.end",
+                payload={"turn": 1},
+            )
+            await append_event(
+                s,
+                tenant_id=tid,
+                run_id=run.id,
+                session_id=sid,
+                event_type="permission.asked",
+                payload={
+                    "id": call_id,
+                    "observation": "permission_required: awaiting approval",
+                },
+            )
+            # Legacy runs could already contain a waiting assistant turn before the
+            # delayed approval result arrived. The replay must still put the final
+            # tool result immediately after its tool call.
+            await append_event(
+                s,
+                tenant_id=tid,
+                run_id=run.id,
+                session_id=sid,
+                event_type="text-delta",
+                payload={"text": "Waiting for approval."},
+            )
+            await append_event(
+                s,
+                tenant_id=tid,
+                run_id=run.id,
+                session_id=sid,
+                event_type="turn.end",
+                payload={"turn": 2},
+            )
+            await append_event(
+                s,
+                tenant_id=tid,
+                run_id=run.id,
+                session_id=sid,
+                event_type="tool-result",
+                payload={
+                    "id": call_id,
+                    "name": "sh_exec",
+                    "ok": True,
+                    "output": "exit_code=0\n[stdout]\nhello",
+                },
+            )
+
+            history = await assemble_provider_history(s, tid, sid)
+            call_index = next(
+                i
+                for i, message in enumerate(history)
+                if call_id
+                in {
+                    str(call.get("id", ""))
+                    for call in message.get("tool_calls", [])
+                    if isinstance(call, dict)
+                }
+            )
+            assert history[call_index + 1] == {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": "exit_code=0\n[stdout]\nhello",
+            }
+            matching = [
+                message
+                for message in history
+                if message.get("role") == "tool" and message.get("tool_call_id") == call_id
+            ]
+            assert len(matching) == 1
+            assert "permission_required" not in str(matching[0]["content"])
         finally:
             await s.rollback()

@@ -428,6 +428,7 @@ export default function ChatView() {
       const correlationId = String(env.payload.correlation_id ?? "");
       const nonce = String(env.payload.nonce ?? "");
       if (!correlationId || !nonce) return;
+      setRunning(false);
       // The single-use nonce arrives only on this event; the immutable envelope
       // fields come from the pending-approvals projection. Combine to resolve.
       void api.listPermissions().then((page) => {
@@ -445,6 +446,7 @@ export default function ChatView() {
     es.addEventListener("run.settled", (e) => {
       const env = parse(e);
       setRunning(false);
+      setApprovals((items) => items.filter((item) => !item.resolved));
       setActivities((a) => [
         ...a,
         {
@@ -1038,7 +1040,7 @@ export default function ChatView() {
                       }`}
                     >
                       {item.resolved === "approved"
-                        ? "✓ Approved — running…"
+                        ? "✓ Approved — resuming…"
                         : "✕ Rejected"}
                     </div>
                   ) : (

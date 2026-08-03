@@ -9,6 +9,7 @@ no-op that returns the existing invocation. Outcomes are succeeded|failed|effect
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import hashlib
 import json
 import uuid
@@ -103,6 +104,26 @@ async def mark_running(
     )
 
 
+async def claim_prepared(
+    session: AsyncSession, tenant_id: uuid.UUID, invocation_id: uuid.UUID
+) -> bool:
+    """Atomically claim one prepared invocation for first dispatch."""
+    row = (
+        await session.execute(
+            text("""
+                UPDATE effect_invocations
+                SET status = 'running', started_at = COALESCE(started_at, now()),
+                    attempts = attempts + 1, updated_at = now()
+                WHERE tenant_id = :tenant_id AND invocation_id = :invocation_id
+                  AND status = 'prepared'
+                RETURNING invocation_id
+            """),
+            {"tenant_id": tenant_id, "invocation_id": invocation_id},
+        )
+    ).first()
+    return row is not None
+
+
 async def _settle(
     session: AsyncSession,
     tenant_id: uuid.UUID,
@@ -186,3 +207,34 @@ async def settle_unknown(
         reconciliation_state="pending",
         error=error,
     )
+
+
+async def settle_stale_running_unknown(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    invocation_id: uuid.UUID,
+    *,
+    updated_before: datetime.datetime,
+    error: str,
+) -> bool:
+    """Atomically settle one stale running invocation as effect_unknown."""
+    row = (
+        await session.execute(
+            text("""
+                UPDATE effect_invocations
+                SET status = 'needs_reconciliation', outcome = 'effect_unknown',
+                    settled_at = now(), reconciliation_state = 'pending',
+                    last_error_redacted = :error, updated_at = now()
+                WHERE tenant_id = :tenant_id AND invocation_id = :invocation_id
+                  AND status = 'running' AND updated_at < :updated_before
+                RETURNING invocation_id
+            """),
+            {
+                "tenant_id": tenant_id,
+                "invocation_id": invocation_id,
+                "updated_before": updated_before,
+                "error": error,
+            },
+        )
+    ).first()
+    return row is not None

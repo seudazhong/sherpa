@@ -6,8 +6,8 @@ path in contracts/events-and-effects.md §3.1). It does NOT commit — the calle
 the transaction boundary so the business mutation, event, and outbox commit atomically.
 
 `run_seq` (and `session_seq` when session-scoped) are assigned server-side as
-MAX(seq)+1 within the run/session. v1 is session-serial (one run per session at a
-time), so this is safe; a future concurrent design would add explicit sequencing.
+MAX(seq)+1 within the run/session. Transaction-scoped advisory locks serialize
+those allocations, including approval continuations that can resolve concurrently.
 """
 
 from __future__ import annotations
@@ -44,6 +44,8 @@ _INSERT_OUTBOX = text("""
     VALUES (:tenant_id, :id, :event_id, :topic, :delivery_key)
 """)
 
+_LOCK_SEQUENCE = text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
+
 
 @dataclasses.dataclass(frozen=True)
 class AppendedEvent:
@@ -51,6 +53,25 @@ class AppendedEvent:
     run_seq: int
     session_seq: int | None
     topic: str
+
+
+async def lock_event_sequences(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    run_id: uuid.UUID,
+    session_id: uuid.UUID | None,
+) -> None:
+    """Serialize run/session sequence allocation for the current transaction."""
+    await session.execute(
+        _LOCK_SEQUENCE,
+        {"key": f"event-run:{tenant_id}:{run_id}"},
+    )
+    if session_id is not None:
+        await session.execute(
+            _LOCK_SEQUENCE,
+            {"key": f"event-session:{tenant_id}:{session_id}"},
+        )
 
 
 async def append_event(
@@ -74,6 +95,13 @@ async def append_event(
     payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
     if topic is None:
         topic = f"session:{session_id}" if session_id is not None else f"run:{run_id}"
+
+    await lock_event_sequences(
+        session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        session_id=session_id,
+    )
 
     row = (
         await session.execute(

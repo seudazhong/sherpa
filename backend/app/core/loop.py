@@ -29,7 +29,7 @@ from app.core.history import assemble_provider_history
 from app.core.session_context import render_session_context
 from app.effects import begin_invocation, mark_running, settle_failed, settle_succeeded
 from app.events import append_event
-from app.models import Message, Part, Run, Session
+from app.models import EventJournal, Message, Part, Run, Session
 from app.observability import genai, get_tracer
 from app.permissions import policy as perm_policy
 from app.permissions import request_approval
@@ -135,7 +135,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
     provider_messages: list[dict[str, object]],
     *,
     decider_user_id: uuid.UUID | None,
-) -> None:
+) -> str:
     # `execute_tool` span (ADR-033): child of the run's `invoke_agent` span. An
     # error observation marks the span ERROR + agent.tool.success=false; a tool
     # gated on approval leaves success unset (it neither ran nor failed).
@@ -182,6 +182,7 @@ async def _run_tool(  # type: ignore[no-untyped-def]
             "latency_ms": tool_latency_ms,
         },
     )
+    return outcome
 
 
 async def _run_tool_impl(  # type: ignore[no-untyped-def]
@@ -412,6 +413,37 @@ async def _load_core_memory(  # type: ignore[no-untyped-def]
     return "Durable facts you remember about the user (core memory):\n" + lines
 
 
+async def _run_progress(  # type: ignore[no-untyped-def]
+    session, tenant_id: uuid.UUID, run_id: uuid.UUID
+) -> tuple[bool, int, int]:
+    """Return start state, greatest completed turn, and approval suspensions."""
+    rows = (
+        await session.execute(
+            select(EventJournal.event_type, EventJournal.payload_redacted).where(
+                EventJournal.tenant_id == tenant_id,
+                EventJournal.run_id == run_id,
+                EventJournal.event_type.in_(("run.started", "turn.end", "permission.asked")),
+            )
+        )
+    ).all()
+    started = False
+    completed_turn = 0
+    approval_call_ids: set[str] = set()
+    for event_type, payload in rows:
+        if event_type == "run.started":
+            started = True
+        elif event_type == "turn.end":
+            try:
+                completed_turn = max(completed_turn, int((payload or {}).get("turn", 0)))
+            except (TypeError, ValueError):
+                continue
+        elif event_type == "permission.asked":
+            call_id = str((payload or {}).get("id", ""))
+            if call_id:
+                approval_call_ids.add(call_id)
+    return started, completed_turn, len(approval_call_ids)
+
+
 async def execute_run(  # type: ignore[no-untyped-def]
     session,
     *,
@@ -465,19 +497,18 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
         select(Session.user_id).where(Session.tenant_id == tenant_id, Session.id == session_id)
     )
 
-    # Note: the run row is intentionally NOT written here. The worker claims the
-    # run + lease in an independent committed transaction (app.core.lease) before
-    # calling this, so a mid-run heartbeat is never blocked by this long
-    # transaction's row lock. Direct callers (tests) simply see the run settle at
-    # the end. We still emit run.started as the first session event.
-    await append_event(
-        session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        session_id=session_id,
-        event_type="run.started",
-        payload={"run_kind": run.run_kind},
-    )
+    # Approval continuation and crash recovery reuse the exact bound run. Already
+    # committed events are not recreated, and the turn budget remains cumulative.
+    started, turn, approval_suspensions = await _run_progress(session, tenant_id, run_id)
+    if not started:
+        await append_event(
+            session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            session_id=session_id,
+            event_type="run.started",
+            payload={"run_kind": run.run_kind},
+        )
     await _touch_session_activity(session, tenant_id, session_id)
 
     transcript = await assemble_provider_history(
@@ -500,8 +531,10 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
     ]
 
     reason = "completed"
-    turn = 0
-    while turn < max_turns:
+    # Each approval suspension earns exactly one bounded continuation call so a
+    # tool gated on the nominal final turn can still be reported to the user.
+    turn_limit = max_turns + min(approval_suspensions, max_turns)
+    while turn < turn_limit:
         turn += 1
         text_chunks: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -698,16 +731,35 @@ async def _run_agent_loop(  # type: ignore[no-untyped-def]
 
         # Stop-reason gate: only dispatch tools on a structured tool_use stop.
         if stop_reason == "tool_use" and tool_calls:
+            outcomes: list[str] = []
             for call in tool_calls:
-                await _run_tool(
-                    session,
-                    run,
-                    turn,
-                    call,
-                    registry,
-                    provider_messages,
-                    decider_user_id=decider_user_id,
+                outcomes.append(
+                    await _run_tool(
+                        session,
+                        run,
+                        turn,
+                        call,
+                        registry,
+                        provider_messages,
+                        decider_user_id=decider_user_id,
+                    )
                 )
+            if "gated" in outcomes:
+                # The run is intentionally suspended, not settled. Approval resume
+                # executes the exact invocation, queues this same run, and the next
+                # model call sees the terminal tool result.
+                reason = "awaiting_approval"
+                run.status = "running"
+                run.settled_at = None
+                run.lease_expires_at = None
+                run.worker_id = None
+                await session.flush()
+                await _touch_session_activity(session, tenant_id, session_id)
+                genai.set_attrs(
+                    root_span,
+                    {genai.AGENT_LOOP_COUNT: turn, genai.AGENT_STOP_REASON: reason},
+                )
+                return reason
             continue
         break
     else:

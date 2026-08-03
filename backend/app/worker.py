@@ -13,10 +13,12 @@ from typing import Any
 
 from arq import cron, func
 from arq.connections import RedisSettings
-from sqlalchemy import select
+from sqlalchemy import and_, exists, or_, select
+from sqlalchemy.orm import aliased
 
 from app import queue
 from app.channels import (
+    approval_preview_text,
     compose_reply,
     final_assistant_text,
     pending_approval_for_run,
@@ -26,13 +28,14 @@ from app.channels.qq_official import build_qq_sender
 from app.config import settings
 from app.connectors.gmail import build_gmail_sync_client
 from app.connectors.sync import sync_gmail
-from app.core import execute_run, resume_approval
+from app.core import execute_run, recover_stale_approval_resumes, resume_approval
 from app.core.lease import claim_run_lease, run_heartbeat, worker_identity
 from app.db import SessionLocal
 from app.events import append_event, relay_once
 from app.models import (
     ApprovalEnvelope,
     Connector,
+    EffectInvocation,
     ProjectExecRun,
     ProjectRuntimeSession,
     Run,
@@ -281,16 +284,20 @@ async def run_job(ctx: dict[str, Any], run_id: str) -> str:
     # Phase 1: claim the run + take a liveness lease in an independent committed
     # transaction so the run is visibly "running" and a dead worker is detectable
     # as stale (ADR-029). The lease heartbeat then runs alongside execute_run.
+    worker_id = worker_identity()
     try:
-        tenant_id, session_id = await claim_run_lease(rid, worker_identity())
+        claim = await claim_run_lease(rid, worker_id)
     except LookupError:
         return "unknown_run"
+    if claim is None:
+        return "not_queued"
+    tenant_id, session_id = claim
     bind_context(
         tenant_id=str(tenant_id),
         run_id=str(rid),
         session_id=str(session_id) if session_id is not None else None,
     )
-    async with run_heartbeat(rid):
+    async with run_heartbeat(rid, worker_id):
         async with SessionLocal() as session:
             run = (await session.execute(select(Run).where(Run.id == rid))).scalar_one_or_none()
             if run is None:
@@ -304,10 +311,12 @@ async def run_job(ctx: dict[str, Any], run_id: str) -> str:
                     ),
                     registry=build_default_registry(),
                 )
-                await project_run_trace(session, tenant_id=tenant_id, run_id=rid)
+                if reason != "awaiting_approval":
+                    await project_run_trace(session, tenant_id=tenant_id, run_id=rid)
                 await session.commit()
                 await _deliver_im_reply(rid)
-                await _deliver_scheduled_task(rid)
+                if reason != "awaiting_approval":
+                    await _deliver_scheduled_task(rid)
                 return reason
             except Exception as exc:
                 await session.rollback()
@@ -350,6 +359,9 @@ async def _deliver_im_resume_ack(correlation_id: uuid.UUID, status: str) -> None
                 if status == "resumed"
                 else f"\u26a0\ufe0f {env.tool_name} could not be completed."
             )
+            next_approval = await pending_approval_for_run(session, env.tenant_id, env.run_id)
+            if next_approval is not None:
+                msg += approval_preview_text(next_approval)
             if sess.channel == "qq":
                 config = await chan_svc.get_config(session, env.tenant_id, sess.user_id, "qq")
                 if config is None or not config.enabled or not config.app_id:
@@ -376,14 +388,35 @@ async def approval_resume_job(ctx: dict[str, Any], correlation_id: str) -> str:
     testable). Idempotent on the bound invocation's settled state.
     """
     cid = uuid.UUID(correlation_id)
+    continuation_run_id: uuid.UUID | None = None
     async with SessionLocal() as session:
         try:
             status = await resume_approval(session, cid)
+            env = (
+                await session.execute(
+                    select(ApprovalEnvelope).where(ApprovalEnvelope.correlation_id == cid)
+                )
+            ).scalar_one_or_none()
+            if env is not None:
+                run = await session.get(Run, (env.tenant_id, env.run_id))
+                if run is not None and run.status == "queued":
+                    continuation_run_id = run.id
             await session.commit()
+            if continuation_run_id is not None:
+                await queue.enqueue_run(continuation_run_id)
             await _deliver_im_resume_ack(cid, status)
             return status
-        except Exception:
+        except Exception as exc:
             await session.rollback()
+            logger.error(
+                "approval resume failed",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error_type": type(exc).__name__,
+                    "error_detail": _failure_detail(exc),
+                },
+                exc_info=exc,
+            )
             return "failed"
 
 
@@ -608,6 +641,31 @@ async def agent_task_dispatch_job(ctx: dict[str, Any]) -> str:
     return await _dispatch_agent_tasks()
 
 
+async def queued_run_tick(ctx: dict[str, Any]) -> str:
+    """Recover the durable commit-to-enqueue gap for admitted/continued runs."""
+    if not await try_acquire_leader("queued_run_tick", ttl_ms=25_000):
+        return "not_leader"
+    async with SessionLocal() as session:
+        run_ids = (
+            (
+                await session.execute(
+                    select(Run.id)
+                    .where(
+                        Run.status == "queued",
+                        Run.run_kind.in_(("web_chat", "scheduled_task")),
+                    )
+                    .order_by(Run.created_at)
+                    .limit(100)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    for run_id in run_ids:
+        await queue.enqueue_run(run_id)
+    return f"redispatched={len(run_ids)}"
+
+
 async def _dispatch_agent_tasks() -> str:
     async with SessionLocal() as session:
         run_ids = await dispatch_due_agent_tasks(session, datetime.datetime.now(datetime.UTC))
@@ -615,6 +673,75 @@ async def _dispatch_agent_tasks() -> str:
     for run_id in run_ids:
         await queue.enqueue_run(run_id)
     return f"dispatched={len(run_ids)}"
+
+
+async def approval_resume_tick(ctx: dict[str, Any]) -> str:
+    """Recover approval decision/result commits that missed their Redis wake-up."""
+    if not await try_acquire_leader("approval_resume_tick", ttl_ms=25_000):
+        return "not_leader"
+    async with SessionLocal() as session:
+        stale_run_ids = await recover_stale_approval_resumes(session)
+        await session.commit()
+    for run_id in stale_run_ids:
+        await _deliver_scheduled_task(run_id)
+    async with SessionLocal() as session:
+        other_env = aliased(ApprovalEnvelope)
+        other_invocation = aliased(EffectInvocation)
+        unsettled_for_run = exists(
+            select(other_env.id)
+            .join(
+                other_invocation,
+                (other_invocation.tenant_id == other_env.tenant_id)
+                & (other_invocation.invocation_id == other_env.invocation_id),
+            )
+            .where(
+                other_env.tenant_id == ApprovalEnvelope.tenant_id,
+                other_env.run_id == ApprovalEnvelope.run_id,
+                other_invocation.status != "settled",
+            )
+        )
+        correlation_ids = (
+            (
+                await session.execute(
+                    select(ApprovalEnvelope.correlation_id)
+                    .join(
+                        EffectInvocation,
+                        (EffectInvocation.tenant_id == ApprovalEnvelope.tenant_id)
+                        & (EffectInvocation.invocation_id == ApprovalEnvelope.invocation_id),
+                    )
+                    .join(
+                        Run,
+                        (Run.tenant_id == ApprovalEnvelope.tenant_id)
+                        & (Run.id == ApprovalEnvelope.run_id),
+                    )
+                    .where(
+                        ApprovalEnvelope.status == "decided",
+                        or_(
+                            and_(
+                                EffectInvocation.status == "prepared",
+                                Run.status == "running",
+                                Run.settled_at.is_(None),
+                                Run.worker_id.is_(None),
+                            ),
+                            and_(
+                                EffectInvocation.status == "settled",
+                                Run.status == "running",
+                                Run.settled_at.is_(None),
+                                Run.worker_id.is_(None),
+                                ~unsettled_for_run,
+                            ),
+                        ),
+                    )
+                    .order_by(ApprovalEnvelope.decided_at)
+                    .limit(100)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    for correlation_id in correlation_ids:
+        await queue.enqueue_approval_resume(correlation_id)
+    return f"redispatched={len(correlation_ids)} effect_unknown={len(stale_run_ids)}"
 
 
 async def knowledge_ingest_job(
@@ -851,7 +978,12 @@ class WorkerSettings:
         run_job,
         gmail_sync_job,
         sync_and_analyze_job,
-        approval_resume_job,
+        func(
+            approval_resume_job,
+            name="approval_resume_job",
+            timeout=1300,
+            max_tries=1,
+        ),
         agent_task_dispatch_job,
         # A book-length source legitimately runs for minutes; arq's 300s default
         # killed it mid-embed. `max_tries=1` because retries are OUR job: the durable
@@ -887,6 +1019,8 @@ class WorkerSettings:
         cron(scheduler_tick, second=0),
         cron(delivery_tick, second=15),
         cron(agent_task_tick, second={5, 35}),
+        cron(approval_resume_tick, second={8, 38}),
+        cron(queued_run_tick, second={12, 42}),
         cron(periodic_connector_sync, minute=set(range(0, 60, 5))),
         cron(drive_maintenance, minute=set(range(0, 60, 10))),
         cron(knowledge_ingest_tick, second={10, 40}),

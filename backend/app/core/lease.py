@@ -21,7 +21,7 @@ import os
 import socket
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db import SessionLocal
 from app.models import Run
@@ -49,15 +49,23 @@ def run_is_live(status: str | None, lease_expires_at: datetime.datetime | None) 
     return expires > _now()
 
 
-async def claim_run_lease(run_id: uuid.UUID, worker_id: str) -> tuple[uuid.UUID, uuid.UUID | None]:
+async def claim_run_lease(
+    run_id: uuid.UUID, worker_id: str
+) -> tuple[uuid.UUID, uuid.UUID | None] | None:
     """Mark the run running and take a fresh lease in a committed transaction.
 
-    Returns ``(tenant_id, session_id)``. Raises ``LookupError`` if the run is gone.
+    Returns ``(tenant_id, session_id)`` only for an atomic ``queued -> running``
+    claim, ``None`` if another delivery already claimed/settled it, and raises
+    ``LookupError`` if the run is gone.
     """
     async with SessionLocal() as session:
-        run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+        run = (
+            await session.execute(select(Run).where(Run.id == run_id).with_for_update())
+        ).scalar_one_or_none()
         if run is None:
             raise LookupError(str(run_id))
+        if run.status != "queued":
+            return None
         now = _now()
         run.status = "running"
         run.started_at = run.started_at or now
@@ -68,25 +76,34 @@ async def claim_run_lease(run_id: uuid.UUID, worker_id: str) -> tuple[uuid.UUID,
         return run.tenant_id, run.session_id
 
 
-async def refresh_run_lease(run_id: uuid.UUID) -> bool:
+async def refresh_run_lease(run_id: uuid.UUID, worker_id: str) -> bool:
     """Bump the lease for a still-running run. Returns False once it is not running."""
     async with SessionLocal() as session:
-        run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
-        if run is None or run.status != "running":
-            return False
         now = _now()
-        run.heartbeat_at = now
-        run.lease_expires_at = now + datetime.timedelta(seconds=LEASE_TTL_SECONDS)
+        result = await session.execute(
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.status == "running",
+                Run.worker_id == worker_id,
+                Run.lease_expires_at.is_not(None),
+            )
+            .values(
+                heartbeat_at=now,
+                lease_expires_at=now + datetime.timedelta(seconds=LEASE_TTL_SECONDS),
+            )
+            .returning(Run.id)
+        )
         await session.commit()
-        return True
+        return result.scalar_one_or_none() is not None
 
 
-async def heartbeat_loop(run_id: uuid.UUID) -> None:
+async def heartbeat_loop(run_id: uuid.UUID, worker_id: str) -> None:
     """Refresh the lease until the run stops running or the task is cancelled."""
     try:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
-            if not await refresh_run_lease(run_id):
+            if not await refresh_run_lease(run_id, worker_id):
                 return
     except asyncio.CancelledError:
         raise
@@ -95,9 +112,9 @@ async def heartbeat_loop(run_id: uuid.UUID) -> None:
 
 
 @contextlib.asynccontextmanager
-async def run_heartbeat(run_id: uuid.UUID):  # type: ignore[no-untyped-def]
+async def run_heartbeat(run_id: uuid.UUID, worker_id: str):  # type: ignore[no-untyped-def]
     """Run a background lease heartbeat for the duration of the block."""
-    task = asyncio.create_task(heartbeat_loop(run_id))
+    task = asyncio.create_task(heartbeat_loop(run_id, worker_id))
     try:
         yield
     finally:
