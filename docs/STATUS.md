@@ -40,6 +40,14 @@ squeezing horizontally. The existing Change Review moved into the right workspac
 acceptance covered all three mobile tabs and measured 390 px overflow = 0. P5.2 now replaces the
 left structural placeholder with the real effective-tree editor.
 
+**✅ P5.2 editable effective tree shipped (2026-08-03).** New session-bound
+`/project-files` REST routes are thin adapters over `project_fs`: tree/list reads the effective
+`base + overlay`, content GET returns the entire ≤1 MiB UTF-8 file or `413`, and PUT/DELETE write
+the same reviewable overlay as agent `fs_*`. The editor uses content hashes, server-side
+`create_only`, explicit recursive delete, symlink/non-text refusal and unsaved-draft confirmation.
+Browser acceptance created `p5_human.txt`, edited it, and immediately showed the same file in the
+tree and Change Review. P5.3 now connects Run/stream/Stop to the shared session SSE.
+
 **✅ P4.3 host-side `fs_*` shipped (2026-08-03).** `fs_list` / `fs_read` / `fs_grep` read
 the Project-bound chat's persisted effective tree without opening a container; `fs_write` /
 `fs_edit` / `fs_delete` lazily open the working copy and stage content-addressed, fence-guarded

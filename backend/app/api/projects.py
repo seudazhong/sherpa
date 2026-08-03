@@ -10,6 +10,7 @@ after commit; the worker's recovery tick guarantees at-least-once dispatch.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import logging
 import uuid
@@ -39,6 +40,7 @@ from app.models import (
 from app.services import CallerContext, ServiceError
 from app.services import github_source as gh
 from app.services import project_changes as changes_svc
+from app.services import project_fs as fs_svc
 from app.services import project_runtime as runtime_svc
 from app.services import project_workcopy as wc_svc
 from app.services import projects as svc
@@ -595,6 +597,36 @@ class ExecRequest(BaseModel):
     timeout_seconds: Annotated[int, Field(ge=1, le=900)] | None = None
 
 
+class ProjectFileEntryOut(BaseModel):
+    path: str
+    entry_kind: Literal["file", "dir", "symlink"]
+    size_bytes: int
+    executable: bool
+    content_hash: str | None
+
+
+class ProjectFilePageOut(BaseModel):
+    entries: list[ProjectFileEntryOut]
+    returned_count: int
+    truncated: bool
+
+
+class ProjectFileContentOut(BaseModel):
+    path: str
+    content: str
+    content_hash: str
+    executable: bool
+    size_bytes: int
+
+
+class ProjectFileWriteIn(BaseModel):
+    path: Annotated[str, Field(min_length=1, max_length=1024)]
+    content: Annotated[str, Field(max_length=1_000_000)]
+    executable: bool = False
+    if_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    create_only: bool = False
+
+
 class ChangeSetEntrySummary(BaseModel):
     id: uuid.UUID
     path: str
@@ -797,6 +829,114 @@ async def get_working_copy(
     if wc is None:
         return None
     return await _wc_summary(db, cc, wc)
+
+
+@router.get("/sessions/{session_id}/project-files")
+async def list_project_files(
+    session_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+    path: str = ".",
+    limit: Annotated[int, Query(ge=1, le=500)] = 500,
+) -> ProjectFilePageOut:
+    try:
+        page = await fs_svc.list_entries(
+            db,
+            _caller(ctx),
+            session_id=session_id,
+            path=path,
+            max_entries=limit,
+        )
+    except ServiceError as exc:
+        raise _http(exc) from None
+    return ProjectFilePageOut(
+        entries=[
+            ProjectFileEntryOut(
+                path=entry.path,
+                entry_kind=entry.entry_kind,  # type: ignore[arg-type]
+                size_bytes=entry.size_bytes,
+                executable=entry.executable,
+                content_hash=(entry.content_hash.hex() if entry.content_hash is not None else None),
+            )
+            for entry in page.entries
+        ],
+        returned_count=len(page.entries),
+        truncated=page.truncated,
+    )
+
+
+@router.get("/sessions/{session_id}/project-files/content")
+async def get_project_file_content(
+    session_id: uuid.UUID,
+    path: str,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ProjectFileContentOut:
+    try:
+        file = await fs_svc.read_full_file(db, _caller(ctx), session_id=session_id, path=path)
+    except ServiceError as exc:
+        raise _http(exc) from None
+    return ProjectFileContentOut(**dataclasses.asdict(file))
+
+
+@router.put("/sessions/{session_id}/project-files/content")
+async def put_project_file_content(
+    session_id: uuid.UUID,
+    body: ProjectFileWriteIn,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> WorkingCopySummary:
+    cc = _caller(ctx)
+    try:
+        await fs_svc.write_file(
+            db,
+            cc,
+            session_id=session_id,
+            path=body.path,
+            content=body.content,
+            executable=body.executable,
+            if_hash=body.if_hash,
+            create_only=body.create_only,
+        )
+        wc = await wc_svc.get_live(db, cc, session_id=session_id)
+        if wc is None:
+            raise HTTPException(status_code=500, detail="working_copy_missing")
+        out = await _wc_summary(db, cc, wc)
+        await db.commit()
+    except ServiceError as exc:
+        await db.rollback()
+        raise _http(exc) from None
+    return out
+
+
+@router.delete("/sessions/{session_id}/project-files/content")
+async def delete_project_file_content(
+    session_id: uuid.UUID,
+    path: str,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+    recursive: bool = False,
+    if_hash: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
+) -> WorkingCopySummary:
+    cc = _caller(ctx)
+    try:
+        await fs_svc.delete_path(
+            db,
+            cc,
+            session_id=session_id,
+            path=path,
+            recursive=recursive,
+            if_hash=if_hash,
+        )
+        wc = await wc_svc.get_live(db, cc, session_id=session_id)
+        if wc is None:
+            raise HTTPException(status_code=500, detail="working_copy_missing")
+        out = await _wc_summary(db, cc, wc)
+        await db.commit()
+    except ServiceError as exc:
+        await db.rollback()
+        raise _http(exc) from None
+    return out
 
 
 @router.post("/projects/{project_id}/runtime", status_code=status.HTTP_202_ACCEPTED)

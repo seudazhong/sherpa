@@ -113,6 +113,10 @@
 | `GET` | `/sessions/{session_id}/model` | `session` | `no` |
 | `POST` | `/sessions/{session_id}/model` | `session` | `yes` |
 | `GET` | `/sessions/{session_id}/project-context` | `session` | `no` |
+| `GET` | `/sessions/{session_id}/project-files` | `session` | `no` |
+| `DELETE` | `/sessions/{session_id}/project-files/content` | `session` | `yes` |
+| `GET` | `/sessions/{session_id}/project-files/content` | `session` | `no` |
+| `PUT` | `/sessions/{session_id}/project-files/content` | `session` | `yes` |
 | `POST` | `/sessions/{session_id}/prompt` | `session` | `yes` |
 | `POST` | `/sessions/{session_id}/recover` | `session` | `yes` |
 | `GET` | `/sessions/{session_id}/resume-state` | `session` | `no` |

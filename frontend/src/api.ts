@@ -519,6 +519,28 @@ export interface ProjectTree {
   truncated: boolean;
 }
 
+export interface ProjectFileEntry {
+  path: string;
+  entry_kind: "file" | "dir" | "symlink";
+  size_bytes: number;
+  executable: boolean;
+  content_hash: string | null;
+}
+
+export interface ProjectFilePage {
+  entries: ProjectFileEntry[];
+  returned_count: number;
+  truncated: boolean;
+}
+
+export interface ProjectFileContent {
+  path: string;
+  content: string;
+  content_hash: string;
+  executable: boolean;
+  size_bytes: number;
+}
+
 export interface ProjectSnapshot {
   id: string;
   reason: string;
@@ -1295,6 +1317,48 @@ export const api = {
   // W3/P4 — durable working copy + explicit worker-owned RuntimeSession.
   getWorkingCopy: (sid: string) =>
     req<WorkingCopySummary | null>(`/sessions/${sid}/working-copy`),
+  listProjectFiles: (sid: string, path = ".", limit = 500) => {
+    const query = new URLSearchParams({ path, limit: String(limit) });
+    return req<ProjectFilePage>(
+      `/sessions/${sid}/project-files?${query.toString()}`,
+    );
+  },
+  getProjectFile: (sid: string, path: string) =>
+    req<ProjectFileContent>(
+      `/sessions/${sid}/project-files/content?path=${encodeURIComponent(path)}`,
+    ),
+  writeProjectFile: (
+    csrf: string,
+    sid: string,
+    body: {
+      path: string;
+      content: string;
+      executable?: boolean;
+      if_hash?: string | null;
+      create_only?: boolean;
+    },
+  ) =>
+    req<WorkingCopySummary>(
+      `/sessions/${sid}/project-files/content`,
+      jsonInit("PUT", csrf, body),
+    ),
+  deleteProjectFile: (
+    csrf: string,
+    sid: string,
+    path: string,
+    recursive = false,
+    ifHash?: string | null,
+  ) => {
+    const query = new URLSearchParams({
+      path,
+      recursive: String(recursive),
+    });
+    if (ifHash) query.set("if_hash", ifHash);
+    return req<WorkingCopySummary>(
+      `/sessions/${sid}/project-files/content?${query.toString()}`,
+      jsonInit("DELETE", csrf),
+    );
+  },
   openRuntime: (csrf: string, pid: string, sid: string) =>
     req<RuntimeSessionState>(
       `/projects/${pid}/runtime`,

@@ -63,6 +63,15 @@ class ReadPage:
 
 
 @dataclasses.dataclass(frozen=True)
+class FullFile:
+    path: str
+    content: str
+    content_hash: str
+    executable: bool
+    size_bytes: int
+
+
+@dataclasses.dataclass(frozen=True)
 class GrepMatch:
     path: str
     line: int
@@ -240,6 +249,34 @@ async def read_file(
     )
 
 
+async def read_full_file(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    session_id: uuid.UUID,
+    path: str,
+) -> FullFile:
+    """Return the entire bounded UTF-8 file for the human editor, or refuse."""
+    norm = normalize_path(path)
+    _session, _wc, tree = await effective_tree(db, ctx, session_id=session_id)
+    entry = tree.get(norm)
+    if entry is None:
+        raise NotFound("path not found")
+    data = await _read_bytes(db, ctx, user_id=_user_id(ctx), entry=entry)
+    try:
+        content = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Invalid("binary file") from exc
+    assert entry.content_hash is not None
+    return FullFile(
+        path=entry.path,
+        content=content,
+        content_hash=entry.content_hash.hex(),
+        executable=entry.executable,
+        size_bytes=entry.size_bytes,
+    )
+
+
 async def grep(
     db: AsyncSession,
     ctx: CallerContext,
@@ -381,11 +418,14 @@ async def write_file(
     content: str,
     executable: bool = False,
     if_hash: str | None = None,
+    create_only: bool = False,
 ) -> MutationResult:
     norm = normalize_path(path)
     wc = await _locked_working_copy(db, ctx, session_id=session_id)
     tree = await wc_svc.effective_tree(db, ctx, wc)
     current = tree.get(norm)
+    if create_only and current is not None:
+        raise Conflict("path_exists")
     _guard_hash(current, if_hash)
     if current is not None and current.entry_kind != "file":
         raise Invalid("path is not a regular file")

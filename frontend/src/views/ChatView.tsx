@@ -24,6 +24,7 @@ import {
 import { useAuth } from "../auth";
 import { ChangeReview } from "../components/ChangeReview";
 import { ModelSwitcher } from "../components/ModelSwitcher";
+import { ProjectTree } from "../components/ProjectTree";
 import Sidebar from "../components/Sidebar";
 import {
   MAX_ATTACHMENTS,
@@ -822,18 +823,14 @@ export default function ChatView() {
         >
           {projectCtx?.project_id && (
             <aside className="project-files-pane" aria-label="Project files">
-              <header className="project-pane-head">
-                <div>
-                  <strong>Files</strong>
-                  <span>Effective working tree</span>
-                </div>
-                <span className="pill">Project</span>
-              </header>
-              <div className="project-pane-empty">
-                <span aria-hidden="true">⌘</span>
-                <strong>{projectCtx.project_name ?? "Project"}</strong>
-                <p>The editable effective tree is connected in the next P5 task.</p>
-              </div>
+              {sessionId && (
+                <ProjectTree
+                  sessionId={sessionId}
+                  csrf={csrf}
+                  projectName={projectCtx.project_name ?? "Project"}
+                  onWorkingCopy={setWorkingCopy}
+                />
+              )}
             </aside>
           )}
 

@@ -2242,6 +2242,7 @@ class ProjectFileWrite(StrictModel):
     content: Annotated[str, Field(max_length=1_000_000)]
     executable: bool = False
     if_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    create_only: bool = False          # true => 409 if the effective path already exists
 ```
 
 `WorkingCopySummary` (shipped) replaces its `sandbox: SandboxRunState | None` field with

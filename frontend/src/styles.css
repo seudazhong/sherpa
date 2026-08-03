@@ -859,6 +859,133 @@ input[type="file"]::file-selector-button {
   box-shadow: none;
 }
 
+.project-tree {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.project-new-file {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding: 9px 10px;
+}
+
+.project-new-file input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  background: var(--surface-subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.project-tree-list {
+  max-height: 42vh;
+  min-height: 120px;
+  overflow: auto;
+  border-bottom: 1px solid var(--border);
+  padding: 5px;
+}
+
+.project-tree-row {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 6px;
+  padding-block: 5px;
+  padding-right: 7px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+
+.project-tree-row:hover,
+.project-tree-row.active {
+  background: var(--brand-soft);
+  color: var(--ink);
+}
+
+.project-tree-row > span:nth-child(2) {
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-tree-row small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.project-tree-empty {
+  display: block;
+  padding: 18px 10px;
+  text-align: center;
+}
+
+.project-editor {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+.project-editor > header,
+.project-editor > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.project-editor > header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-editor textarea {
+  width: 100%;
+  min-height: 180px;
+  flex: 1;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 9px;
+  background: #fbfbfa;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.project-editor > footer label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.project-tree-error {
+  margin: 8px 10px 10px;
+}
+
 .project-pane-tabs {
   display: none;
 }
