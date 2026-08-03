@@ -332,7 +332,7 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研�
 
 ---
 
-## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 🚧 **P0 · P1 · P3 SHIPPED · P2 DEFERRED (owner) · P4–P5 NOT STARTED**
+## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 🚧 **P0 · P1 · P3 · P4 SHIPPED · P2 DEFERRED · P5 NEXT**
 
 > Closes backlog **B-2** (52 flat tools) and **B-8** (`project_run` always fails) as one program.
 > Architecture approved by the owner 2026-07-30 ([ADR-045](decisions.md#adr-045) umbrella,
@@ -342,10 +342,9 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研�
 > shipped**, and the destructive baseline reset of TR.3 **has been run** (once, as designed —
 > the schema is now the single `0001_baseline`).
 >
-> **Status as of 2026-08-01.** P0 · P1 · the P2 partials (P2.0a dead-tool sweep, P2.2
-> `domain_verb` rename) shipped; **✅ P3 (TR.8) COMPLETE and owner-accepted**, including its
-> 128 MiB workspace/change-set cap as the intentional trade-off for the 1 GiB worker budget;
-> **P2's catalog deferred by owner decision (2026-07-31)**; **P4 and P5 not started**.
+> **Status as of 2026-08-03.** P0 · P1 · P3 · P4 and the P2 partials (P2.0a dead-tool
+> sweep, P2.2 `domain_verb` rename) shipped. P3 is owner-accepted including its 128 MiB
+> workspace/change-set cap; P2's catalog remains deferred; **P5 is next**.
 > Neither backlog item is closed: **B-2** waits on the P2 catalog, **B-8** on the P5 human
 > Run/Stop lane.
 
@@ -674,11 +673,19 @@ work** for this image — it is built locally and never pushed, so `RepoDigests`
 | ~~P4.5~~ | ~~`run_test` / `run_lint` over probed capabilities~~ | ~~`backend/app/tools/run_tools.py`~~ | **DROPPED**. The AC moves to `sh_exec`: a missing tool → `environment_missing_dependencies` **naming what the image does have**, never a bare exit 127 |
 | P4.6 ✅ | Delete `project_run` / `project_tree` / `project_read`; rewrite REST to the runtime routes; delete `POST /projects/{id}/sandbox-runs` | `backend/app/tools/project_tools.py`, `backend/app/api/projects.py` | Route inventory shows the new routes and none of the old |
 | P4.7 ✅ | Route-inventory generator + CI step (O-13) | `backend/scripts/route_inventory.py`, `docs/contracts/route-inventory.md`, `.github/workflows/ci.yml` | CI fails on undeclared route drift; `/files/*` and `sandbox-runs` cannot reappear |
-| P4.V | Full gate + real-Docker + agent-lane Playwright | — | One chat drives read → edit → `sh_exec("pytest")` fail → edit → rematerialize → pass; sensitive-path preview contains no content; adversarial shell corpus never auto-allows operators/substitution; mid-exec cancel persists edits and settles `cancelled` |
+| P4.V ✅ | Full gate + real-Docker + agent/human acceptance | — | Live chat drove fs writes → runtime open → pytest exit 1 → fs edit → rematerialize → exit 0; human clicked diff + Save selected; 390 px overflow 0; Run/log/Stop remains explicitly P5 |
 
 **P4 exit:** the agent completes a real edit/test loop; `fs.*` provably survives a disabled sandbox;
 `sh_exec` approval preview shows the exact command and paths; the old tools and route are gone and
 CI enforces it.
+
+**P4 exit met 2026-08-03.** Full backend: 553 passed (+32 docker deselected); real-Docker:
+32 passed; ruff/format/mypy/Alembic head `0006`/route inventory and frontend lint/build green.
+Live real-provider agent lane called exactly `fs_write`×2 → `runtime_open` → `sh_exec`
+(pytest exit 1) → `fs_edit` → `sh_exec` (exit 0, `1 passed`). Human lane opened the existing
+Change Review, inspected the final `return a + b` diff and clicked Save selected; mobile 390 px
+overflow = 0. UX acceptance: change review remains clear, but there is intentionally still no
+human Run button, streaming log, Stop or Runs tab — those are P5, so B-8 remains open.
 
 ### TR.10 P5 — `/Project` three-column UI (human lane)
 

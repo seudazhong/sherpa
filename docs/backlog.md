@@ -15,13 +15,13 @@
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | ✅ done |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
-| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | **open** · ✅ symptom fixed/P3 accepted; 🚧 **P4 authorized 2026-08-03 and in progress** with temporary flat-registry registration; still closes only after P5 human Run/Stop |
+| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | **open** · ✅ P3 mechanics + ✅ P4 backend/agent lane complete; closes only after P5 human Run/log/Stop |
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
 | B-10 | design | [Tool-surface slimming: dead tools, prose diet, and *vertical* (workflow) consolidation](#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation) | open — feeds [Phase TR](IMPLEMENTATION.md) **P2** |
 | B-11 | gap | [No tool-use evaluation harness (decisions are argued, not measured)](#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) | open |
 | B-12 | bug | [The Drive orphan GC deletes change-set diff spills](#b-12-the-drive-orphan-gc-deletes-change-set-diff-spills) | ✅ fixed 2026-07-31 (retention question still open) |
 
-Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ (done 2026-07-28) → ~~**B-5, B-6**~~ (done 2026-07-29) → ~~**B-9**~~ (done 2026-07-29, [ADR-044](decisions.md)) → **B-2 + B-8 together** — triaged 2026-07-30 and found to be **one architecture problem, not two** (see both entries below). The owner approved the unified **clean-break** architecture ([ADR-045](decisions.md#adr-045) umbrella · [ADR-046](decisions.md#adr-046) tool catalog · [ADR-047](decisions.md#adr-047) tar transport · [ADR-048](decisions.md#adr-048) RuntimeSession); the execution plan is [`IMPLEMENTATION.md` Phase TR](IMPLEMENTATION.md). **Neither item is fixed**: B-2 closes at the end of Phase TR **P2**, B-8 at the end of **P5**. The owner approved the Phase TR execution plan on 2026-07-30. **Status as of 2026-08-01: P0, P1 and the P2 partials (P2.0a + P2.2) are shipped; ✅ P3 is COMPLETE and owner-accepted (including its 128 MiB workspace cap); P2's catalog is deferred by owner decision; P4 + P5 have not started.** P1 removed the duplicate `file_*` stack and `run_code` (**52 → 47 tools / 19,848 → 18,397 B — deletion, not the catalog**) and moved the sandbox bookkeeping onto `project_runtime_sessions`/`project_exec_runs` without changing any execution path; **P3 then replaced the bind mount with tar transport, so `project_run` really runs**. Neither backlog item is closed: B-2 still waits on the P2 catalog, B-8 on the P5 human Run/Stop lane.
+Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ → ~~**B-5, B-6**~~ → ~~**B-9**~~ → **B-2 + B-8 together**. The owner approved the unified clean-break architecture (ADR-045/046/047/048) and Phase TR plan. **Current:** P0/P1/P3/P4 and the P2 partials are shipped; P2's catalog is deferred; P5 is next. B-2 still waits on the catalog. B-8 has its mechanical and agent/backend halves complete and waits only on the P5 human Run/log/Stop lane.
 
 ---
 
@@ -237,11 +237,14 @@ change, not a rename — not done here.
 
 *Reported 2026-07-28 (manual test) · kind: bug · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-047](decisions.md#adr-047)/[ADR-048](decisions.md#adr-048)); **P0 (named exits + logging) + P1 (baseline squash) shipped 2026-07-30; P3 (tar transport + first-party runner image + real-Docker lane) shipped 2026-07-31 — the original symptom is GONE and `project_run` really runs**; still **open** because the close criterion is the *human* Run lane, which is [Phase TR](IMPLEMENTATION.md) **P5***
 
-> **P4 backend shipped 2026-08-03.** The owner resolved the deferred-P2 sequencing question:
+> **P4 complete 2026-08-03.** The owner resolved the deferred-P2 sequencing question:
 > `fs_*` / `runtime_*` / `sh_exec` temporarily register in the existing FULL flat registry and
 > self-enforce binding/ownership; P2 later wraps them in descriptors. Host-side fs, explicit
 > RuntimeSession, worker-owned `202` REST, bounded output, cancel, recovery and DB-live sweep
 > protection now ship. B-8 remains open only because P5 has not supplied the human Run/log/Stop UI.
+> Live acceptance: real provider used the new tools for pytest exit 1 → fix → exit 0; the user-facing
+> Change Review diff and Save selected still work. There is deliberately no claim that the missing
+> Run/stream/Stop UI exists.
 
 > **✅ Phase TR P3 shipped 2026-07-31 — the reported symptom is fixed, the item is not closed.**
 > The bind mount is gone; the disposable copy is tar-injected into an anonymous `/work` volume,

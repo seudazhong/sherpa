@@ -259,6 +259,11 @@ def evaluate(ctx, tool, scope) -> Literal["allow", "ask", "deny"]:
 > 面板(真实点击:看 diff → Save selected → head 前进,`head_generation=1`,快照含 `calc.py`/`test_calc.py`),
 > 那是 W3 已有能力,**不是**本行缺的 Run 控件。
 
+> **✅ 2026-08-03 P4 更新**：Tool/REST 后端已完成 clean break——`project_run/tree/read` 与
+> `/sandbox-runs` 均删除，`fs_*` + `runtime_*` + `sh_exec` 和 worker-owned `202` 路径上线。
+> 真实 agent 泳道完成 pytest 失败→修复→通过；人工真实点击 diff + Save selected，390px 无溢出。
+> **UI 单元格仍保持 ⬜**：该人工验证是既有 Change Review，不是 P5 的 Run/日志/Stop 控件。
+
 **剩余 UI ⬜(下一步补完的清单):** 候选 Edit 抽屉 · 待办完成/编辑控件 · Connectors 连接页(需 OAuth 凭据)· 审批渲染器(approve/reject + run 恢复,属 v1 收尾)· **Project 执行泳道(Run 控件/流式日志/Stop/Runs tab,Phase TR P5)**。~~Knowledge(/library)页~~ **✅ KB5 已交付**(主页/来源详情/检索测试 + Chat 引用 chips + 无依据态;Sidebar/路由/API/Vite proxy 就位)。**Projects(/work/projects)= ADR-037 W2a 已实现并两栈验证**:上面 4 行的 service/REST/Tool/UI 单元格全部 ✅(空/模板/归档导入 + 详情只读树/快照/活动 + Open in Chat 不可变绑定 + `list/create/tree/read` agent 工具);生产导航已暴露(Sidebar「Projects」)。GitHub 导入 = **ADR-038 W2b 已实现并两栈验证**(migration `0029`):契约把 `POST /projects/imports kind=github` 从 501 升为 202、新增 repo/ref 选择端点 + GitHub connection 端点 + `project_sources`/`github_connections` 数据模型 + events `create_kind=github`;生产实现落地 `services/github_source.py`(连接生命周期 + 只读 REST 代理 + resolve→OID/有界 tarball 获取)、`services/projects_import.py` 的 github 分支(durable job·复用 W2a 内存安全解压器·剥离顶层目录·source OID·幂等重试·无 effect_unknown)、`api/connections.py` + `api/projects.py`(kind=github 202·retry·repos/refs·source provenance)、生产 `/work/projects` UI(GitHub 连接面板/repo·ref 选择/导入进度/成功来源元数据/失败·重试/390px);**service/REST/UI 单元格全部 ✅**,GitHub 导入不给 agent(人工·跨凭据边界),凭据只在 AEAD vault/连接边界、绝不进树/快照/prompt/日志/事件/工具结果。W3(sandbox)/W4(对外写)仍为后续 ADR。**这张表就是防"后端做了、前端忘了"的看板——每加一个能力,先在这里补行,UI 列不 ✅ 不收工。**
 
 ---

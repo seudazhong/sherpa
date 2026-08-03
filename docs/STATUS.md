@@ -4,9 +4,9 @@
 >
 > Unscheduled findings from manual testing live in [`backlog.md`](backlog.md) (B-1…B-12; **B-1 + B-3 + B-4 + B-7 fixed 2026-07-28**, **B-5 + B-6 shipped 2026-07-29**, **B-9 fixed 2026-07-29**, **B-12 fixed 2026-07-31**; **B-2 still open** — the tool catalog is P2, which the owner deferred; **B-8's reported symptom is fixed by Phase TR P3 (2026-07-31) but B-8 stays OPEN** until the human Run/Stop lane exists in P5; **B-10 / B-11 opened 2026-07-30** by the owner's P2 design review — see the "P2 design review" note below). ✅ **B-9 is fixed ([ADR-044](decisions.md))**: `uv run pytest` now provisions and uses a dedicated `<app_db>_test` database, Redis logical db 15 and a synthetic owner, so it is safe to run **with the stack and worker up** and can no longer touch dev data. The old "stop the worker / point `DATABASE_URL` at `sherpa_test` by hand" workaround is retired.
 >
-> 🏗 **B-2 + B-8 are one program now.** Triage on 2026-07-30 established that the oversized flat tool surface and the always-failing `project_run` are two faces of the same defect, and the owner approved a **clean-break** unified architecture: [ADR-045](decisions.md#adr-045) (umbrella) · [ADR-046](decisions.md#adr-046) (tool catalog + resolver + progressive disclosure) · [ADR-047](decisions.md#adr-047) (tar workspace transport) · [ADR-048](decisions.md#adr-048) (RuntimeSession + `fs`/`sh`/`run`). Contracts are updated and marked `[shipped]`/`[target]`/`[deleted]`; the execution plan is [`IMPLEMENTATION.md` **Phase TR**](IMPLEMENTATION.md) (P0–P5), **approved by the owner 2026-07-30**. 🚧 **P0 (honesty pass), P1 (baseline squash + legacy deletion), the P2 partials (P2.0a dead-tool sweep + P2.2 `domain_verb` rename) and the whole of P3 (tar transport + first-party runner image + real-Docker lane) are shipped — ✅ P3 is COMPLETE and owner-accepted 2026-08-01, including its 128 MiB workspace cap.** **P2's catalog is deferred by owner decision (2026-07-31); P4 and P5 have not started.** B-2 remains open (the surface is still flat and statically injected) and B-8 remains open (no human Run/Stop lane).
+> 🏗 **B-2 + B-8 are one program now.** Triage on 2026-07-30 established that the oversized flat tool surface and the always-failing `project_run` are two faces of the same defect, and the owner approved a **clean-break** unified architecture: [ADR-045](decisions.md#adr-045) (umbrella) · [ADR-046](decisions.md#adr-046) (tool catalog + resolver + progressive disclosure) · [ADR-047](decisions.md#adr-047) (tar workspace transport) · [ADR-048](decisions.md#adr-048) (RuntimeSession + `fs`/`sh`). Contracts are updated and marked `[shipped]`/`[target]`/`[deleted]`; the execution plan is [`IMPLEMENTATION.md` **Phase TR**](IMPLEMENTATION.md) (P0–P5), approved by the owner. **P0/P1/P3/P4 and the P2 partials are shipped; P2's catalog is deferred and P5 is next.** B-2 remains open because the surface is still flat; B-8 remains open because the human Run/Stop lane is P5.
 >
-> Last updated: 2026-08-03 · Phase: **Phase TR P4 authorized and in progress**. P0/P1/P3 and the P2 partials remain shipped; P2's catalog remains deferred. On 2026-08-03 the owner explicitly chose the P4 sequencing path: register `fs_*`/`runtime_*`/`sh_exec` temporarily in the existing FULL flat registry, then let P2 wrap the unchanged tools later. The contract pass also pins RuntimeSession liveness recovery, DB-live container protection, host-edit/runtime serialization, committed agent dispatch, complete fs schemas and persisted exec output/cancel fields. P5 remains the human Run/Stop lane that closes B-8.
+> Last updated: 2026-08-03 · Phase: **Phase TR P4 COMPLETE**. P0/P1/P3/P4 and the P2 partials are shipped; P2's catalog remains deferred. P4 registered `fs_*`/`runtime_*`/`sh_exec` temporarily in the FULL flat registry, shipped host-side effective-tree editing, explicit RuntimeSession, worker-owned `202` REST/SSE/cancel/recovery, removed the old project tools/routes, and added CI route-inventory enforcement. P5 is next and remains the human Run/Stop lane that closes B-8.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -29,12 +29,9 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**Phase TR P4 is in progress.** The former P2 dependency is resolved by the owner's
-2026-08-03 decision: register the new tools in today's FULL flat registry (`safe=False`), with
-binding/ownership checks inside each adapter; P2 later adds descriptors without redesign. Start with
-P4.0 contracts, then P4.1 forward migration, P4.3 host-side `fs_*`, P4.2/P4.4 RuntimeSession +
-`sh_exec` + worker REST, P4.6 cutover and P4.7 route inventory. Then P5 supplies the human
-three-column Run/Stop lane and closes B-8.
+**Phase TR P5** — `/Project` three-column human workspace: editable file tree, Run control,
+streaming log, Stop, Runs/Artifacts tabs and rebase-review UX. P4's backend and agent lane are
+complete; B-8 closes only when this human lane is click-verified.
 
 **✅ P4.3 host-side `fs_*` shipped (2026-08-03).** `fs_list` / `fs_read` / `fs_grep` read
 the Project-bound chat's persisted effective tree without opening a container; `fs_write` /
@@ -43,7 +40,7 @@ overlay changes plus a rebuilt Change Set. Reads do not create a working copy, `
 the current hash, `if_hash` and anchored-edit conflicts mutate nothing, recursive directory delete
 is explicit, and reverting to the saved bytes removes the overlay instead of leaving a false
 `modified` entry. The tools are FULL-flat and not SAFE, per the owner decision. The legacy
-`project_tree` / `project_read` / `project_run` remain until P4.6 cutover.
+tools were subsequently removed by P4.6.
 
 **✅ P4.3a temporary args-aware policy shipped (2026-08-03).** The existing policy now accepts
 tool arguments without introducing P2 descriptors. Normal `fs_*` overlay writes remain allow;
@@ -99,11 +96,22 @@ The model now has exactly the intended coding surface:
 `docs/contracts/route-inventory.md` plus CI `--check` makes `/files/*`, `sandbox-runs` or any
 unreviewed route drift fail mechanically.
 
+**✅ P4 validation complete (2026-08-03).** Full backend **553 passed** (+32 docker deselected);
+real-Docker lane **32 passed**; full ruff/format/mypy, Alembic `0006`, route inventory and frontend
+lint/build green. The memory E2E tests exposed a pre-existing manifest omission (`psutil` imported by
+the committed tests but absent from the dev dependency group); `psutil>=6.0` is now in
+`pyproject.toml`/`uv.lock`. Live real-provider agent lane called
+`fs_write`×2 → `runtime_open` → `sh_exec` (pytest exit 1) → `fs_edit` → `sh_exec`
+(exit 0, `1 passed`). Human acceptance opened Change Review, inspected the `return a + b` diff and
+clicked Save selected; the project returned to bound/no-pending state and 390 px overflow was 0.
+UX note carried to P5: the review panel is clear, but users still need Run, streaming logs, Stop and
+Runs history in the same workspace.
+
 **✅ Phase TR P3 is CLOSED (owner-accepted 2026-08-01).** The transport half of B-8 is done and
 the 128 MiB workspace/change-set cap is an accepted product trade-off (see the P3 block below).
 **B-8 itself stays OPEN** — its close criterion is the *human* Run/Stop lane, which is **P5**.
-Nothing else in the exclusion list moved: `cancelled` (P4), `output_limit` + typed spill (P2.8)
-and `pids_limit` (no daemon signal) are still unmapped; Linux DooD/DinD/rootless are still
+The remaining named-exit gaps are `output_limit` + typed spill (P2.8) and `pids_limit`
+(no reliable daemon signal); `cancelled` shipped in P4. Linux DooD/DinD/rootless are still
 unverified; `/work` still cannot carry `nosuid,nodev` on an anonymous volume; cryptographic
 image provenance is still out of scope for v1; **B-12's diff-spill retention is still unfixed**
 (`project-diff/` grows without bound).
@@ -279,13 +287,11 @@ functionally invisible, which is exactly why it survived two reviews), and
 `test_build_change_set_never_full_reads_an_oversized_file` (verified to fail with the size gate
 disabled).
 
-**❗ B-8 is still OPEN, and P3 did not move its close criterion.** No `runtime_open`/`sh_exec`/`fs_*`
-tools, no async `202`+SSE, no cancel (**P4**); **no human Run control, no streaming log, no Stop** —
-`frontend/src/api.ts::createSandboxRun` is *still* dead code and the "web executes the sandbox
-synchronously with `SANDBOX_KIND` unset" blocker is *still* true (**P5**). Three failure-matrix rows
-are also unimplemented and are recorded as such, not assumed: `cancelled` (P4), `output_limit` +
-typed spill reference (P2.8), and `pids_limit` — the cap is enforced but docker exposes no
-pids-kill signal, so a fork bomb surfaces as a plain non-zero exit and naming it would be a guess.
+**P3 exit note, superseded in its P4 items.** At P3 there were no runtime/fs/sh tools, async REST or
+cancel. P4 has now shipped all of those and deleted `createSandboxRun`/`sandbox-runs`. **B-8 remains
+OPEN only for P5's human Run control, streaming log, Stop and Runs tab.** The other named-exit gaps
+remain `output_limit` + typed spill (P2.8) and `pids_limit` — the cap is enforced but docker exposes
+no pids-kill signal, so naming it would still be a guess.
 
 **🐛 B-12 found and fixed during P3's human lane (separate commit, not P3's fault).** The Drive
 orphan GC deleted change-set diff spills: `build_change_set` writes them under `project-diff/…`
