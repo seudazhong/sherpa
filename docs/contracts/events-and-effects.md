@@ -943,8 +943,11 @@ Before an agent-driven runtime tool touches Docker, the core commits its prepare
 `effect_invocations` row and the `tool-call` event. The corresponding
 `project_exec_runs.invocation_id` is unique when non-null. A redelivery therefore resumes or
 observes the already queued/running/persisted exec; it never blindly starts a second command.
-Runtime state/output boundary events are committed incrementally while the command runs, so SSE does
-not wait for the outer model loop to settle.
+The runtime/exec **rows** are committed at each state and persistence boundary. High-frequency
+`runtime.state` / `runtime.output` presentation frames use the existing Redis session stream as
+cursor-less transient frames: they are bounded and may be lost on disconnect, while reconnect reads
+the durable runtime/exec/change-set state. They do not wait for the outer model loop to settle and
+are deliberately not journal recovery truth.
 
 `project_runtime_sessions.expires_at` is also the crash-recovery deadline. Maintenance converts an
 expired `opening|ready|executing|closing` row into a named failed/closed outcome, removes any

@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from app.db import SessionLocal, ping_db
 from app.events import append_event
+from app.events.stream import transient_sse_format
 from app.models import EventJournal, Outbox, Run, Tenant, User
 from app.models import Session as SessionModel
 
@@ -84,3 +85,10 @@ async def test_append_event_orders_and_outboxes() -> None:
             assert n_outbox == 2
         finally:
             await s.rollback()
+
+
+def test_transient_sse_frame_has_no_replay_cursor() -> None:
+    frame = transient_sse_format({"type": "runtime.output", "payload": {"delta": "ok"}})
+    assert frame.startswith("event: runtime.output\n")
+    assert "\nid:" not in frame
+    assert '"delta":"ok"' in frame

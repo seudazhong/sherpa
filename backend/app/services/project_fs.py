@@ -313,11 +313,8 @@ async def _locked_working_copy(
     )
     if runtime is not None and runtime.state == "executing":
         raise Conflict("runtime_busy")
-    # P4.2 replaces this temporary invalidation marker with container teardown. Keeping
-    # the state transition here makes the fs/runtime serialization rule testable now.
-    if runtime is not None and runtime.state == "ready":
-        runtime.state = "opening"
-        runtime.container_ref = None
+    if runtime is not None and runtime.state in ("opening", "closing"):
+        raise Conflict(f"runtime_{runtime.state}")
     return locked
 
 
@@ -338,12 +335,16 @@ async def _persist(
     invocation_id: uuid.UUID | None,
 ) -> uuid.UUID | None:
     live_runtime = await db.scalar(
-        select(ProjectRuntimeSession).where(
+        select(ProjectRuntimeSession)
+        .where(
             ProjectRuntimeSession.tenant_id == ctx.tenant_id,
             ProjectRuntimeSession.working_copy_id == wc.id,
-            ProjectRuntimeSession.state.in_(("opening", "ready", "closing")),
+            ProjectRuntimeSession.state.in_(("opening", "ready", "executing", "closing")),
         )
+        .with_for_update()
     )
+    if live_runtime is not None and live_runtime.state != "ready":
+        raise Conflict(f"runtime_{live_runtime.state}")
     if live_runtime is not None and live_runtime.fence_token is not None:
         fence = live_runtime.fence_token
     else:
@@ -359,6 +360,15 @@ async def _persist(
     if not published:
         raise Conflict("fence_lost")
     change_set = await changes_svc.build_change_set(db, ctx, wc, run_id=ctx.run_id)
+    invalidated_ref: str | None = None
+    if live_runtime is not None and live_runtime.container_ref is not None:
+        invalidated_ref = live_runtime.container_ref
+        live_runtime.container_ref = None
+        live_runtime.state = "ready"
+        await db.commit()
+        from app.sandbox import runtime as sandbox_runtime
+
+        await sandbox_runtime.remove_runtime_container(invalidated_ref)
     return change_set.id if change_set is not None else None
 
 

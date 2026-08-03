@@ -60,6 +60,17 @@ agent `invocation_id` with a unique partial index and composite FK, bounded
 `project_exec_runs`. Human runs keep `invocation_id=NULL`; agent execution can now key recovery to
 the persist-before-dispatch effect invocation.
 
+**✅ P4.2 + P4.4 core RuntimeSession shipped (2026-08-03; REST job adapter still pending).**
+`runtime_open` creates a durable opening row before Docker, tar-injects the effective tree into one
+hardened long-lived container, probes `capabilities.json`, and returns a reusable runtime id.
+`sh_exec` commits the agent invocation before Docker exec, streams bounded cursor-less debug frames,
+tar-egresses after every command, fence-persists the overlay/change set, and records bounded output.
+Host `fs_*` edits atomically invalidate/remove the hot container; the next exec rematerializes from
+the latest overlay. Cancel is a committed cross-process signal; timeout/cancel/OOM persist the egress
+boundary before the stopped container is removed. Runtime `expires_at` now drives crash recovery,
+and maintenance protects unexpired DB-live container refs from the P3 orphan age sweep. The P3
+one-shot path remains green. Remaining P4.4 work is the human REST/queue `202` adapter.
+
 **✅ Phase TR P3 is CLOSED (owner-accepted 2026-08-01).** The transport half of B-8 is done and
 the 128 MiB workspace/change-set cap is an accepted product trade-off (see the P3 block below).
 **B-8 itself stays OPEN** — its close criterion is the *human* Run/Stop lane, which is **P5**.

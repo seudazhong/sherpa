@@ -447,9 +447,16 @@ async def _startup(ctx: dict[str, Any]) -> None:
     # Crash cleanup: the container from a killed run is a rebuildable cache, never recovery
     # truth (ADR-039/047). Under tar transport there is no host scratch tree left to sweep.
     try:
+        from app.sandbox import runtime as sandbox_runtime
+        from app.services import project_runtime as runtime_svc
         from app.services import project_sandbox as sbx_svc
 
-        sbx_svc.sweep_orphan_scratch()
+        async with SessionLocal() as session:
+            _recovered, expired_refs = await runtime_svc.recover_expired(session)
+            protected = await runtime_svc.protected_container_refs(session)
+        for ref in expired_refs:
+            await sandbox_runtime.remove_runtime_container(ref)
+        sbx_svc.sweep_orphan_scratch(protected_ids=protected)
     except Exception:  # noqa: BLE001 - best-effort cache cleanup, never fatal to startup
         pass
     ctx["relay_task"] = asyncio.create_task(_relay_loop())
@@ -698,14 +705,21 @@ async def project_workcopy_maintenance(ctx: dict[str, Any]) -> str:
     A container is a rebuildable cache — removing it never loses a persisted boundary."""
     if not await try_acquire_leader("project_workcopy_maintenance", ttl_ms=280_000):
         return "not_leader"
+    from app.sandbox import runtime as sandbox_runtime
+    from app.services import project_runtime as runtime_svc
     from app.services import project_sandbox as sbx_svc
     from app.services import project_workcopy as wc_svc
 
     async with SessionLocal() as session:
         expired = await wc_svc.expire_idle(session)
         await session.commit()
-    swept = sbx_svc.sweep_orphan_scratch()
-    return f"expired={expired} containers_swept={swept}"
+    async with SessionLocal() as session:
+        recovered, expired_refs = await runtime_svc.recover_expired(session)
+        protected = await runtime_svc.protected_container_refs(session)
+    for ref in expired_refs:
+        await sandbox_runtime.remove_runtime_container(ref)
+    swept = sbx_svc.sweep_orphan_scratch(protected_ids=protected)
+    return f"expired={expired} runtimes_recovered={recovered} containers_swept={swept}"
 
 
 class WorkerSettings:

@@ -41,6 +41,7 @@ from app.services.model_providers import session_supports_vision
 from app.tools import FULL, ToolContext, ToolError, ToolRegistry, bound_text, spill_output
 
 logger = logging.getLogger("app.core.loop")
+_COMMITTED_DISPATCH_TOOLS = frozenset({"runtime_open", "runtime_close", "sh_exec"})
 
 SYSTEM_PROMPT = (
     "You are Sherpa, a careful assistant. Use tools when needed; be concise. "
@@ -339,6 +340,10 @@ async def _run_tool_impl(  # type: ignore[no-untyped-def]
         return "error"
 
     await mark_running(session, run.tenant_id, handle.invocation_id)
+    if tool.name in _COMMITTED_DISPATCH_TOOLS:
+        # Runtime tools expose state/cancel across processes. The invocation and tool-call
+        # must therefore be committed before Docker is touched (ADR-017 / ADR-048 rev C).
+        await session.commit()
     tool_ctx = ToolContext(
         tenant_id=run.tenant_id,
         user_id=decider_user_id,
@@ -382,6 +387,8 @@ async def _run_tool_impl(  # type: ignore[no-untyped-def]
         payload={"id": call.id, "name": call.name, "ok": ok, "output": output[:4000]},
     )
     provider_messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
+    if tool.name in _COMMITTED_DISPATCH_TOOLS:
+        await session.commit()
     return "ok" if ok else "error"
 
 

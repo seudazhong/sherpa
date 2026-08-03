@@ -121,13 +121,21 @@ async def open_working_copy(
     Chat. The session must be bound to a Project (``sessions.project_id``) that has a head
     snapshot. Idempotent: a second call returns the same live working copy."""
     uid = projects_svc._require_user(ctx)
+    # Serialize lazy-open on the durable session row. A "SELECT live row, then INSERT"
+    # sequence cannot lock a row that does not exist and races on uq_pwc_live_session.
+    session = await db.scalar(
+        select(SessionModel)
+        .where(
+            SessionModel.tenant_id == ctx.tenant_id,
+            SessionModel.id == session_id,
+        )
+        .with_for_update()
+    )
+    if session is None or session.user_id != uid or session.status == "deleted":
+        raise NotFound("session not found")
     existing = await get_live(db, ctx, session_id=session_id)
     if existing is not None:
         return existing
-
-    session = await db.get(SessionModel, (ctx.tenant_id, session_id))
-    if session is None or session.user_id != uid or session.status == "deleted":
-        raise NotFound("session not found")
     if session.project_id is None:
         raise Invalid("session is not bound to a project (General chat has no working copy)")
     project = await db.get(Project, (ctx.tenant_id, session.project_id))

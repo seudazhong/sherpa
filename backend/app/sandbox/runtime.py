@@ -52,7 +52,12 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import io
+import json
+import queue
 import re
+import tarfile
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -294,6 +299,22 @@ class ExecOutcome:
     #: ``None`` when no tree returned (disabled sandbox, start failure, transport failure);
     #: the caller then falls back to the host-side copy so edits are never lost.
     files: dict[str, WorkspaceFile] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class RuntimeOpenOutcome:
+    result: RunResult
+    container_ref: str | None = None
+    image_digest: str | None = None
+    capabilities: dict[str, object] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class RuntimeExecOutcome:
+    result: RunResult
+    files: dict[str, WorkspaceFile] | None = None
+    container_alive: bool = False
+    cancelled: bool = False
 
 
 # --- path safety ------------------------------------------------------------
@@ -647,6 +668,31 @@ def verify_runner_image(client: Any, ref: str) -> RunResult | None:
     return None
 
 
+def _create_hardened_container(client: Any, *, command: list[str], session_label: str) -> Any:
+    """Create one runner container with the shared ADR-025 hardening profile."""
+    return client.containers.create(
+        settings.sandbox_image,
+        command=command,
+        # ADR-047: /work is the image's anonymous volume. No mount/bind/host path.
+        working_dir=WORK_DIR,
+        network_disabled=True,
+        mem_limit=f"{settings.sandbox_mem_mb}m",
+        pids_limit=settings.sandbox_pids_limit,
+        nano_cpus=1_000_000_000,
+        cap_drop=["ALL"],
+        security_opt=["no-new-privileges"],
+        read_only=True,
+        tmpfs={"/tmp": "size=64m,mode=1777,nosuid,nodev"},
+        user=f"{RUNNER_UID}:{RUNNER_GID}",
+        labels={
+            RUNTIME_LABEL: "1",
+            OWNER_LABEL: deployment_owner_id(),
+            SESSION_LABEL: session_label,
+            STARTED_LABEL: f"{time.time():.3f}",
+        },
+    )
+
+
 def _run_docker(ws: Workspace, command: str, *, session_label: str = "ephemeral") -> ExecOutcome:
     """Create → tar in → start → wait → logs → tar out → remove. No mount, no host path."""
     import docker
@@ -665,31 +711,10 @@ def _run_docker(ws: Workspace, command: str, *, session_label: str = "ephemeral"
         return ExecOutcome(rejected)
 
     try:
-        container = client.containers.create(
-            settings.sandbox_image,
+        container = _create_hardened_container(
+            client,
             command=["/bin/sh", "-lc", command],
-            # ADR-047: /work is the runner image's ANONYMOUS volume. There is no mounts=,
-            # no binds= and no host path anywhere in this call — that is the whole point.
-            working_dir=WORK_DIR,
-            network_disabled=True,
-            mem_limit=f"{settings.sandbox_mem_mb}m",
-            pids_limit=settings.sandbox_pids_limit,
-            nano_cpus=1_000_000_000,
-            cap_drop=["ALL"],
-            security_opt=["no-new-privileges"],
-            read_only=True,  # rootfs read-only; only /work + /tmp are writable
-            tmpfs={"/tmp": "size=64m,mode=1777,nosuid,nodev"},
-            user=f"{RUNNER_UID}:{RUNNER_GID}",
-            labels={
-                RUNTIME_LABEL: "1",
-                # Ownership: the sweeper filters on this, so a concurrently running test
-                # lane or second deployment is invisible to our cleanup and we to theirs.
-                OWNER_LABEL: deployment_owner_id(),
-                SESSION_LABEL: session_label,
-                # Written by the creating process's clock, which is the clock the sweeper's
-                # age rule compares against.
-                STARTED_LABEL: f"{time.time():.3f}",
-            },
+            session_label=session_label,
         )
     except ImageNotFound as exc:
         # The offline sandbox never reaches the network to pull: a missing image is its own
@@ -815,6 +840,311 @@ async def run_workspace(
     return await _execute_workspace(ws, command, session_label=session_label)
 
 
+# --- explicit RuntimeSession container lifecycle (Phase TR P4) -------------
+
+
+def _read_capabilities(container: Any) -> dict[str, object]:
+    chunks, _stat = container.get_archive("/opt/sherpa/capabilities.json")
+    raw = b"".join(chunks)
+    if len(raw) > 128 * 1024:
+        raise ValueError("capabilities manifest too large")
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as archive:
+        member = next((item for item in archive.getmembers() if item.isfile()), None)
+        if member is None or member.size > 64 * 1024:
+            raise ValueError("capabilities manifest missing or too large")
+        handle = archive.extractfile(member)
+        if handle is None:
+            raise ValueError("capabilities manifest unreadable")
+        value = json.loads(handle.read().decode("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("capabilities manifest must be an object")
+    return value
+
+
+def _open_runtime_docker(ws: Workspace, *, session_label: str) -> RuntimeOpenOutcome:
+    import docker
+    from docker.errors import APIError, DockerException, ImageNotFound
+
+    try:
+        client = docker.from_env()
+    except DockerException as exc:
+        return RuntimeOpenOutcome(named_failure(RUNTIME_DAEMON_UNREACHABLE, exc))
+    except Exception as exc:  # noqa: BLE001
+        return RuntimeOpenOutcome(unmodelled_failure(exc))
+    rejected = verify_runner_image(client, settings.sandbox_image)
+    if rejected is not None:
+        return RuntimeOpenOutcome(rejected)
+    try:
+        image = client.images.get(settings.sandbox_image)
+        container = _create_hardened_container(
+            client,
+            command=[
+                "/bin/sh",
+                "-lc",
+                "trap 'exit 0' TERM INT; while :; do sleep 3600; done",
+            ],
+            session_label=session_label,
+        )
+    except ImageNotFound as exc:
+        return RuntimeOpenOutcome(named_failure(RUNTIME_IMAGE_MISSING, exc))
+    except (APIError, DockerException) as exc:
+        return RuntimeOpenOutcome(named_failure(RUNTIME_START_FAILED, exc))
+    except Exception as exc:  # noqa: BLE001
+        return RuntimeOpenOutcome(unmodelled_failure(exc))
+
+    _IN_FLIGHT.add(container.id)
+    try:
+        try:
+            ingress_bytes = _transport().ingest(container, ws.sendable, ws.dirs)
+        except TransportError as exc:
+            return RuntimeOpenOutcome(_transport_failure(exc))
+        except (APIError, DockerException, OSError) as exc:
+            return RuntimeOpenOutcome(named_failure(RUNTIME_TRANSPORT_FAILED, exc))
+        try:
+            capabilities = _read_capabilities(container)
+            container.start()
+        except (APIError, DockerException, OSError, ValueError, json.JSONDecodeError) as exc:
+            return RuntimeOpenOutcome(named_failure(RUNTIME_START_FAILED, exc))
+        return RuntimeOpenOutcome(
+            RunResult("", "", 0, False, ingress_bytes=ingress_bytes),
+            container_ref=container.id,
+            image_digest=str(image.id),
+            capabilities=capabilities,
+        )
+    finally:
+        _IN_FLIGHT.discard(container.id)
+        # A successful open transfers ownership to the service. Failed opens leave no cache.
+        # `container_ref` is unavailable inside `finally`, so inspect the container state.
+        try:
+            container.reload()
+            opened = container.status == "running"
+        except Exception:  # noqa: BLE001
+            opened = False
+        if not opened:
+            try:
+                container.remove(force=True, v=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+async def open_runtime_workspace(ws: Workspace, *, session_label: str) -> RuntimeOpenOutcome:
+    if settings.sandbox_kind != "docker":
+        return RuntimeOpenOutcome(RunResult("", "", -1, False, error=SANDBOX_DISABLED))
+    return await asyncio.to_thread(_open_runtime_docker, ws, session_label=session_label)
+
+
+def _container_alive(container: Any) -> bool:
+    try:
+        container.reload()
+        return container.status == "running"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def exec_runtime_command(
+    container_ref: str,
+    command: str,
+    *,
+    timeout_seconds: int,
+    on_output: Callable[[str, str], Awaitable[None]] | None = None,
+    cancel_requested: Callable[[], Awaitable[bool]] | None = None,
+) -> RuntimeExecOutcome:
+    """Run one command via docker exec while keeping the RuntimeSession container alive."""
+    import docker
+    from docker.errors import APIError, DockerException, NotFound
+
+    try:
+        client = await asyncio.to_thread(docker.from_env)
+        container = await asyncio.to_thread(client.containers.get, container_ref)
+    except NotFound as exc:
+        return RuntimeExecOutcome(named_failure(RUNTIME_TRANSPORT_FAILED, exc))
+    except (DockerException, OSError) as exc:
+        return RuntimeExecOutcome(_classify_daemon_failure(exc))
+    except Exception as exc:  # noqa: BLE001
+        return RuntimeExecOutcome(unmodelled_failure(exc))
+
+    try:
+        exec_id = await asyncio.to_thread(
+            lambda: client.api.exec_create(
+                container.id,
+                ["/bin/sh", "-lc", command],
+                workdir=WORK_DIR,
+                user=f"{RUNNER_UID}:{RUNNER_GID}",
+            )["Id"]
+        )
+        stream = await asyncio.to_thread(client.api.exec_start, exec_id, stream=True, demux=True)
+    except (APIError, DockerException, OSError) as exc:
+        return RuntimeExecOutcome(_classify_daemon_failure(exc))
+    except Exception as exc:  # noqa: BLE001
+        return RuntimeExecOutcome(unmodelled_failure(exc))
+
+    output_queue: queue.Queue[tuple[str, bytes] | BaseException | None] = queue.Queue()
+
+    def produce() -> None:
+        try:
+            for stdout_chunk, stderr_chunk in stream:
+                if stdout_chunk:
+                    output_queue.put(("stdout", stdout_chunk))
+                if stderr_chunk:
+                    output_queue.put(("stderr", stderr_chunk))
+        except BaseException as exc:  # noqa: BLE001 - delivered to the async consumer
+            output_queue.put(exc)
+        finally:
+            output_queue.put(None)
+
+    producer = threading.Thread(target=produce, daemon=True)
+    producer.start()
+    started = time.monotonic()
+    stdout = bytearray()
+    stderr = bytearray()
+    truncated = False
+    timed_out = False
+    cancelled = False
+    stop_requested_at: float | None = None
+    last_cancel_check = 0.0
+    stream_error: BaseException | None = None
+
+    while True:
+        now = time.monotonic()
+        if (
+            not cancelled
+            and not timed_out
+            and cancel_requested is not None
+            and now - last_cancel_check >= 1.0
+            and await cancel_requested()
+        ):
+            cancelled = True
+            stop_requested_at = now
+            await asyncio.to_thread(_kill_quietly, container)
+        if cancel_requested is not None and now - last_cancel_check >= 1.0:
+            last_cancel_check = now
+        if not cancelled and not timed_out and now - started >= timeout_seconds:
+            timed_out = True
+            stop_requested_at = now
+            await asyncio.to_thread(_kill_quietly, container)
+        if stop_requested_at is not None and now - stop_requested_at > 5:
+            break
+        try:
+            item = await asyncio.to_thread(output_queue.get, True, 0.1)
+        except queue.Empty:
+            continue
+        if item is None:
+            break
+        if isinstance(item, BaseException):
+            stream_error = item
+            continue
+        stream_name, chunk = item
+        target = stdout if stream_name == "stdout" else stderr
+        remaining = max(0, OUTPUT_MAX_BYTES - len(target))
+        kept = chunk[:remaining]
+        if kept:
+            target.extend(kept)
+            if on_output is not None:
+                for offset in range(0, len(kept), 8192):
+                    await on_output(
+                        stream_name, kept[offset : offset + 8192].decode("utf-8", "replace")
+                    )
+        if len(kept) < len(chunk):
+            truncated = True
+
+    await asyncio.to_thread(producer.join, 5)
+    if stream_error is not None and not (cancelled or timed_out):
+        return RuntimeExecOutcome(
+            _classify_daemon_failure(stream_error),
+            container_alive=await asyncio.to_thread(_container_alive, container),
+        )
+
+    exit_code = -1
+    if not (cancelled or timed_out):
+        try:
+            info = await asyncio.to_thread(client.api.exec_inspect, exec_id)
+            exit_code = int(info.get("ExitCode", -1))
+        except Exception as exc:  # noqa: BLE001
+            return RuntimeExecOutcome(
+                _classify_daemon_failure(exc),
+                container_alive=await asyncio.to_thread(_container_alive, container),
+            )
+
+    try:
+        await asyncio.to_thread(container.reload)
+        oom = bool(container.attrs.get("State", {}).get("OOMKilled", False))
+    except Exception:  # noqa: BLE001
+        oom = False
+
+    try:
+        files = await asyncio.to_thread(_transport().egress, container)
+    except TransportError as exc:
+        return RuntimeExecOutcome(
+            RunResult(
+                stdout.decode("utf-8", "replace"),
+                stderr.decode("utf-8", "replace"),
+                exit_code,
+                timed_out,
+                error=exc.code,
+                error_detail=exc.detail[:DETAIL_MAX],
+                output_truncated=truncated,
+            ),
+            container_alive=await asyncio.to_thread(_container_alive, container),
+            cancelled=cancelled,
+        )
+    except (APIError, DockerException, OSError) as exc:
+        return RuntimeExecOutcome(
+            named_failure(RUNTIME_TRANSPORT_FAILED, exc),
+            container_alive=await asyncio.to_thread(_container_alive, container),
+            cancelled=cancelled,
+        )
+
+    return RuntimeExecOutcome(
+        RunResult(
+            stdout.decode("utf-8", "replace"),
+            stderr.decode("utf-8", "replace"),
+            exit_code,
+            timed_out,
+            error=MEM_LIMIT if oom else None,
+            output_truncated=truncated,
+        ),
+        files=files,
+        container_alive=await asyncio.to_thread(_container_alive, container),
+        cancelled=cancelled,
+    )
+
+
+def _snapshot_runtime_docker(container_ref: str) -> dict[str, WorkspaceFile]:
+    import docker
+
+    client = docker.from_env()
+    container = client.containers.get(container_ref)
+    _IN_FLIGHT.add(container.id)
+    try:
+        return _transport().egress(container)
+    finally:
+        _IN_FLIGHT.discard(container.id)
+
+
+async def snapshot_runtime_workspace(container_ref: str) -> dict[str, WorkspaceFile]:
+    try:
+        return await asyncio.to_thread(_snapshot_runtime_docker, container_ref)
+    except Exception as exc:  # noqa: BLE001 - service consumes the named boundary failure
+        raise ScratchError(RUNTIME_TRANSPORT_FAILED) from exc
+
+
+def _remove_runtime_docker(container_ref: str) -> None:
+    import docker
+
+    try:
+        container = docker.from_env().containers.get(container_ref)
+        container.remove(force=True, v=True)
+    except Exception:  # noqa: BLE001 - cache cleanup is idempotent/best-effort
+        pass
+    _IN_FLIGHT.discard(container_ref)
+
+
+async def remove_runtime_container(container_ref: str | None) -> None:
+    if not container_ref:
+        return
+    await asyncio.to_thread(_remove_runtime_docker, container_ref)
+
+
 # --- orphan sweep -----------------------------------------------------------
 
 
@@ -860,7 +1190,13 @@ def _container_age_seconds(container: Any, *, now: float) -> float | None:
         return None
 
 
-def _is_reclaimable(container: Any, *, now: float, threshold: float) -> bool:
+def _is_reclaimable(
+    container: Any,
+    *,
+    now: float,
+    threshold: float,
+    protected_ids: frozenset[str] = frozenset(),
+) -> bool:
     """Whether a container owned by this deployment may be removed.
 
     Two guards, deliberately in this order:
@@ -880,7 +1216,7 @@ def _is_reclaimable(container: Any, *, now: float, threshold: float) -> bool:
     a live one costs a user's run.
     """
     try:
-        if container.id in _IN_FLIGHT:
+        if container.id in _IN_FLIGHT or container.id in protected_ids:
             return False
     except Exception:  # noqa: BLE001
         return False
@@ -890,7 +1226,7 @@ def _is_reclaimable(container: Any, *, now: float, threshold: float) -> bool:
     return age > threshold
 
 
-def sweep_orphan_containers() -> int:
+def sweep_orphan_containers(*, protected_ids: frozenset[str] = frozenset()) -> int:
     """Remove sandbox containers this deployment leaked (crashed worker, killed process).
 
     Containers are rebuildable caches — removing one never loses a persisted boundary — but
@@ -917,7 +1253,7 @@ def sweep_orphan_containers() -> int:
     threshold = float(settings.sandbox_run_timeout_seconds) + SWEEP_GRACE_SECONDS
     removed = 0
     for c in containers:
-        if not _is_reclaimable(c, now=now, threshold=threshold):
+        if not _is_reclaimable(c, now=now, threshold=threshold, protected_ids=protected_ids):
             continue
         try:
             c.remove(force=True, v=True)

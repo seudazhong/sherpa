@@ -337,6 +337,73 @@ async def test_a_live_run_survives_a_concurrent_sweep() -> None:
     assert out.files is not None
 
 
+async def test_explicit_runtime_reuses_one_container_and_streams_output() -> None:
+    ws = await _ws({"state.txt": b"one\n"})
+    opened = await sbx.open_runtime_workspace(ws, session_label="p4-reuse")
+    assert opened.result.error is None, opened.result.error_detail
+    assert opened.container_ref is not None
+    assert opened.capabilities is not None
+    chunks: list[tuple[str, str]] = []
+
+    async def on_output(stream: str, delta: str) -> None:
+        chunks.append((stream, delta))
+
+    async def not_cancelled() -> bool:
+        return False
+
+    try:
+        first = await sbx.exec_runtime_command(
+            opened.container_ref,
+            "printf two > state.txt; echo first",
+            timeout_seconds=10,
+            on_output=on_output,
+            cancel_requested=not_cancelled,
+        )
+        assert first.result.error is None, first.result.error_detail
+        assert first.result.exit_code == 0
+        assert first.container_alive is True
+        assert first.files is not None
+        assert first.files["state.txt"].data == b"two"
+        assert any("first" in delta for _stream, delta in chunks)
+
+        second = await sbx.exec_runtime_command(
+            opened.container_ref,
+            "cat state.txt",
+            timeout_seconds=10,
+            on_output=on_output,
+            cancel_requested=not_cancelled,
+        )
+        assert second.result.exit_code == 0
+        assert second.result.stdout == "two"
+        assert second.container_alive is True
+    finally:
+        await sbx.remove_runtime_container(opened.container_ref)
+
+
+async def test_explicit_runtime_cancel_returns_the_egress_tree() -> None:
+    ws = await _ws({"state.txt": b"before\n"})
+    opened = await sbx.open_runtime_workspace(ws, session_label="p4-cancel")
+    assert opened.container_ref is not None
+    started = time.monotonic()
+
+    async def cancel_after_write() -> bool:
+        return time.monotonic() - started > 0.5
+
+    try:
+        out = await sbx.exec_runtime_command(
+            opened.container_ref,
+            "printf persisted > cancelled.txt; sleep 999",
+            timeout_seconds=20,
+            cancel_requested=cancel_after_write,
+        )
+        assert out.cancelled is True
+        assert out.container_alive is False
+        assert out.files is not None
+        assert out.files["cancelled.txt"].data == b"persisted"
+    finally:
+        await sbx.remove_runtime_container(opened.container_ref)
+
+
 async def test_an_in_flight_container_is_never_reclaimed_even_when_stale() -> None:
     """Belt and braces: the in-process registry protects a container the age rule would
     otherwise release, so a run that somehow outlives the threshold is still not deleted

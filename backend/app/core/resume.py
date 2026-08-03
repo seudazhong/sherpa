@@ -27,6 +27,8 @@ from app.observability import bind_context
 from app.services.grants import grant_from_action
 from app.tools import ToolContext, ToolError, bound_text, build_default_registry
 
+_COMMITTED_DISPATCH_TOOLS = frozenset({"runtime_open", "runtime_close", "sh_exec"})
+
 
 async def _recover_tool_args(
     session: AsyncSession,
@@ -145,6 +147,8 @@ async def resume_approval(session: AsyncSession, correlation_id: uuid.UUID) -> s
 
     await mark_running(session, env.tenant_id, env.invocation_id)
     tool = build_default_registry().get(env.tool_name)
+    if tool.name in _COMMITTED_DISPATCH_TOOLS:
+        await session.commit()
     tool_ctx = ToolContext(
         tenant_id=env.tenant_id,
         user_id=env.decided_by_user_id,
@@ -170,6 +174,10 @@ async def resume_approval(session: AsyncSession, correlation_id: uuid.UUID) -> s
         event_type="tool-result",
         payload={"id": call_id, "name": env.tool_name, "ok": True, "output": output[:4000]},
     )
+    if tool.name in _COMMITTED_DISPATCH_TOOLS:
+        # The runtime service already committed its Docker/overlay boundary. Settle the
+        # effect + tool result independently before audit/grant follow-up can fail.
+        await session.commit()
     await record_receipt(
         session,
         tenant_id=env.tenant_id,

@@ -73,7 +73,9 @@ def build_default_registry() -> ToolRegistry:
     from app.tools.knowledge_tools import knowledge_tools
     from app.tools.memory_tools import memory_tools
     from app.tools.project_tools import project_tools
+    from app.tools.runtime_tools import runtime_tools
     from app.tools.schedule_tools import schedule_tools
+    from app.tools.sh_tools import sh_tools
     from app.tools.todo_tools import todo_tools
 
     for tool in [
@@ -87,6 +89,8 @@ def build_default_registry() -> ToolRegistry:
         *fs_tools(),
         *knowledge_tools(),
         *project_tools(),
+        *runtime_tools(),
+        *sh_tools(),
     ]:
         registry.register(tool, safe=False)  # type: ignore[arg-type]
     return registry

@@ -30,6 +30,12 @@ def sse_format(env: dict[str, object]) -> str:
     return f"id: {env['session_seq']}\nevent: {env['type']}\ndata: {data}\n\n"
 
 
+def transient_sse_format(env: dict[str, object]) -> str:
+    """A best-effort frame has no public cursor and is never replayed."""
+    data = json.dumps(env, separators=(",", ":"))
+    return f"event: {env['type']}\ndata: {data}\n\n"
+
+
 async def read_backlog(
     session: AsyncSession,
     tenant_id: uuid.UUID,
@@ -85,6 +91,10 @@ async def session_event_stream(
         for _stream, entries in result:
             for entry_id, fields in entries:
                 last_id = entry_id
+                transient = fields.get("transient")
+                if transient:
+                    yield transient_sse_format(json.loads(transient))
+                    continue
                 raw = fields.get("envelope")
                 if not raw:
                     continue

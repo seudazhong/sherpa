@@ -16,7 +16,7 @@ from app.core.admission import admit_prompt
 from app.db import SessionLocal, ping_db
 from app.models import EventJournal, Message, Run, Tenant, User
 from app.models import Session as SessionModel
-from app.worker import run_job
+from app.worker import project_workcopy_maintenance, run_job
 from tests.db_guard import drop_tenant
 
 
@@ -92,3 +92,50 @@ async def test_run_job_executes_admitted_prompt() -> None:
             assert {"run.started", "turn.end", "run.settled"} <= types
     finally:
         await _drop(tid)
+
+
+@pytest.mark.asyncio
+async def test_project_maintenance_protects_live_runtime_containers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    from app import worker
+    from app.sandbox import runtime as sandbox_runtime
+    from app.services import project_runtime as runtime_svc
+    from app.services import project_sandbox as sandbox_svc
+    from app.services import project_workcopy as workcopy_svc
+
+    async def leader(*args, **kwargs) -> bool:  # type: ignore[no-untyped-def]
+        return True
+
+    async def expire_idle(session) -> int:  # type: ignore[no-untyped-def]
+        return 2
+
+    async def recover(session):  # type: ignore[no-untyped-def]
+        return 1, ["expired-container"]
+
+    async def protected(session):  # type: ignore[no-untyped-def]
+        return frozenset({"live-container"})
+
+    removed: list[str] = []
+    swept: list[frozenset[str]] = []
+
+    async def remove(ref):  # type: ignore[no-untyped-def]
+        removed.append(ref)
+
+    def sweep(*, protected_ids=frozenset()):  # type: ignore[no-untyped-def]
+        swept.append(protected_ids)
+        return 3
+
+    monkeypatch.setattr(worker, "try_acquire_leader", leader)
+    monkeypatch.setattr(workcopy_svc, "expire_idle", expire_idle)
+    monkeypatch.setattr(runtime_svc, "recover_expired", recover)
+    monkeypatch.setattr(runtime_svc, "protected_container_refs", protected)
+    monkeypatch.setattr(sandbox_runtime, "remove_runtime_container", remove)
+    monkeypatch.setattr(sandbox_svc, "sweep_orphan_scratch", sweep)
+
+    result = await project_workcopy_maintenance({})
+    assert removed == ["expired-container"]
+    assert swept == [frozenset({"live-container"})]
+    assert result == "expired=2 runtimes_recovered=1 containers_swept=3"

@@ -461,9 +461,9 @@ async def run_sandbox(
         rs.closed_at = _now()
 
 
-def sweep_orphan_scratch() -> int:
+def sweep_orphan_scratch(*, protected_ids: frozenset[str] = frozenset()) -> int:
     """Startup sweep of sandbox containers left by crashed runs (rebuildable cache).
 
     Under tar transport there is no host scratch directory left to sweep (ADR-047 deleted
     ``SANDBOX_SCRATCH_ROOT``); what can leak is a container whose worker died mid-run."""
-    return sbx.sweep_orphan_containers()
+    return sbx.sweep_orphan_containers(protected_ids=protected_ids)
