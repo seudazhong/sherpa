@@ -37,7 +37,7 @@ the edits and the delta all still work; only *running* is lost, never *editing*.
 
 ``_execute_workspace`` is module-level so tests can substitute a fake. Nothing here mutates
 the database; the durable overlay persist + the ``project_runtime_sessions``/
-``project_exec_runs`` bookkeeping live in :mod:`app.services.project_sandbox`.
+``project_exec_runs`` bookkeeping live in :mod:`app.services.project_runtime`.
 
 **Known ``nosuid,nodev`` caveat (honest record).** config §1.7 describes ``/work`` as an
 anonymous volume with ``nosuid,nodev``. Docker's API exposes those flags for *tmpfs* mounts

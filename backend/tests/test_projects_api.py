@@ -249,7 +249,7 @@ async def test_project_workcopy_change_review_rest_flow(tmp_path, monkeypatch) -
         empty = await client.get(f"/sessions/{sid}/working-copy")
         assert empty.status_code == 200 and empty.json() is None
 
-        # Stage a change the way project_run does (host-side edit, offline sandbox).
+        # Stage a change through the retained one-shot regression helper.
         tid, uid = owner_ids()
         cc = CallerContext(tenant_id=tid, user_id=uid, actor="user")
         async with SessionLocal() as s:

@@ -3,7 +3,7 @@
 Change-set build from a sandbox boundary (added/modified/deleted + bounded diffs),
 Save-selected apply (head-generation CAS + partial-save rebase), stale-head conflict,
 Discard, artifacts (ephemeral → Keep charges quota / Export copies to Drive), and the
-agent tool policy (project_run allow, project_review_changes allow; Save is user-only).
+agent tool policy (fs_write allow, project_review_changes allow; Save is user-only).
 
 Integration test — skips without a database (needs migration 0030). In-memory object
 store; rolls back. Uses a temp scratch root.
@@ -28,7 +28,8 @@ from app.services import project_workcopy as wc_svc
 from app.services import projects as projects_svc
 from app.services.context import CallerContext
 from app.services.errors import Conflict, TooLarge
-from app.tools.project_tools import ProjectReviewChangesTool, ProjectRunTool
+from app.tools.fs_tools import FsWriteTool
+from app.tools.project_tools import ProjectReviewChangesTool
 
 
 async def _seed(s) -> CallerContext:  # type: ignore[no-untyped-def]
@@ -70,7 +71,7 @@ async def _run(s, ctx, wc, *, edits):  # type: ignore[no-untyped-def]
 
 
 def test_tool_policy() -> None:
-    assert evaluate(ProjectRunTool()) == "allow"
+    assert evaluate(FsWriteTool(), {"path": "src/app.py"}) == "allow"
     assert evaluate(ProjectReviewChangesTool()) == "allow"
 
 

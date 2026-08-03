@@ -90,6 +90,15 @@ commit→enqueue crash gap, open/close use cross-worker operation claims, prepar
 queued→running claim, and arq retries are disabled in favor of Sherpa's recovery state machine.
 Frontend API types/client now use RuntimeSession/ExecRun; P5 still needs the actual Run/log/Stop UI.
 
+**✅ P4.6/P4.7 clean-break cutover shipped (2026-08-03).** `project_tree`,
+`project_read`, `project_run` and the synchronous `/sandbox-runs` route are absent with no aliases.
+The model now has exactly the intended coding surface:
+`fs_list/read/grep/write/edit/delete`, `runtime_open/close`, `sh_exec`, and
+`project_review_changes`. FULL-flat measures **48 tools / 16,587 compact JSON bytes**
+(42 tools before P4; +9 new −3 old). This intentionally does not close B-2. A generated
+`docs/contracts/route-inventory.md` plus CI `--check` makes `/files/*`, `sandbox-runs` or any
+unreviewed route drift fail mechanically.
+
 **✅ Phase TR P3 is CLOSED (owner-accepted 2026-08-01).** The transport half of B-8 is done and
 the 128 MiB workspace/change-set cap is an accepted product trade-off (see the P3 block below).
 **B-8 itself stays OPEN** — its close criterion is the *human* Run/Stop lane, which is **P5**.

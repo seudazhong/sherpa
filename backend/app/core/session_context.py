@@ -14,7 +14,7 @@ and only the tail of the system message differs per session. Deliberately coarse
 * **Date, not timestamp.** A wall-clock stamp would change the prefix on every run and
   invalidate the cache for a fact the model can get precisely from ``get_time``.
 * **Identity, not content.** Project *name* and id — never file contents, which stay
-  untrusted content behind ``project_read`` (ADR-009).
+  untrusted content behind ``fs_read`` (ADR-009).
 
 Everything here is derived from the session row; there is no new source of truth.
 """
@@ -66,15 +66,15 @@ async def render_session_context(
 
     if session.project_id is None:
         lines.append(
-            "- Project: none — this is a general chat. Project tools need an explicit "
-            "project_id (use project_list)."
+            "- Project: none — this is a general chat. Use project_list for metadata; "
+            "fs/runtime tools require a Project-bound chat."
         )
     else:
         project = await db.get(Project, (tenant_id, session.project_id))
         name = project.name if project is not None else "(unavailable)"
         lines.append(
             f"- Project: {name} (id {session.project_id}) — this chat is bound to it. "
-            "Project tools default to this project when project_id is omitted, and "
-            "project_run works on this chat's task working copy."
+            "Use fs_list/fs_read/fs_grep for the effective tree, fs_write/fs_edit/fs_delete "
+            "for reviewable changes, and runtime_open + sh_exec for isolated execution."
         )
     return "\n".join(lines)

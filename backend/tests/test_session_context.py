@@ -140,7 +140,7 @@ async def test_unknown_session_renders_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_project_tools_default_to_the_bound_project() -> None:
+async def test_fs_tools_use_the_bound_project() -> None:
     if not await ping_db():
         pytest.skip("database not reachable")
     async with SessionLocal() as s:
@@ -152,10 +152,9 @@ async def test_project_tools_default_to_the_bound_project() -> None:
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session_id=sid, session=s)
 
-            # No project_id passed: the binding supplies it.
-            tree = await reg.get("project_tree").execute(tctx, {})
+            tree = await reg.get("fs_list").execute(tctx, {})
             assert "main.py" in tree.llm_content
-            read = await reg.get("project_read").execute(tctx, {"path": "main.py"})
+            read = await reg.get("fs_read").execute(tctx, {"path": "main.py"})
             assert "hello, sherpa" in read.llm_content
             # The listing marks which project the chat is on.
             listing = await reg.get("project_list").execute(tctx, {})
@@ -165,7 +164,7 @@ async def test_project_tools_default_to_the_bound_project() -> None:
 
 
 @pytest.mark.asyncio
-async def test_general_chat_without_project_id_gets_an_actionable_observation() -> None:
+async def test_general_chat_fs_tool_gets_an_actionable_observation() -> None:
     if not await ping_db():
         pytest.skip("database not reachable")
     async with SessionLocal() as s:
@@ -175,9 +174,8 @@ async def test_general_chat_without_project_id_gets_an_actionable_observation() 
             reg = build_default_registry()
             tctx = ToolContext(tenant_id=tid, user_id=uid, session_id=sid, session=s)
             with pytest.raises(ToolError) as err:
-                await reg.get("project_tree").execute(tctx, {})
+                await reg.get("fs_list").execute(tctx, {})
             assert "not bound to a project" in str(err.value)
-            assert "project_list" in str(err.value)
         finally:
             await s.rollback()
 

@@ -41,6 +41,8 @@ jobs:
         run: uv run ruff check . && uv run ruff format --check .
       - name: Typecheck
         run: uv run mypy app
+      - name: Route inventory
+        run: uv run python scripts/route_inventory.py --check
       - name: Migrate
         run: uv run alembic upgrade head
       - name: Test
