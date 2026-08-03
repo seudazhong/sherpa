@@ -8,7 +8,6 @@ import {
   ApiError,
   type ChangeSet,
   type ChangeSetEntry,
-  type ProjectArtifact,
   type WorkingCopySummary,
 } from "../api";
 
@@ -31,7 +30,6 @@ export function ChangeReview({
 }) {
   const csId = workingCopy.open_change_set_id;
   const [cs, setCs] = useState<ChangeSet | null>(null);
-  const [artifacts, setArtifacts] = useState<ProjectArtifact[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openDiff, setOpenDiff] = useState<{ id: string; text: string } | null>(
     null,
@@ -46,19 +44,15 @@ export function ChangeReview({
       return;
     }
     try {
-      const [next, arts] = await Promise.all([
-        api.getChangeSet(projectId, csId),
-        api.listProjectArtifacts(projectId, workingCopy.id),
-      ]);
+      const next = await api.getChangeSet(projectId, csId);
       setCs(next);
-      setArtifacts(arts);
       setSelected(
         new Set(next.entries.filter((e) => e.selected).map((e) => e.id)),
       );
     } catch {
       setError("Could not load the change review.");
     }
-  }, [csId, projectId, workingCopy.id]);
+  }, [csId, projectId]);
 
   useEffect(() => {
     setOpenDiff(null);
@@ -153,27 +147,6 @@ export function ChangeReview({
     }
   };
 
-  const keep = async (art: ProjectArtifact) => {
-    if (!csrf) return;
-    try {
-      await api.keepProjectArtifact(csrf, projectId, art.id);
-      await load();
-    } catch {
-      setError("Could not keep the artifact.");
-    }
-  };
-
-  const exportToDrive = async (art: ProjectArtifact) => {
-    if (!csrf) return;
-    try {
-      await api.exportProjectArtifact(csrf, projectId, art.id);
-      setError(null);
-      await load();
-    } catch {
-      setError("Could not export the artifact.");
-    }
-  };
-
   const selectedCount = selected.size;
 
   return (
@@ -239,37 +212,6 @@ export function ChangeReview({
           </li>
         ))}
       </ul>
-
-      {artifacts.length > 0 && (
-        <div className="cr-artifacts">
-          <div className="small muted">
-            Run artifacts (kept/exported items charge storage)
-          </div>
-          <ul>
-            {artifacts.map((a) => (
-              <li key={a.id} className="cr-artifact">
-                <span className="cr-art-name">{a.name}</span>
-                <span className="pill">{a.retention}</span>
-                <span className="small muted">{a.size_bytes} B</span>
-                {a.retention === "ephemeral" && (
-                  <button
-                    className="btn btn-quiet btn-small"
-                    onClick={() => void keep(a)}
-                  >
-                    Keep
-                  </button>
-                )}
-                <button
-                  className="btn btn-quiet btn-small"
-                  onClick={() => void exportToDrive(a)}
-                >
-                  Export → Drive
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       {error && <div className="auth-error small">{error}</div>}
 

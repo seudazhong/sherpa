@@ -167,6 +167,13 @@ async def test_runtime_rest_is_202_and_worker_owned(
         assert (
             await project_runtime_exec_job({}, str(tenant_id), str(cancel_exec_id)) == "cancelled"
         )
+        history = await client.get(f"/sessions/{session_id}/runtime-execs")
+        assert history.status_code == 200
+        assert [item["id"] for item in history.json()[:2]] == [
+            str(cancel_exec_id),
+            str(exec_id),
+        ]
+        assert history.json()[0]["termination_reason"] == "cancelled"
 
         closing = await client.delete(f"/runtime/{runtime_id}", headers=headers)
         assert closing.status_code == 200

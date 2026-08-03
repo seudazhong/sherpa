@@ -1075,6 +1075,139 @@ input[type="file"]::file-selector-button {
   margin-right: 7px;
 }
 
+.workspace-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  background: var(--surface-subtle);
+}
+
+.workspace-tabs button {
+  min-width: 0;
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.workspace-tabs button.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(30, 40, 35, 0.08);
+}
+
+.workspace-tabs button span {
+  display: inline-grid;
+  min-width: 16px;
+  height: 16px;
+  place-items: center;
+  margin-left: 4px;
+  border-radius: 8px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 9px;
+}
+
+.runs-panel,
+.artifacts-panel {
+  padding: 12px 14px 18px;
+}
+
+.runs-panel > header,
+.artifacts-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+.run-history-item {
+  border-bottom: 1px solid var(--border);
+  padding: 7px 0;
+}
+
+.run-history-item summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.run-history-item summary code {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-history-exit {
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.run-history-output {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 0;
+  border-radius: 7px;
+  padding: 8px;
+  background: #17211d;
+  color: #dce8e1;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.run-history-output.stderr {
+  color: #ffb4aa;
+}
+
+.artifacts-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.artifacts-panel li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 0;
+}
+
+.artifacts-panel li > div {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.artifacts-panel li strong {
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifacts-panel li span {
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.project-pane-empty.compact {
+  padding-block: 24px;
+}
+
 .project-pane-tabs {
   display: none;
 }

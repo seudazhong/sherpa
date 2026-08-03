@@ -22,13 +22,10 @@ import {
   type WorkingCopySummary,
 } from "../api";
 import { useAuth } from "../auth";
-import { ChangeReview } from "../components/ChangeReview";
 import { ModelSwitcher } from "../components/ModelSwitcher";
 import { ProjectTree } from "../components/ProjectTree";
-import {
-  RunPanel,
-  type RuntimeStreamFrame,
-} from "../components/RunPanel";
+import type { RuntimeStreamFrame } from "../components/RunPanel";
+import { WorkspaceTabs } from "../components/WorkspaceTabs";
 import Sidebar from "../components/Sidebar";
 import {
   MAX_ATTACHMENTS,
@@ -1193,36 +1190,16 @@ export default function ChatView() {
                   <span>Changes · Runs · Artifacts</span>
                 </div>
               </header>
-              {workingCopy ? (
-                <>
-                  {sessionId && (
-                    <RunPanel
-                      projectId={projectCtx.project_id}
-                      sessionId={sessionId}
-                      csrf={csrf}
-                      workingCopy={workingCopy}
-                      frames={runtimeFrames}
-                      onWorkingCopy={setWorkingCopy}
-                    />
-                  )}
-                  <ChangeReview
-                    projectId={projectCtx.project_id}
-                    csrf={csrf}
-                    workingCopy={workingCopy}
-                    onChanged={() => void refreshWorkingCopy()}
-                  />
-                </>
-              ) : (
-                sessionId && (
-                  <RunPanel
-                    projectId={projectCtx.project_id}
-                    sessionId={sessionId}
-                    csrf={csrf}
-                    workingCopy={null}
-                    frames={runtimeFrames}
-                    onWorkingCopy={setWorkingCopy}
-                  />
-                )
+              {sessionId && (
+                <WorkspaceTabs
+                  projectId={projectCtx.project_id}
+                  sessionId={sessionId}
+                  csrf={csrf}
+                  workingCopy={workingCopy}
+                  frames={runtimeFrames}
+                  onWorkingCopy={setWorkingCopy}
+                  onChanged={() => void refreshWorkingCopy()}
+                />
               )}
             </aside>
           )}

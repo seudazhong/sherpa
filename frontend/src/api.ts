@@ -1381,6 +1381,10 @@ export const api = {
     ),
   getRuntimeExec: (runtimeId: string, execId: string) =>
     req<RuntimeExecRun>(`/runtime/${runtimeId}/exec/${execId}`),
+  listRuntimeExecs: (sid: string, limit = 50) =>
+    req<RuntimeExecRun[]>(
+      `/sessions/${sid}/runtime-execs?limit=${encodeURIComponent(limit)}`,
+    ),
   cancelRuntime: (csrf: string, runtimeId: string) =>
     req<RuntimeSessionState>(
       `/runtime/${runtimeId}/cancel`,

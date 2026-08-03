@@ -120,6 +120,7 @@
 | `POST` | `/sessions/{session_id}/prompt` | `session` | `yes` |
 | `POST` | `/sessions/{session_id}/recover` | `session` | `yes` |
 | `GET` | `/sessions/{session_id}/resume-state` | `session` | `no` |
+| `GET` | `/sessions/{session_id}/runtime-execs` | `session` | `no` |
 | `GET` | `/sessions/{session_id}/timeline` | `session` | `no` |
 | `PATCH` | `/sessions/{session_id}/title` | `session` | `yes` |
 | `GET` | `/sessions/{session_id}/working-copy` | `session` | `no` |

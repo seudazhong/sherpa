@@ -1029,6 +1029,22 @@ async def get_runtime_exec(
     return _exec_state(exec_run)
 
 
+@router.get("/sessions/{session_id}/runtime-execs")
+async def list_runtime_execs(
+    session_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[ExecRunOut]:
+    try:
+        rows = await runtime_svc.list_exec_runs(
+            db, _caller(ctx), session_id=session_id, limit=limit
+        )
+    except ServiceError as exc:
+        raise _http(exc) from None
+    return [_exec_state(row) for row in rows]
+
+
 @router.post("/runtime/{runtime_session_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_runtime_exec(
     runtime_session_id: uuid.UUID,

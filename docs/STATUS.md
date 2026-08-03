@@ -57,6 +57,13 @@ showed `stop-now` while a 120-second command was still active, then Stop settled
 proxy that P4's tool-only lane could not expose. New work is blocked on a conflicted working copy
 until P5.5 rebase-review.
 
+**✅ P5.4 Changes / Runs / Artifacts workspace shipped (2026-08-03).** The Run control remains
+visible above right-pane tabs. Runs queries durable exec history across all RuntimeSessions owned by
+this chat and shows command preview, state, exit, duration, named reason and bounded output.
+Artifacts remain strictly scoped to the current working copy and retain Keep/Export. ChangeReview
+now owns only changes and Save/Discard. Browser acceptance clicked Runs and saw persisted/cancelled
+history (including `stop-now`), then clicked Artifacts and saw the current run logs.
+
 **✅ P4.3 host-side `fs_*` shipped (2026-08-03).** `fs_list` / `fs_read` / `fs_grep` read
 the Project-bound chat's persisted effective tree without opening a container; `fs_write` /
 `fs_edit` / `fs_delete` lazily open the working copy and stage content-addressed, fence-guarded

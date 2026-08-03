@@ -871,6 +871,40 @@ async def request_cancel(
     return runtime
 
 
+async def list_exec_runs(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    session_id: uuid.UUID,
+    limit: int = 50,
+) -> list[ProjectExecRun]:
+    await _owned_session(db, ctx, session_id=session_id)
+    if not 1 <= limit <= 200:
+        raise Invalid("limit must be between 1 and 200")
+    rows = (
+        (
+            await db.execute(
+                select(ProjectExecRun)
+                .join(
+                    ProjectRuntimeSession,
+                    (ProjectRuntimeSession.tenant_id == ProjectExecRun.tenant_id)
+                    & (ProjectRuntimeSession.id == ProjectExecRun.runtime_session_id),
+                )
+                .where(
+                    ProjectExecRun.tenant_id == ctx.tenant_id,
+                    ProjectRuntimeSession.session_id == session_id,
+                    ProjectRuntimeSession.user_id == _user_id(ctx),
+                )
+                .order_by(ProjectExecRun.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
+
+
 async def recover_pending_jobs(
     db: AsyncSession,
 ) -> tuple[
