@@ -15,13 +15,13 @@
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | ✅ done |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
-| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | **open** · ✅ P3/P4 complete; 🚧 P5 human workspace in progress |
+| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | ✅ **done 2026-08-03** — P3 transport + P4 RuntimeSession/backend + P5 human workspace |
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
 | B-10 | design | [Tool-surface slimming: dead tools, prose diet, and *vertical* (workflow) consolidation](#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation) | open — feeds [Phase TR](IMPLEMENTATION.md) **P2** |
 | B-11 | gap | [No tool-use evaluation harness (decisions are argued, not measured)](#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) | open |
 | B-12 | bug | [The Drive orphan GC deletes change-set diff spills](#b-12-the-drive-orphan-gc-deletes-change-set-diff-spills) | ✅ fixed 2026-07-31 (retention question still open) |
 
-Suggested order: ~~**B-4 → B-1 → B-7 → B-3**~~ → ~~**B-5, B-6**~~ → ~~**B-9**~~ → **B-2 + B-8 together**. The owner approved the unified clean-break architecture (ADR-045/046/047/048) and Phase TR plan. **Current:** P0/P1/P3/P4 and the P2 partials are shipped; P2's catalog is deferred; P5 is next. B-2 still waits on the catalog. B-8 has its mechanical and agent/backend halves complete and waits only on the P5 human Run/log/Stop lane.
+Suggested order: the B-8 product/runtime program is complete through P5. **B-8 is closed**; B-2 still waits on the deferred P2 catalog/resolver.
 
 ---
 
@@ -235,13 +235,13 @@ change, not a rename — not done here.
 
 ## B-8 `project_run` always fails with `sandbox_unavailable`
 
-*Reported 2026-07-28 (manual test) · kind: bug · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-047](decisions.md#adr-047)/[ADR-048](decisions.md#adr-048)); **P0 (named exits + logging) + P1 (baseline squash) shipped 2026-07-30; P3 (tar transport + first-party runner image + real-Docker lane) shipped 2026-07-31 — the original symptom is GONE and `project_run` really runs**; still **open** because the close criterion is the *human* Run lane, which is [Phase TR](IMPLEMENTATION.md) **P5***
+*Reported 2026-07-28 · kind: bug · status: ✅ **done 2026-08-03** — P0 honesty, P3 tar/runner, P4 RuntimeSession/fs/sh/worker REST, and P5 human Files/Run/stream/Stop/Runs/Artifacts/rebase/Save.*
 
 > **P4 complete 2026-08-03.** The owner resolved the deferred-P2 sequencing question:
 > `fs_*` / `runtime_*` / `sh_exec` temporarily register in the existing FULL flat registry and
 > self-enforce binding/ownership; P2 later wraps them in descriptors. Host-side fs, explicit
 > RuntimeSession, worker-owned `202` REST, bounded output, cancel, recovery and DB-live sweep
-> protection now ship. B-8 remains open only because P5 has not supplied the human Run/log/Stop UI.
+> protection now ship. P5 supplied and click-verified the complete human workspace; B-8 is closed.
 > Live acceptance: real provider used the new tools for pytest exit 1 → fix → exit 0; the user-facing
 > Change Review diff and Save selected still work. There is deliberately no claim that the missing
 > Run/stream/Stop UI exists.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   api,
@@ -20,11 +20,13 @@ export function ProjectTree({
   sessionId,
   csrf,
   projectName,
+  refreshKey,
   onWorkingCopy,
 }: {
   sessionId: string;
   csrf: string | null;
   projectName: string;
+  refreshKey?: string | null;
   onWorkingCopy: (workingCopy: WorkingCopySummary) => void;
 }) {
   const [entries, setEntries] = useState<ProjectFileEntry[]>([]);
@@ -36,27 +38,40 @@ export function ProjectTree({
   const [newPath, setNewPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
 
   const loadTree = useCallback(async () => {
+    const requestGeneration = generation.current;
     try {
       const page = await api.listProjectFiles(sessionId);
+      if (generation.current !== requestGeneration) return;
       setEntries(page.entries);
       if (page.truncated) {
         setError("This tree is partial. Narrower folder browsing is required.");
       }
     } catch {
-      setError("Could not load the effective project tree.");
+      if (generation.current === requestGeneration) {
+        setError("Could not load the effective project tree.");
+      }
     }
   }, [sessionId]);
 
   useEffect(() => {
+    generation.current += 1;
     setSelectedPath(null);
     setFile(null);
     setIsNew(false);
     setDraft("");
     setError(null);
     void loadTree();
+    return () => {
+      generation.current += 1;
+    };
   }, [loadTree]);
+
+  useEffect(() => {
+    if (refreshKey) void loadTree();
+  }, [loadTree, refreshKey]);
 
   const isDirty =
     selectedPath !== null &&
@@ -77,12 +92,15 @@ export function ProjectTree({
       setDraft("");
       return;
     }
+    const requestGeneration = generation.current;
     try {
       const next = await api.getProjectFile(sessionId, entry.path);
+      if (generation.current !== requestGeneration) return;
       setFile(next);
       setDraft(next.content);
       setExecutable(next.executable);
     } catch (e) {
+      if (generation.current !== requestGeneration) return;
       setFile(null);
       setDraft("");
       setError(
@@ -113,6 +131,7 @@ export function ProjectTree({
 
   const save = async () => {
     if (!csrf || !selectedPath || busy) return;
+    const requestGeneration = generation.current;
     setBusy(true);
     setError(null);
     try {
@@ -123,22 +142,26 @@ export function ProjectTree({
         if_hash: file?.content_hash ?? null,
         create_only: isNew,
       });
+      if (generation.current !== requestGeneration) return;
       onWorkingCopy(workingCopy);
       await loadTree();
       const next = await api.getProjectFile(sessionId, selectedPath);
+      if (generation.current !== requestGeneration) return;
       setFile(next);
       setIsNew(false);
       setDraft(next.content);
       setExecutable(next.executable);
       setNewPath("");
     } catch (e) {
-      setError(
-        e instanceof ApiError && e.status === 409
-          ? "This file changed after you opened it. Reload before saving."
-          : "Could not save this file.",
-      );
+      if (generation.current === requestGeneration) {
+        setError(
+          e instanceof ApiError && e.status === 409
+            ? "This file changed after you opened it. Reload before saving."
+            : "Could not save this file.",
+        );
+      }
     } finally {
-      setBusy(false);
+      if (generation.current === requestGeneration) setBusy(false);
     }
   };
 
@@ -148,6 +171,7 @@ export function ProjectTree({
     if (!window.confirm(`Delete ${selectedPath} from the pending working copy?`)) {
       return;
     }
+    const requestGeneration = generation.current;
     setBusy(true);
     setError(null);
     try {
@@ -158,6 +182,7 @@ export function ProjectTree({
         selected?.entry_kind === "dir",
         file?.content_hash ?? selected?.content_hash,
       );
+      if (generation.current !== requestGeneration) return;
       onWorkingCopy(workingCopy);
       setSelectedPath(null);
       setFile(null);
@@ -165,13 +190,15 @@ export function ProjectTree({
       setDraft("");
       await loadTree();
     } catch (e) {
-      setError(
-        e instanceof ApiError && e.status === 409
-          ? "The runtime is busy or this file changed. Refresh and try again."
-          : "Could not delete this path.",
-      );
+      if (generation.current === requestGeneration) {
+        setError(
+          e instanceof ApiError && e.status === 409
+            ? "The runtime is busy or this file changed. Refresh and try again."
+            : "Could not delete this path.",
+        );
+      }
     } finally {
-      setBusy(false);
+      if (generation.current === requestGeneration) setBusy(false);
     }
   };
 

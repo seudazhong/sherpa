@@ -2333,7 +2333,7 @@ the current `project_sandbox_runs` path; the routes and payloads in this section
   (advancing the head is a human Change-Review decision, ADR-040 §决策6); `project_push`
   (W4), destructive purge and dependency installation are also excluded. Project files and
   all sandbox output remain **untrusted content** (ADR-009).
-- **UI `[target]`:** the Project-bound Chat becomes a three-column workspace (file tree /
+- **UI `[shipped P5, 2026-08-03]`:** the Project-bound Chat is a three-column workspace (file tree /
   conversation / `Changes · Runs · Artifacts`), with an editable tree, a real **Run**
   control, a streaming log panel and **Stop**. Human edits and agent edits land in the
   **same overlay** and are reviewed together. A Plan object is deferred (ADR-048 §决策9).

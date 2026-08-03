@@ -2,11 +2,11 @@
 
 > The resume anchor. A coding agent reads this first (per [`../AGENTS.md`](../AGENTS.md)), then picks the next ready task in [`IMPLEMENTATION.md`](IMPLEMENTATION.md). **Update this file at the end of every task** (tick the table, move "Next ready").
 >
-> Unscheduled findings from manual testing live in [`backlog.md`](backlog.md) (B-1…B-12; **B-1 + B-3 + B-4 + B-7 fixed 2026-07-28**, **B-5 + B-6 shipped 2026-07-29**, **B-9 fixed 2026-07-29**, **B-12 fixed 2026-07-31**; **B-2 still open** — the tool catalog is P2, which the owner deferred; **B-8's reported symptom is fixed by Phase TR P3 (2026-07-31) but B-8 stays OPEN** until the human Run/Stop lane exists in P5; **B-10 / B-11 opened 2026-07-30** by the owner's P2 design review — see the "P2 design review" note below). ✅ **B-9 is fixed ([ADR-044](decisions.md))**: `uv run pytest` now provisions and uses a dedicated `<app_db>_test` database, Redis logical db 15 and a synthetic owner, so it is safe to run **with the stack and worker up** and can no longer touch dev data. The old "stop the worker / point `DATABASE_URL` at `sherpa_test` by hand" workaround is retired.
+> Unscheduled findings from manual testing live in [`backlog.md`](backlog.md). **B-8 is CLOSED by Phase TR P5 (2026-08-03)**: the tar/runtime backend, agent tools and human Files/Run/stream/Stop/Runs/Artifacts/rebase/Save lane all ship. **B-2 remains open** because P2's catalog/resolver is deferred.
 >
-> 🏗 **B-2 + B-8 are one program now.** Triage on 2026-07-30 established that the oversized flat tool surface and the always-failing `project_run` are two faces of the same defect, and the owner approved a **clean-break** unified architecture: [ADR-045](decisions.md#adr-045) (umbrella) · [ADR-046](decisions.md#adr-046) (tool catalog + resolver + progressive disclosure) · [ADR-047](decisions.md#adr-047) (tar workspace transport) · [ADR-048](decisions.md#adr-048) (RuntimeSession + `fs`/`sh`). Contracts are updated and marked `[shipped]`/`[target]`/`[deleted]`; the execution plan is [`IMPLEMENTATION.md` **Phase TR**](IMPLEMENTATION.md) (P0–P5), approved by the owner. **P0/P1/P3/P4 and the P2 partials are shipped; P2's catalog is deferred and P5 is next.** B-2 remains open because the surface is still flat; B-8 remains open because the human Run/Stop lane is P5.
+> ✅ **Phase TR product/runtime program complete.** P0/P1/P3/P4/P5 and the P2 partials are shipped. B-8 is closed. P2 remains an independently deferred catalog/token-surface task; current FULL-flat is 48 tools.
 >
-> Last updated: 2026-08-03 · Phase: **Phase TR P5 IN PROGRESS**. P0/P1/P3/P4 and the P2 partials are shipped; P2's catalog remains deferred. P5.0 contracts now pin the human effective-tree adapter, shared SSE, cross-runtime Runs projection and explicit rebase-review semantics before UI code.
+> Last updated: 2026-08-03 · Phase: **Phase TR P5 COMPLETE; B-8 CLOSED**. P0/P1/P3/P4/P5 and the P2 partials are shipped. The Project-bound human workspace now has effective-tree editing, worker-owned Run/stream/Stop, Changes/Runs/Artifacts and explicit rebase-review.
 
 ## Real model wired ✅
 The mock is no longer the only provider. `OpenAICompatibleProvider` (streaming) targets the user's **litellm proxy at host `:4000`** forwarding GitHub Copilot; default model `claude-sonnet-4.6`. Config-driven (`PROVIDER_KIND=openai_compatible` + `PROVIDER_API_KEY` in a gitignored `.env`; the worker reaches the host via `host.docker.internal`). `PROVIDER_KIND=mock` remains the default for offline dev/tests. **Live-verified in the browser** (real replies "Paris.", a real Sherpa definition). To run the stack with the real model:
@@ -29,9 +29,8 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 - **M1 durable spine (#1–#13)**: full web prompt → durable admission → worker bounded loop (mock provider + read-only tool) → events streamed to the chat UI via SSE → transcript persisted; per-run trace + rollups; single-owner auth; AEAD credential vault.
 
 ## ▶ Next ready task
-**Phase TR P5.1** — `/Project` three-column human workspace shell, followed by effective-tree
-editing, Run/stream/Stop, Runs/Artifacts tabs and explicit rebase-review. P4's backend and
-agent lane are complete; B-8 closes only when this human lane is click-verified.
+**Owner choice:** resume deferred **P2 tool catalog/resolver** to close B-2, or proceed to
+**W4 GitHub sync/push/PR** (own ADR + approval boundary).
 
 **✅ P5.1 Project workspace shell shipped (2026-08-03).** A Project-bound Chat now renders
 desktop Files / conversation / Workspace columns; General Chat remains the prior single-column
@@ -71,6 +70,15 @@ The service row-locks the conflicted working copy/current head, replays its cano
 the new base, supersedes the stale review and builds a fresh review; it never auto-Saves. Browser
 acceptance created two competing chats, clicked Rebase review, saw only `ours-ui.txt` in the fresh
 review, and then explicitly clicked Save selected.
+
+**✅ P5 validation complete; B-8 closed (2026-08-03).** Full backend **555 passed** (+32
+docker deselected), real-Docker **32 passed**, full static/frontend/route gates green. Final
+agent lane used `fs_write/runtime_open/sh_exec` and returned exact exit 0/output. Final human
+lane exercised effective-tree edit, live output, Stop→`cancelled`, Runs, Artifacts, committed
+head conflict → Rebase review → explicit Save. Session-generation guards prevent old long-running
+UI requests from overwriting a newly selected chat. Mobile panes have 390 px overflow 0.
+UX follow-ups: collapsible/searchable folders, resizable desktop columns, and copy/download for
+long run output.
 
 **✅ P4.3 host-side `fs_*` shipped (2026-08-03).** `fs_list` / `fs_read` / `fs_grep` read
 the Project-bound chat's persisted effective tree without opening a container; `fs_write` /
@@ -148,7 +156,7 @@ Runs history in the same workspace.
 
 **✅ Phase TR P3 is CLOSED (owner-accepted 2026-08-01).** The transport half of B-8 is done and
 the 128 MiB workspace/change-set cap is an accepted product trade-off (see the P3 block below).
-**B-8 itself stays OPEN** — its close criterion is the *human* Run/Stop lane, which is **P5**.
+**B-8 is CLOSED** — the human Run/Stop lane shipped in P5.
 The remaining named-exit gaps are `output_limit` + typed spill (P2.8) and `pids_limit`
 (no reliable daemon signal); `cancelled` shipped in P4. Linux DooD/DinD/rootless are still
 unverified; `/work` still cannot carry `nosuid,nodev` on an anonymous volume; cryptographic
@@ -414,11 +422,8 @@ ruff + `ruff format --check` + `mypy app` clean; `npm run lint` + `npm run build
 `/health` + `/readyz` ok and the worker ticking on the rebuilt stack; live schema vs ORM metadata
 52 = 52. Measured tool surface **52 → 47 tools / 19,848 → 18,397 B** — that is deletion, **not** the
 B-2 fix; the catalog in P2 is.
-**B-2 and B-8 both remain OPEN.** The bind mount is still structurally broken (P3), no human Run
-control exists (P5), and the tool surface is still flat and statically injected (P2).
-**Scope note:** an earlier draft of this file listed `project_run`/`project_tree`/`project_read`
-among P1's deletions. They are **P4** ([TR.9](IMPLEMENTATION.md)), not P1, and they still exist —
-`project_run` still runs (and, until P3, still failed at the container).
+**Historical P1 exit:** both items were open at this point. P3/P4/P5 subsequently closed B-8;
+B-2 remains open because the tool surface is still flat. The old project tools were deleted in P4.
 
 **~~What P2/P3 do next~~ — superseded 2026-07-31.** **P3 is shipped** (see the P3 block above) and
 **P2's catalog is deferred by owner decision**; only P2.0a (dead-tool sweep) and P2.2 (`domain_verb`
@@ -857,7 +862,7 @@ Dev DB: `docker compose -f infra/docker-compose.yml --env-file .env up --build -
 | **W2b-DESIGN (ADR-038) — Workspace Projects GitHub 一次性导入 契约与设计先行** (ADR-038 + data-model `project_sources`/`github_connections`/`source_status`/`project_import_jobs(github)` + api §10.6 501→202 + repo/ref/connection 端点 + events §2.10 create_kind=github + config `GITHUB_*`/§1.6 + 能力矩阵行 UI ⬜ + `design-workspace/github-import.html` 静态稿) | ✅ done (契约先行；研究收敛 branch/tag/commit + tarball 有界获取 + PAT 凭据 + 只读幂等无 effect_unknown；HTML well-formed；静态稿桌面+390px Playwright 无溢出；无生产代码/迁移/W2b 导航；W2b 实现待负责人审核) |
 | **W3-DESIGN/SECURITY (ADR-039 + ADR-040) — Workspace Projects 任务工作副本 + 一次性 scratch 沙箱变更评审 安全评审 + 契约与设计先行** (独立 docker.sock/隔离威胁模型 → ADR-039 + W3 产品/数据/工具/生命周期 → ADR-040 + **正式修订 ADR-025** + data-model §Projects W3 `project_working_copies`/`overlay`/`change_sets`/`entries`/`artifacts`/`sandbox_runs`/`head_generation` + api §10.7 + events §2.11 + config §1.7/`SANDBOX_*`/`WORKING_COPY_*` + 能力矩阵行 UI ⬜ + `design-workspace/w3-change-review.html` 静态稿) | ✅ done (安全评审 + 契约先行；一手来源确证 docker.sock≈宿主 root、socket-proxy 假安全、rootless/gVisor/microVM 阶梯 + 禁止上线条件、未实施缓解不写成已安全；lease/fence + head_generation CAS + 沙箱无 effect_unknown + 仅挂一次性 scratch；HTML well-formed；静态稿桌面+390px Playwright overflow=0；无生产代码/迁移/真实挂载/W3 导航；W3 实现待负责人审核) |
 | **W3 (ADR-039 + ADR-040) — Workspace Projects 任务工作副本 + 一次性 scratch 沙箱变更评审 生产实现** (migration 0030 6 张 project_* W3 表 + projects.head_generation · services/project_workcopy(lease/fence/CAS/持久/discard/expire) · app/sandbox+services/project_sandbox(硬化仅一次性 scratch 挂载·delta·孤儿扫除) · services/project_changes(有界 diff/artifacts/apply CAS/discard) · api §10.7 + project_run/project_review_changes 工具 · ChangeReview UI · worker 扫除/维护 cron · 能力矩阵 §9 UI ✅) | ✅ done (full pytest 297 green ruff/mypy 清；栈重建；真实 claude-sonnet-4.6 两栈 Playwright：agent project_run→working copy+change set；human Change Review→真实 diff→Save+checkpoint 推进 head+pinned checkpoint、Discard head 不变、390px overflow=0；验证中修复 `_wc_summary` discard MissingGreenlet + 回归测试)。⚠️ **事后更正**：其中的 agent 泳道断言只到"working copy + change set 产生"，**容器从未真正启动过**(B-8)——真正跑起来是 2026-07-31 的 P3。 |
-| **Phase TR P3 (ADR-047) — tar workspace transport + first-party runner image** (`app/sandbox/runtime.py` 合并 · 新 `app/sandbox/transport.py` **流式有界** tar ingress/egress · **删除全部 bind mount 与宿主路径** · 凭据剔除+断言+回填(不误判为删除) · egress 不可信解包 → `path_escape` · `mem_limit`/输出有界 · 容器 label 孤儿扫除 · `sandbox-runner/` Dockerfile(基础镜像按 registry digest 固定)+capabilities.json(非 root/只读 rootfs/pin python+pytest+ruff/无 git 无网络工具) · 删 `SANDBOX_SCRATCH_ROOT`+`SANDBOX_WARM_TTL_SECONDS`、`SANDBOX_MEM_MB`→1024、`SANDBOX_SCRATCH_MAX_BYTES`→512 MiB · **镜像固定 fail-closed 强制**(`runtime_image_untrusted`) · **新增真 Docker 泳道 `uv run pytest -m docker`**) | ✅ done (**无迁移**；pytest **516 passed** + `-m docker` **24 passed**，ruff/format/mypy 清，前端 lint+build 绿；栈重建 + `SANDBOX_IMAGE` 按 image ID digest 固定；三路实测：worker 容器内 DooD、真实 claude-sonnet-4.6 agent 泳道(`pytest -q` 真 exit 1 → 修复 → 真 exit 0 · `chmod +x` → `./deploy.sh` 输出 deployed · `git` 127)、human Change Review 真实 diff→Save→head_generation=2 且 `executable=t` 落库。真 Docker 泳道首跑即抓到隐式父目录 root 属主的真 bug；独立评审又抓出 4 个阻断缺陷，已于 `66ce8e6` 修复并各配"去掉修复即失败"的回归测试。**B-8 仍 OPEN**：Run 控件/流式/Stop 属 P4+P5) |
+| **Phase TR P3 (ADR-047) — tar workspace transport + first-party runner image** | ✅ done（P3 当时只完成机械层；P4/P5 后续补齐 RuntimeSession 与 human workspace，并于 2026-08-03 关闭 B-8） |
 | **backlog B-12 — Drive 孤儿 GC 删掉 change-set diff 溢出对象** (P3 人工泳道发现；`sweep_orphan_objects` 只豁免 `project-import/`，把 `project-diff/` 全删；实证 `orphans=6` 后 26 秒 Change Review 500 NoSuchKey) | ✅ fixed (显式豁免前缀元组 + 回归测试**已验证去掉修复就会失败**；**保留期问题仍开放**——建议并入 api §7.2 spill janitor) |
 | **backlog B-12 — Drive 孤儿 GC 删掉 change-set diff 溢出对象** (P3 人工泳道发现；`sweep_orphan_objects` 只豁免 `project-import/`，把 `project-diff/` 全删；实证 `orphans=6` 后 26 秒 Change Review 500 NoSuchKey) | ✅ fixed (显式豁免前缀元组 + 回归测试**已验证去掉修复就会失败**；**保留期问题仍开放**——建议并入 api §7.2 spill janitor) |
 

@@ -812,8 +812,8 @@ is an owner user-level operation and emits no `project.lifecycle` event (it touc
 > an unreachable daemon and a missing image are no longer all reported as `sandbox_unavailable`.
 > The **product backend** is now **`[shipped]` (P4, 2026-08-03)**:
 > `runtime_open` / `sh_exec` / `runtime_close`, worker-owned async `202`, transient bounded
-> `runtime.output` frames, cancel and crash recovery. The human Run lane remains **`[target]`
-> P5**. Project **file bytes and all
+> `runtime.output` frames, cancel and crash recovery. The human Files/Run/stream/Stop/
+> Runs/Artifacts/rebase lane is **`[shipped]` (P5, 2026-08-03)**. Project **file bytes and all
 > credentials never enter the append-only journal** — bytes live in immutable ADR-030
 > `storage_blobs`; the journal/log carries only ids + bounded metadata + named termination
 > reasons (ADR-016/019/021).

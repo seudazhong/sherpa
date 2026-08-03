@@ -849,9 +849,15 @@ export default function ChatView() {
             <aside className="project-files-pane" aria-label="Project files">
               {sessionId && (
                 <ProjectTree
+                  key={sessionId}
                   sessionId={sessionId}
                   csrf={csrf}
                   projectName={projectCtx.project_name ?? "Project"}
+                  refreshKey={
+                    workingCopy?.updated_at ??
+                    workingCopy?.open_change_set_id ??
+                    null
+                  }
                   onWorkingCopy={setWorkingCopy}
                 />
               )}
@@ -1192,6 +1198,7 @@ export default function ChatView() {
               </header>
               {sessionId && (
                 <WorkspaceTabs
+                  key={sessionId}
                   projectId={projectCtx.project_id}
                   sessionId={sessionId}
                   csrf={csrf}

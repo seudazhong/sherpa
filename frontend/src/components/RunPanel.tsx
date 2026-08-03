@@ -15,8 +15,12 @@ export interface RuntimeStreamFrame {
 
 const TERMINAL_EXEC_STATES = new Set(["persisted", "failed", "cancelled"]);
 
-async function waitForRuntime(runtimeId: string): Promise<RuntimeSessionState> {
+async function waitForRuntime(
+  runtimeId: string,
+  isActive: () => boolean,
+): Promise<RuntimeSessionState> {
   for (let attempt = 0; attempt < 180; attempt += 1) {
+    if (!isActive()) throw new Error("session_changed");
     const runtime = await api.getRuntime(runtimeId);
     if (runtime.state === "ready") return runtime;
     if (runtime.state === "failed" || runtime.state === "closed") {
@@ -30,8 +34,10 @@ async function waitForRuntime(runtimeId: string): Promise<RuntimeSessionState> {
 async function waitForExec(
   runtimeId: string,
   execId: string,
+  isActive: () => boolean,
 ): Promise<RuntimeExecRun> {
   for (let attempt = 0; attempt < 1800; attempt += 1) {
+    if (!isActive()) throw new Error("session_changed");
     const exec = await api.getRuntimeExec(runtimeId, execId);
     if (TERMINAL_EXEC_STATES.has(exec.state)) return exec;
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -68,6 +74,20 @@ export function RunPanel({
   const processed = useRef(new Set<string>());
   const stdoutRef = useRef("");
   const stderrRef = useRef("");
+  const generation = useRef(0);
+
+  useEffect(() => {
+    generation.current += 1;
+    processed.current.clear();
+    stdoutRef.current = "";
+    stderrRef.current = "";
+    setRuntime(null);
+    setExec(null);
+    setStdout("");
+    setStderr("");
+    setBusy(false);
+    setError(null);
+  }, [sessionId]);
 
   useEffect(() => {
     setRuntime(workingCopy?.runtime ?? null);
@@ -101,15 +121,22 @@ export function RunPanel({
     }
   }, [frames, runtime, exec]);
 
-  const refreshWorkingCopy = async () => {
-    onWorkingCopy(await api.getWorkingCopy(sessionId));
+  const refreshWorkingCopy = async (runGeneration: number) => {
+    const next = await api.getWorkingCopy(sessionId);
+    if (generation.current === runGeneration) onWorkingCopy(next);
   };
 
-  const ensureRuntime = async () => {
+  const ensureRuntime = async (runGeneration: number) => {
     if (!csrf) throw new Error("missing_csrf");
     const opened = await api.openRuntime(csrf, projectId, sessionId);
+    if (generation.current !== runGeneration) throw new Error("session_changed");
     setRuntime(opened);
-    return opened.state === "ready" ? opened : await waitForRuntime(opened.id);
+    return opened.state === "ready"
+      ? opened
+      : await waitForRuntime(
+          opened.id,
+          () => generation.current === runGeneration,
+        );
   };
 
   const run = async () => {
@@ -118,6 +145,7 @@ export function RunPanel({
       setError("Rebase the conflicted changes before running more commands.");
       return;
     }
+    const runGeneration = generation.current;
     setBusy(true);
     setError(null);
     setStdout("");
@@ -125,11 +153,18 @@ export function RunPanel({
     stdoutRef.current = "";
     stderrRef.current = "";
     try {
-      const ready = await ensureRuntime();
+      const ready = await ensureRuntime(runGeneration);
+      if (generation.current !== runGeneration) return;
       setRuntime(ready);
       const queued = await api.execRuntime(csrf, ready.id, command.trim());
+      if (generation.current !== runGeneration) return;
       setExec(queued);
-      const settled = await waitForExec(ready.id, queued.id);
+      const settled = await waitForExec(
+        ready.id,
+        queued.id,
+        () => generation.current === runGeneration,
+      );
+      if (generation.current !== runGeneration) return;
       setExec(settled);
       if (!stdoutRef.current && settled.stdout_head) {
         stdoutRef.current = settled.stdout_head;
@@ -140,11 +175,13 @@ export function RunPanel({
         setStderr(settled.stderr_tail);
       }
       setRuntime(await api.getRuntime(ready.id));
-      await refreshWorkingCopy();
+      await refreshWorkingCopy(runGeneration);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Run failed.");
+      if (generation.current === runGeneration) {
+        setError(e instanceof Error ? e.message : "Run failed.");
+      }
     } finally {
-      setBusy(false);
+      if (generation.current === runGeneration) setBusy(false);
     }
   };
 
@@ -152,34 +189,48 @@ export function RunPanel({
     if (!csrf || !runtime || !exec || TERMINAL_EXEC_STATES.has(exec.state)) {
       return;
     }
+    const runGeneration = generation.current;
     try {
       await api.cancelRuntime(csrf, runtime.id);
+      if (generation.current !== runGeneration) return;
       setError(null);
-      const settled = await waitForExec(runtime.id, exec.id);
+      const settled = await waitForExec(
+        runtime.id,
+        exec.id,
+        () => generation.current === runGeneration,
+      );
+      if (generation.current !== runGeneration) return;
       setExec(settled);
-      await refreshWorkingCopy();
+      await refreshWorkingCopy(runGeneration);
     } catch {
-      setError("Could not stop this run.");
+      if (generation.current === runGeneration) {
+        setError("Could not stop this run.");
+      }
     }
   };
 
   const close = async () => {
     if (!csrf || !runtime || busy) return;
+    const runGeneration = generation.current;
     setBusy(true);
     try {
       const closing = await api.closeRuntime(csrf, runtime.id);
+      if (generation.current !== runGeneration) return;
       setRuntime(closing);
       for (let attempt = 0; attempt < 180; attempt += 1) {
+        if (generation.current !== runGeneration) return;
         const current = await api.getRuntime(runtime.id);
         setRuntime(current);
         if (current.state === "closed" || current.state === "failed") break;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
-      await refreshWorkingCopy();
+      await refreshWorkingCopy(runGeneration);
     } catch {
-      setError("Could not close the runtime.");
+      if (generation.current === runGeneration) {
+        setError("Could not close the runtime.");
+      }
     } finally {
-      setBusy(false);
+      if (generation.current === runGeneration) setBusy(false);
     }
   };
 

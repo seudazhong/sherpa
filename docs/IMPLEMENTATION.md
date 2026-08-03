@@ -332,7 +332,7 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研�
 
 ---
 
-## Phase TR — Tool catalog + coding RuntimeSession (clean break) — 🚧 **P0 · P1 · P3 · P4 SHIPPED · P2 DEFERRED · P5 NEXT**
+## Phase TR — Tool catalog + coding RuntimeSession (clean break) — ✅ **P0 · P1 · P3 · P4 · P5 SHIPPED · P2 DEFERRED**
 
 > Closes backlog **B-2** (52 flat tools) and **B-8** (`project_run` always fails) as one program.
 > Architecture approved by the owner 2026-07-30 ([ADR-045](decisions.md#adr-045) umbrella,
@@ -342,11 +342,9 @@ roadmap #8 的「多 provider」那一半（failover/子 agent 后置）。研�
 > shipped**, and the destructive baseline reset of TR.3 **has been run** (once, as designed —
 > the schema is now the single `0001_baseline`).
 >
-> **Status as of 2026-08-03.** P0 · P1 · P3 · P4 and the P2 partials (P2.0a dead-tool
-> sweep, P2.2 `domain_verb` rename) shipped. P3 is owner-accepted including its 128 MiB
-> workspace/change-set cap; P2's catalog remains deferred; **P5 is next**.
-> Neither backlog item is closed: **B-2** waits on the P2 catalog, **B-8** on the P5 human
-> Run/Stop lane.
+> **Status as of 2026-08-03.** P0 · P1 · P3 · P4 · P5 and the P2 partials shipped.
+> P3 is owner-accepted including its 128 MiB workspace/change-set cap. **B-8 is closed.**
+> P2's catalog remains independently deferred, so B-2 stays open.
 
 ### TR.0 Owner approval checklist — defaults already approved (2026-07-30)
 
@@ -697,10 +695,22 @@ human Run button, streaming log, Stop or Runs tab — those are P5, so B-8 remai
 | P5.3 ✅ | Run control + shared-SSE streaming log + Stop | `frontend/src/components/RunPanel.tsx`, `ChatView.tsx`, `vite.config.ts` | Real output streams through the existing EventSource; Stop settles cancelled; runtime REST proxy wired; conflicted WC blocks new work |
 | P5.4 ✅ | `Changes / Runs / Artifacts` tabs + cross-runtime history API | `ChangeReview.tsx`, `RunsPanel.tsx`, `ArtifactsPanel.tsx`, session runtime-execs API | History is session-scoped across runtimes; command/exit/reason/output visible; artifacts remain working-copy scoped |
 | P5.5 ✅ | One-click rebase-review on durable `409 head_moved` | backend rebase service/route + `ChangeReview.tsx` + structured `ApiError.body` | Conflict state commits; runtime must close; overlay canonicalized on new head; stale review superseded; fresh review still requires Save |
-| P5.V | **Two-lane Playwright + UX acceptance** (restart the stack first) | — | Agent lane and human lane both pass; matrix UI cells flip to ✅ only after a **real click**; UX notes recorded |
+| P5.V ✅ | **Two-lane Playwright + UX acceptance** | — | Agent fs/runtime/sh passed; human edit/stream/Stop/Runs/Artifacts/rebase/Save passed; matrix UI ✅; 390 px overflow 0; B-8 closed |
 
 **P5 exit (this closes B-8):** the human lane exists and works end-to-end; `docs/11` §9 has no
 non-❌ ⬜ cell for this program; UX review recorded.
+
+**P5 exit met 2026-08-03 — B-8 CLOSED.** Full backend: **555 passed** (+32 docker
+deselected); real-Docker: **32 passed**; ruff/format/mypy/Alembic `0006`/route inventory and
+frontend lint/build green. Final agent lane called `fs_write → runtime_open → sh_exec(cat)` and
+reported exit 0 with exact output. Final human lane created/edited a file in the effective tree,
+observed streamed output before settlement, clicked Stop on a 120-second command and got
+`cancelled`, inspected cross-runtime Runs and working-copy Artifacts, performed a real
+head-moved Rebase review, and explicitly Save-selected the fresh review. Mobile Files/Chat/
+Workspace panes measured 390 px overflow = 0.
+
+UX acceptance suggestions (not blockers): add collapsible/searchable folders for large trees,
+resizable desktop columns, and a download/copy affordance for long run output.
 
 ### TR.11 Failure injection matrix (every row must map to exactly one named reason)
 
