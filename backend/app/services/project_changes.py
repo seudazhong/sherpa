@@ -35,8 +35,10 @@ from app.models import (
     ProjectArtifact,
     ProjectChangeSet,
     ProjectChangeSetEntry,
+    ProjectRuntimeSession,
     ProjectSnapshotEntry,
     ProjectWorkingCopy,
+    ProjectWorkingCopyEntry,
     StorageBlob,
 )
 from app.objectstore import build_object_store
@@ -480,6 +482,107 @@ async def apply_change_set(
     project = await db.get(Project, (ctx.tenant_id, project_id))
     assert project is not None
     return ApplyResult(project=project, change_set=cs, new_open_change_set_id=new_open_id)
+
+
+async def rebase_review(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    project_id: uuid.UUID,
+    working_copy_id: uuid.UUID,
+) -> ProjectWorkingCopy:
+    """Rebase a conflicted overlay onto the current Project head for a fresh review."""
+    wc = await db.scalar(
+        select(ProjectWorkingCopy)
+        .where(
+            ProjectWorkingCopy.tenant_id == ctx.tenant_id,
+            ProjectWorkingCopy.id == working_copy_id,
+            ProjectWorkingCopy.project_id == project_id,
+            ProjectWorkingCopy.user_id == ctx.user_id,
+        )
+        .with_for_update()
+    )
+    if wc is None:
+        raise NotFound("working copy not found")
+    if wc.state != "conflicted":
+        raise Conflict("working_copy_not_conflicted")
+    runtime = await db.scalar(
+        select(ProjectRuntimeSession).where(
+            ProjectRuntimeSession.tenant_id == ctx.tenant_id,
+            ProjectRuntimeSession.working_copy_id == wc.id,
+            ProjectRuntimeSession.state.in_(("opening", "ready", "executing", "closing")),
+        )
+    )
+    if runtime is not None:
+        raise Conflict("runtime_must_close")
+    project = await db.scalar(
+        select(Project)
+        .where(
+            Project.tenant_id == ctx.tenant_id,
+            Project.id == project_id,
+            Project.user_id == ctx.user_id,
+        )
+        .with_for_update()
+    )
+    if project is None or project.current_snapshot_id is None:
+        raise NotFound("project head not found")
+    overlay_rows = (
+        (
+            await db.execute(
+                select(ProjectWorkingCopyEntry)
+                .where(
+                    ProjectWorkingCopyEntry.tenant_id == ctx.tenant_id,
+                    ProjectWorkingCopyEntry.working_copy_id == wc.id,
+                )
+                .order_by(ProjectWorkingCopyEntry.path)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    deltas = [
+        wc_svc.OverlayDelta(
+            path=row.path,
+            change_kind=row.change_kind,
+            entry_kind=row.entry_kind,
+            content_hash=row.content_hash,
+            size_bytes=row.size_bytes,
+            executable=row.executable,
+            symlink_target=row.symlink_target,
+        )
+        for row in overlay_rows
+    ]
+    stale_sets = (
+        (
+            await db.execute(
+                select(ProjectChangeSet).where(
+                    ProjectChangeSet.tenant_id == ctx.tenant_id,
+                    ProjectChangeSet.working_copy_id == wc.id,
+                    ProjectChangeSet.state.in_(("open", "conflicted")),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for stale in stale_sets:
+        stale.state = "superseded"
+
+    wc.base_snapshot_id = project.current_snapshot_id
+    wc.base_head_generation = project.head_generation
+    wc.state = "ready_for_review"
+    fence = await wc_svc.acquire_lease(db, wc, owner="rebase-review")
+    published = await wc_svc.persist_overlay(
+        db,
+        ctx,
+        wc,
+        fence_token=fence,
+        deltas=deltas,
+    )
+    if not published:
+        raise Conflict("fence_lost")
+    await build_change_set(db, ctx, wc)
+    return wc
 
 
 async def discard_change_set(

@@ -84,6 +84,7 @@
 | `GET` | `/projects/{project_id}/tree` | `session` | `no` |
 | `GET` | `/projects/{project_id}/working-copies/{wc_id}` | `session` | `no` |
 | `POST` | `/projects/{project_id}/working-copies/{wc_id}/discard` | `session` | `yes` |
+| `POST` | `/projects/{project_id}/working-copies/{wc_id}/rebase-review` | `session` | `yes` |
 | `GET` | `/providers` | `session` | `no` |
 | `POST` | `/providers` | `session` | `yes` |
 | `DELETE` | `/providers/{provider_id}` | `session` | `yes` |

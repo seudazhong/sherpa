@@ -570,7 +570,7 @@ async def get_project_context(
 ) -> ProjectContextOut:
     try:
         pc = await svc.project_context(db, _caller(ctx), session_id=session_id)
-        wc = await wc_svc.get_live(db, _caller(ctx), session_id=session_id)
+        wc = await wc_svc.get_reviewable(db, _caller(ctx), session_id=session_id)
         wc_out = await _wc_summary(db, _caller(ctx), wc) if wc is not None else None
     except ServiceError as e:
         raise _http(e) from None
@@ -825,7 +825,7 @@ async def get_working_copy(
     db: Annotated[AsyncSession, Depends(get_session)],
 ) -> WorkingCopySummary | None:
     cc = _caller(ctx)
-    wc = await wc_svc.get_live(db, cc, session_id=session_id)
+    wc = await wc_svc.get_reviewable(db, cc, session_id=session_id)
     if wc is None:
         return None
     return await _wc_summary(db, cc, wc)
@@ -1201,11 +1201,12 @@ async def apply_change_set(
         src = await svc.get_source(db, cc, project_id=project_id)
         await db.commit()
     except _Conflict as e:
-        await db.rollback()
         if e.message == "head_moved":
+            await db.commit()
             # Rebuild the conflict envelope from the (now reloaded) working copy + head.
             body_out = await _save_conflict(db, cc, project_id=project_id, cs_id=cs_id)
             raise HTTPException(status_code=409, detail=body_out.model_dump(mode="json")) from None
+        await db.rollback()
         raise _http(e) from None
     except ServiceError as e:
         await db.rollback()
@@ -1260,6 +1261,29 @@ async def discard_working_copy(
     except ServiceError as e:
         await db.rollback()
         raise _http(e) from None
+    return out
+
+
+@router.post("/projects/{project_id}/working-copies/{wc_id}/rebase-review")
+async def rebase_working_copy_review(
+    project_id: uuid.UUID,
+    wc_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> WorkingCopySummary:
+    cc = _caller(ctx)
+    try:
+        wc = await changes_svc.rebase_review(
+            db,
+            cc,
+            project_id=project_id,
+            working_copy_id=wc_id,
+        )
+        out = await _wc_summary(db, cc, wc)
+        await db.commit()
+    except ServiceError as exc:
+        await db.rollback()
+        raise _http(exc) from None
     return out
 
 

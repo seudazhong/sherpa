@@ -64,6 +64,14 @@ Artifacts remain strictly scoped to the current working copy and retain Keep/Exp
 now owns only changes and Save/Discard. Browser acceptance clicked Runs and saw persisted/cancelled
 history (including `stop-now`), then clicked Artifacts and saw the current run logs.
 
+**✅ P5.5 one-click rebase-review shipped (2026-08-03).** A failed Save CAS now commits the
+working copy/change set as `conflicted` instead of rolling the conflict marker back. The UI retains
+the structured 409 body, closes any non-executing runtime, and calls the explicit rebase endpoint.
+The service row-locks the conflicted working copy/current head, replays its canonical overlay onto
+the new base, supersedes the stale review and builds a fresh review; it never auto-Saves. Browser
+acceptance created two competing chats, clicked Rebase review, saw only `ours-ui.txt` in the fresh
+review, and then explicitly clicked Save selected.
+
 **✅ P4.3 host-side `fs_*` shipped (2026-08-03).** `fs_list` / `fs_read` / `fs_grep` read
 the Project-bound chat's persisted effective tree without opening a container; `fs_write` /
 `fs_edit` / `fs_delete` lazily open the working copy and stage content-addressed, fence-guarded

@@ -4559,8 +4559,21 @@ div.run-log {
   font-size: 13px;
 }
 .cr-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   background: var(--danger-soft);
   color: var(--danger);
+}
+.cr-conflict > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cr-conflict .btn {
+  flex: 0 0 auto;
 }
 .cr-warn {
   background: var(--warning-soft);

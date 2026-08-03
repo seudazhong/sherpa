@@ -794,10 +794,23 @@ export interface SessionModelState extends SessionModelSelection {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  body: unknown;
+  constructor(status: number, message: string, body: unknown = null) {
     super(message);
     this.status = status;
+    this.body = body;
     this.name = "ApiError";
+  }
+}
+
+async function errorBody(res: Response): Promise<unknown> {
+  const contentType = res.headers.get("content-type") ?? "";
+  try {
+    return contentType.includes("application/json")
+      ? await res.json()
+      : await res.text();
+  } catch {
+    return null;
   }
 }
 
@@ -807,6 +820,7 @@ async function reqText(path: string, init: RequestInit = {}): Promise<string> {
     throw new ApiError(
       res.status,
       `${init.method ?? "GET"} ${path} -> ${res.status}`,
+      await errorBody(res),
     );
   }
   return await res.text();
@@ -818,6 +832,7 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(
       res.status,
       `${init.method ?? "GET"} ${path} -> ${res.status}`,
+      await errorBody(res),
     );
   }
   if (res.status === 204) return undefined as T;
@@ -1419,6 +1434,11 @@ export const api = {
   discardWorkingCopy: (csrf: string, pid: string, wcId: string) =>
     req<WorkingCopySummary>(
       `/projects/${pid}/working-copies/${wcId}/discard`,
+      jsonInit("POST", csrf),
+    ),
+  rebaseWorkingCopy: (csrf: string, pid: string, wcId: string) =>
+    req<WorkingCopySummary>(
+      `/projects/${pid}/working-copies/${wcId}/rebase-review`,
       jsonInit("POST", csrf),
     ),
   listProjectArtifacts: (pid: string, workingCopyId?: string) => {

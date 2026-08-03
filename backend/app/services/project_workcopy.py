@@ -105,6 +105,23 @@ async def get_live(
     )
 
 
+async def get_reviewable(
+    db: AsyncSession, ctx: CallerContext, *, session_id: uuid.UUID
+) -> ProjectWorkingCopy | None:
+    """Current UI review projection: live working copy or its conflicted terminal review."""
+    return await db.scalar(
+        select(ProjectWorkingCopy)
+        .where(
+            ProjectWorkingCopy.tenant_id == ctx.tenant_id,
+            ProjectWorkingCopy.session_id == session_id,
+            ProjectWorkingCopy.user_id == ctx.user_id,
+            ProjectWorkingCopy.state.in_((*_LIVE_STATES, "conflicted")),
+        )
+        .order_by(ProjectWorkingCopy.created_at.desc())
+        .limit(1)
+    )
+
+
 async def get_by_id(
     db: AsyncSession, ctx: CallerContext, *, project_id: uuid.UUID, wc_id: uuid.UUID
 ) -> ProjectWorkingCopy:

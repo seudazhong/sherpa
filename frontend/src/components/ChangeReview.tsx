@@ -17,6 +17,21 @@ const MARK: Record<string, string> = {
   deleted: "-",
 };
 
+interface SaveConflictDetail {
+  error: "head_moved";
+  base_snapshot_id: string;
+  current_snapshot_id: string;
+  message: string;
+}
+
+function conflictDetail(error: ApiError): SaveConflictDetail | null {
+  const body = error.body as { detail?: unknown } | null;
+  const detail = body?.detail as Partial<SaveConflictDetail> | undefined;
+  return detail?.error === "head_moved"
+    ? (detail as SaveConflictDetail)
+    : null;
+}
+
 export function ChangeReview({
   projectId,
   csrf,
@@ -37,6 +52,7 @@ export function ChangeReview({
   const [checkpoint, setCheckpoint] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<SaveConflictDetail | null>(null);
 
   const load = useCallback(async () => {
     if (!csId) {
@@ -56,23 +72,11 @@ export function ChangeReview({
 
   useEffect(() => {
     setOpenDiff(null);
+    if (!workingCopy.head_moved && workingCopy.state !== "conflicted") {
+      setConflict(null);
+    }
     void load();
-  }, [load]);
-
-  if (!csId || !cs) {
-    return (
-      <section className="change-review">
-        <header className="change-review-head">
-          <strong>Change Review</strong>
-          <span className="muted small">No pending changes yet.</span>
-        </header>
-        <p className="small muted">
-          Ask the assistant to edit files or run tests in this project; staged
-          changes will appear here for you to Save or Discard.
-        </p>
-      </section>
-    );
-  }
+  }, [load, workingCopy.head_moved, workingCopy.state]);
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -84,6 +88,7 @@ export function ChangeReview({
   };
 
   const showDiff = async (entry: ChangeSetEntry) => {
+    if (!csId) return;
     if (openDiff?.id === entry.id) {
       setOpenDiff(null);
       return;
@@ -106,7 +111,7 @@ export function ChangeReview({
   };
 
   const doSave = async (withCheckpoint: boolean) => {
-    if (!csrf || busy) return;
+    if (!csrf || !csId || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -121,6 +126,7 @@ export function ChangeReview({
       onChanged();
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
+        setConflict(conflictDetail(e));
         setError(
           "The project head moved since these changes opened — review the rebased changes and Save again.",
         );
@@ -132,6 +138,88 @@ export function ChangeReview({
       setBusy(false);
     }
   };
+
+  const closeRuntimeForRebase = async () => {
+    const initial = workingCopy.runtime;
+    if (!csrf || !initial) return;
+    let runtime = initial;
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      if (runtime.state === "failed" || runtime.state === "closed") return;
+      if (runtime.state === "executing") {
+        throw new Error("Stop the active run before rebasing.");
+      }
+      if (runtime.state === "ready") {
+        runtime = await api.closeRuntime(csrf, runtime.id);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        runtime = await api.getRuntime(runtime.id);
+      }
+    }
+    throw new Error("Runtime did not close in time.");
+  };
+
+  const doRebase = async () => {
+    if (!csrf || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await closeRuntimeForRebase();
+      await api.rebaseWorkingCopy(csrf, projectId, workingCopy.id);
+      setConflict(null);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not rebase the review.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rebasePrompt = (
+    <div className="cr-banner cr-conflict" role="alert">
+      <div>
+        <strong>The project head moved.</strong>
+        <span>
+          {conflict
+            ? ` Base ${conflict.base_snapshot_id.slice(0, 8)} is behind ${conflict.current_snapshot_id.slice(0, 8)}.`
+            : " Rebase these pending changes onto the current head, then review and Save again."}
+        </span>
+      </div>
+      <button
+        className="btn btn-small"
+        onClick={() => void doRebase()}
+        disabled={busy}
+      >
+        {busy ? "Rebasing…" : "Rebase review"}
+      </button>
+    </div>
+  );
+  const headMovedNotice = (
+    <div className="cr-banner cr-warn">
+      The project head moved since this review opened. Save will be rejected
+      safely; after that, use Rebase review to generate a fresh comparison.
+    </div>
+  );
+
+  if (!csId || !cs) {
+    return (
+      <section className="change-review">
+        <header className="change-review-head">
+          <strong>Change Review</strong>
+          <span className="muted small">No open review.</span>
+        </header>
+        {workingCopy.state === "conflicted" && rebasePrompt}
+        {workingCopy.head_moved &&
+          workingCopy.state !== "conflicted" &&
+          headMovedNotice}
+        {!workingCopy.head_moved && workingCopy.state !== "conflicted" && (
+          <p className="small muted">
+            Edits from you or the assistant will appear here for Save or Discard.
+          </p>
+        )}
+        {error && <div className="auth-error small">{error}</div>}
+      </section>
+    );
+  }
 
   const doDiscard = async () => {
     if (!csrf || busy) return;
@@ -163,12 +251,10 @@ export function ChangeReview({
         </button>
       </header>
 
-      {workingCopy.head_moved && (
-        <div className="cr-banner cr-conflict" role="alert">
-          The project head moved since this working copy opened. Saving will be
-          rejected until you review the rebased changes.
-        </div>
-      )}
+      {workingCopy.state === "conflicted" && rebasePrompt}
+      {workingCopy.head_moved &&
+        workingCopy.state !== "conflicted" &&
+        headMovedNotice}
       {cs.truncated && (
         <div className="cr-banner cr-warn">
           Partial review — the change set exceeded the review bounds. Absence of
