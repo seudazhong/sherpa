@@ -313,7 +313,9 @@ export default function ChatView() {
   const [workingCopy, setWorkingCopy] = useState<WorkingCopySummary | null>(
     null,
   );
-  const [showReview, setShowReview] = useState(false);
+  const [projectPane, setProjectPane] = useState<
+    "files" | "conversation" | "workspace"
+  >("conversation");
   const [running, setRunning] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -526,7 +528,7 @@ export default function ChatView() {
       setCites({});
       setProjectCtx(null);
       setWorkingCopy(null);
-      setShowReview(false);
+      setProjectPane("conversation");
       insufficientRef.current = false;
       setRunning(false);
       const mp = await api.listMessages(sid);
@@ -785,7 +787,58 @@ export default function ChatView() {
           </div>
         </header>
 
-        <div className="thread">
+        {projectCtx?.project_id && (
+          <nav className="project-pane-tabs" aria-label="Project workspace panes">
+            <button
+              className={projectPane === "files" ? "active" : ""}
+              onClick={() => setProjectPane("files")}
+            >
+              Files
+            </button>
+            <button
+              className={projectPane === "conversation" ? "active" : ""}
+              onClick={() => setProjectPane("conversation")}
+            >
+              Chat
+            </button>
+            <button
+              className={projectPane === "workspace" ? "active" : ""}
+              onClick={() => setProjectPane("workspace")}
+            >
+              Workspace
+              {workingCopy && workingCopy.overlay_entry_count > 0 && (
+                <span>{workingCopy.overlay_entry_count}</span>
+              )}
+            </button>
+          </nav>
+        )}
+
+        <div
+          className={`chat-workspace ${
+            projectCtx?.project_id
+              ? `project-workspace pane-${projectPane}`
+              : "general-workspace"
+          }`}
+        >
+          {projectCtx?.project_id && (
+            <aside className="project-files-pane" aria-label="Project files">
+              <header className="project-pane-head">
+                <div>
+                  <strong>Files</strong>
+                  <span>Effective working tree</span>
+                </div>
+                <span className="pill">Project</span>
+              </header>
+              <div className="project-pane-empty">
+                <span aria-hidden="true">⌘</span>
+                <strong>{projectCtx.project_name ?? "Project"}</strong>
+                <p>The editable effective tree is connected in the next P5 task.</p>
+              </div>
+            </aside>
+          )}
+
+          <section className="project-conversation-pane">
+            <div className="thread">
           <div className="thread-meta">
             <span className="chip">Web chat</span>
             {/* With a session the switcher owns the model label (it knows the
@@ -823,24 +876,15 @@ export default function ChatView() {
                 workingCopy.overlay_entry_count > 0) && (
                 <button
                   className="btn btn-small review-toggle"
-                  onClick={() => setShowReview((v) => !v)}
+                  onClick={() => setProjectPane("workspace")}
                 >
-                  {showReview ? "Hide review" : "Review changes"}
+                  Review changes
                   <span className="review-count">
                     {workingCopy.overlay_entry_count}
                   </span>
                 </button>
               )}
           </div>
-
-          {projectCtx?.project_id && showReview && workingCopy && (
-            <ChangeReview
-              projectId={projectCtx.project_id}
-              csrf={csrf}
-              workingCopy={workingCopy}
-              onChanged={() => void refreshWorkingCopy()}
-            />
-          )}
 
           {running && (
             <section className="run-banner" role="status" aria-live="polite">
@@ -1020,9 +1064,9 @@ export default function ChatView() {
             </details>
           )}
           <div ref={endRef} />
-        </div>
+            </div>
 
-        <form className="composer" onSubmit={send}>
+            <form className="composer" onSubmit={send}>
           <div className="composer-shell">
             {attachments.length > 0 && (
               <div className="composer-attachments">
@@ -1114,7 +1158,34 @@ export default function ChatView() {
               </button>
             </div>
           </div>
-        </form>
+            </form>
+          </section>
+
+          {projectCtx?.project_id && (
+            <aside className="project-review-pane" aria-label="Project workspace">
+              <header className="project-pane-head">
+                <div>
+                  <strong>Workspace</strong>
+                  <span>Changes · Runs · Artifacts</span>
+                </div>
+              </header>
+              {workingCopy ? (
+                <ChangeReview
+                  projectId={projectCtx.project_id}
+                  csrf={csrf}
+                  workingCopy={workingCopy}
+                  onChanged={() => void refreshWorkingCopy()}
+                />
+              ) : (
+                <div className="project-pane-empty">
+                  <span aria-hidden="true">✓</span>
+                  <strong>No pending workspace</strong>
+                  <p>Edits and run results will appear here.</p>
+                </div>
+              )}
+            </aside>
+          )}
+        </div>
 
         {pickerOpen && (
           <div

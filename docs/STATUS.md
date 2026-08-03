@@ -33,6 +33,13 @@ The **design + contracts + runnable skeleton** are done, and the **v1 durable sp
 editing, Run/stream/Stop, Runs/Artifacts tabs and explicit rebase-review. P4's backend and
 agent lane are complete; B-8 closes only when this human lane is click-verified.
 
+**✅ P5.1 Project workspace shell shipped (2026-08-03).** A Project-bound Chat now renders
+desktop Files / conversation / Workspace columns; General Chat remains the prior single-column
+experience. At ≤860 px the columns become explicit Files / Chat / Workspace pane tabs rather than
+squeezing horizontally. The existing Change Review moved into the right workspace pane. Browser
+acceptance covered all three mobile tabs and measured 390 px overflow = 0. P5.2 now replaces the
+left structural placeholder with the real effective-tree editor.
+
 **✅ P4.3 host-side `fs_*` shipped (2026-08-03).** `fs_list` / `fs_read` / `fs_grep` read
 the Project-bound chat's persisted effective tree without opening a container; `fs_write` /
 `fs_edit` / `fs_delete` lazily open the working copy and stage content-addressed, fence-guarded

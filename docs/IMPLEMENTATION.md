@@ -692,7 +692,7 @@ human Run button, streaming log, Stop or Runs tab — those are P5, so B-8 remai
 | # | Task | Paths | AC |
 |---|---|---|---|
 | P5.0 | Reconcile human effective-tree/history/rebase contracts before code | ADR-048 revision F · api §10.7 · STATUS | Full-file read is non-truncating/refusing; one shared SSE; no duplicate file/runtime logic |
-| P5.1 | Three-column Project-bound chat layout | `frontend/src/views/ChatView.tsx`, `frontend/src/styles.css` | Tree / conversation / right panel; 390 px overflow = 0 |
+| P5.1 ✅ | Three-column Project-bound chat layout | `frontend/src/views/ChatView.tsx`, `frontend/src/styles.css` | Desktop Files / conversation / Workspace; mobile pane tabs; General Chat unchanged; 390 px overflow = 0 |
 | P5.2 | Editable effective-tree adapter + UI | backend session-bound project-files routes; new `frontend/src/components/ProjectTree.tsx`, `frontend/src/api.ts` | Whole-file/refuse semantics; hash guard; human+agent edits in one change set; never uses head-only tree |
 | P5.3 | Run control + streaming log panel + Stop | new `frontend/src/components/RunPanel.tsx` | Real streaming output; Stop cancels; the dead `createSandboxRun` client is replaced |
 | P5.4 | `Changes / Runs / Artifacts` tabs + cross-runtime history API | `frontend/src/components/ChangeReview.tsx` + new `RunsPanel.tsx` | A failed run shows command/exit/reason/output; artifacts keep/export unchanged |
