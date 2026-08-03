@@ -3200,7 +3200,7 @@ CREATE TABLE project_exec_runs (
     CONSTRAINT fk_per_rs FOREIGN KEY (tenant_id, runtime_session_id)
         REFERENCES project_runtime_sessions (tenant_id, id) ON DELETE CASCADE,
     CONSTRAINT fk_per_invocation FOREIGN KEY (tenant_id, invocation_id)
-        REFERENCES effect_invocations (tenant_id, invocation_id) ON DELETE SET NULL,
+        REFERENCES effect_invocations (tenant_id, invocation_id),
     CONSTRAINT uq_per_seq UNIQUE (tenant_id, runtime_session_id, seq),
     CONSTRAINT ck_per_state CHECK (state IN ('queued','running','persisted','failed','cancelled'))
 );

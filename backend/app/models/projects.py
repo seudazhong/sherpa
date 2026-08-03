@@ -305,8 +305,9 @@ class ProjectRuntimeSession(Base):
 
     Replaces ``project_sandbox_runs`` (ADR-047 + ADR-048): ``scratch_ref`` is meaningless
     under tar transport and ``warm_until`` was never implemented — the idle TTL is
-    ``expires_at``. The service/tool layer that drives these rows lands in Phase TR P4;
-    the table exists from the 0001 baseline so the schema never needs a second migration.
+    ``expires_at``. The service/tool layer that drives these rows lands in Phase TR P4.
+    The base tables exist from the 0001 baseline; P4 adds forward-only exec
+    dispatch/output/cancel columns.
     """
 
     __tablename__ = "project_runtime_sessions"
@@ -351,16 +352,20 @@ class ProjectExecRun(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     runtime_session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    invocation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     seq: Mapped[int] = mapped_column(Integer)
     command_preview: Mapped[str] = mapped_column(Text)
     state: Mapped[str] = mapped_column(Text, server_default="queued")
     exit_code: Mapped[int | None] = mapped_column(Integer)
     timed_out: Mapped[bool] = mapped_column(Boolean, server_default="false")
     termination_reason: Mapped[str | None] = mapped_column(Text)
+    stdout_head: Mapped[str | None] = mapped_column(Text)
+    stderr_tail: Mapped[str | None] = mapped_column(Text)
     output_truncated: Mapped[bool] = mapped_column(Boolean, server_default="false")
     spill_ref: Mapped[str | None] = mapped_column(Text)
     change_set_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
+    cancel_requested_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     persisted_boundary_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

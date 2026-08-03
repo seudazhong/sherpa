@@ -54,6 +54,12 @@ only a conservative platform matcher auto-allowing `pytest`, bounded `python -m 
 redirection, substitution, newline or environment assignment. The platform decision is audited with
 a stable grant identity; owner email grants are unchanged.
 
+**✅ P4.1 runtime exec schema extension shipped (2026-08-03).** Migration `0004` adds nullable
+agent `invocation_id` with a unique partial index and composite FK, bounded
+`stdout_head` / `stderr_tail`, and committed `cancel_requested_at` to
+`project_exec_runs`. Human runs keep `invocation_id=NULL`; agent execution can now key recovery to
+the persist-before-dispatch effect invocation.
+
 **✅ Phase TR P3 is CLOSED (owner-accepted 2026-08-01).** The transport half of B-8 is done and
 the 128 MiB workspace/change-set cap is an accepted product trade-off (see the P3 block below).
 **B-8 itself stays OPEN** — its close criterion is the *human* Run/Stop lane, which is **P5**.
