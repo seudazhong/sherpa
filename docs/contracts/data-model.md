@@ -3177,16 +3177,20 @@ CREATE TABLE project_exec_runs (
     id               uuid NOT NULL,
     runtime_session_id uuid NOT NULL,
     run_id           uuid,                            -- durable model-loop run (event journal), if any
+    invocation_id    uuid,                            -- effect invocation for agent-driven exec; NULL for human
     seq              integer NOT NULL,                -- 1-based order within the session
     command_preview  text NOT NULL,                   -- bounded, redacted; the approval preview shows this
     state            text NOT NULL DEFAULT 'queued',  -- queued|running|persisted|failed|cancelled
     exit_code        integer,
     timed_out        boolean NOT NULL DEFAULT false,
     termination_reason text,                          -- see events §2.11 named-exit list
+    stdout_head      text,                            -- bounded; never the full unbounded stream
+    stderr_tail      text,                            -- bounded; never the full unbounded stream
     output_truncated boolean NOT NULL DEFAULT false,
     spill_ref        text,                            -- tool-output:{invocation_id} when bounded output spilled
     change_set_id    uuid,                            -- projected at the persistence boundary
     duration_ms      integer,
+    cancel_requested_at timestamptz,                  -- committed cancellation signal observed by worker
     persisted_boundary_at timestamptz,                -- overlay/change-set persisted => durably complete
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
@@ -3195,11 +3199,15 @@ CREATE TABLE project_exec_runs (
         REFERENCES tenants (tenant_id) ON DELETE CASCADE,
     CONSTRAINT fk_per_rs FOREIGN KEY (tenant_id, runtime_session_id)
         REFERENCES project_runtime_sessions (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_per_invocation FOREIGN KEY (tenant_id, invocation_id)
+        REFERENCES effect_invocations (tenant_id, invocation_id) ON DELETE SET NULL,
     CONSTRAINT uq_per_seq UNIQUE (tenant_id, runtime_session_id, seq),
     CONSTRAINT ck_per_state CHECK (state IN ('queued','running','persisted','failed','cancelled'))
 );
 CREATE INDEX ix_per_rs ON project_exec_runs (tenant_id, runtime_session_id, seq);
 CREATE INDEX ix_per_run ON project_exec_runs (tenant_id, run_id);
+CREATE UNIQUE INDEX uq_per_invocation ON project_exec_runs (tenant_id, invocation_id)
+    WHERE invocation_id IS NOT NULL;
 ```
 
 Notes:
@@ -3254,6 +3262,13 @@ Notes:
   durable until `persisted_boundary_at` is set (overlay + change set committed).
   `uq_prs_live` enforces at most one live runtime session per working copy, mirroring the
   single-writer lease.
+- **Runtime liveness/recovery.** `project_runtime_sessions.expires_at` is a lease-like deadline:
+  ready sessions use the configured idle TTL; opening/executing sessions extend it past their
+  bounded operation deadline. Maintenance fails expired live rows, clears/removes their
+  rebuildable container, and releases the working-copy lease. The container sweeper protects every
+  unexpired live `container_ref`; the P3 one-shot age threshold is not sufficient for a P4 session.
+  `project_exec_runs.invocation_id` makes agent exec dispatch idempotent after the effect invocation
+  is committed. `cancel_requested_at` is the committed cross-process cancellation signal.
 - **Isolation & credentials (ADR-039 + ADR-047; report §10.7/§11).** The sandbox receives the working
   copy as a **tar-injected disposable copy in an anonymous `/work` volume** and **mounts no host path
   at all** — never the Project snapshot, `storage_blobs`/MinIO, another Project,

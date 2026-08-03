@@ -820,7 +820,7 @@
 
 ### ADR-046 · 工具目录 = `domain.verb` 命名空间 + ToolDescriptor/ToolsetResolver + 渐进式披露（落地 backlog B-2；受 ADR-045 统领；具体化 ADR-009 的 VISIBLE 闸；扩展 ADR-008）
 
-> **状态：已批准（2026-07-30），契约与设计先行；实现待 Phase TR 执行计划获批。**
+> **状态：已批准（2026-07-30）；P4 实现已由负责人批准并于 2026-08-03 开始。**
 >
 > **修订 A（2026-07-30，负责人主持的 P2 设计复审）**：三处更正，详见 [backlog B-10](backlog.md#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation)。
 > ① **§决策5 的否决理由②③被本 ADR 的 §决策6 自我推翻**，已收窄（见该条的「修订」块）；
@@ -951,6 +951,22 @@
 ### ADR-048 · RuntimeSession + Project 编码模型 = 宿主侧 `fs.*` + 沙箱侧 `sh.*`/`run.*`（删除 `project_run`/`project_tree`/`project_read`/`run_code`；修订 ADR-040 §决策8）
 
 > **状态：已批准（2026-07-30），契约与设计先行；实现待 Phase TR 执行计划获批。**
+>
+> **修订 C（2026-08-03，P4 实施顺序）**：负责人确认 P2 工具目录继续延期，P4 的
+> `fs_*` / `runtime_*` / `sh_exec` **先注册进现有 FULL 扁平 registry**；它们不得进入
+> SAFE，且必须在工具适配器内自行校验 Project binding / RuntimeSession 所有权与状态。
+> P2 恢复后只旁挂 `ToolDescriptor` 并改变 VISIBLE 求解，不改这些工具的名称、schema 或
+> service 语义。这是实施顺序调整，不改变 ADR-046 的目标架构。
+>
+> 同次实施复审补齐四个原设计未写清的正确性边界：
+> ① `project_runtime_sessions.expires_at` 同时是 ready 态 idle TTL 与 opening/executing 态
+> 的 liveness deadline；maintenance 必须回收超时 live row，释放唯一索引并清理容器；
+> ② orphan sweeper 必须保护数据库中仍 live 且未过期的 `container_ref`，不能按 P3
+> one-shot 年龄阈值误删长驻容器；③ host-side `fs_*` 修改与 runtime 状态必须在数据库行锁
+> 下串行：executing ⇒ `runtime_busy`，ready ⇒ 用同一 fence 持久化后使热容器失效，下一次
+> `sh_exec` 从最新 overlay 重新物化；④ runtime 工具在执行容器动作前必须先提交
+> effect invocation / tool-call，`project_exec_runs` 以 `invocation_id` 去重，避免崩溃恢复时
+> 盲目重跑。
 
 - **核心判断：file 与 shell 必须分层，不能一刀切**：
 
@@ -965,7 +981,9 @@
   1. **分层**：
      - `fs_list` / `fs_read` / `fs_grep` / `fs_write` / `fs_edit` / `fs_delete` → **宿主侧**，直接读写工作副本的 **effective tree**（`base snapshot + overlay`，即 `app/services/project_workcopy.py::effective_tree` 的语义）。**无需容器**、确定性、可完整单测。这**严格强于**被删的 `project_tree`/`project_read` —— 后者只看 head，**看不见 agent 自己刚写的内容**（既有缺陷）。
      - `sh_exec` → **必经 `RuntimeSession`** 进沙箱（tar 进 → exec → tar 出 → fence 持久）。
-     - `run_test` / `run_lint` → `sh_exec` 的语义糖 + 能力探测（给模型稳定的高层动作，避免它自己拼命令）。
+     - ~~`run_test` / `run_lint`~~ → **删除**（ADR-046 §决策10）：它们只是
+       `sh_exec("pytest")` / `sh_exec("ruff check")` 的语义糖；能力探测保留在
+       `runtime_open` / `sh_exec`，缺依赖仍返回 `environment_missing_dependencies`。
   2. **产品后果（本设计最重要的判断之一）**：**沙箱不可用时只损失「跑」，不损失「改」。** 今天沙箱一挂，"让 Sherpa 改代码"整体归零。
   3. **`RuntimeSession` 从 v1 起就是显式一等对象**：`runtime_open(scope)` → 物化 + 起容器 → 返回 `runtime_session_id` + `capabilities` + TTL；`sh_exec(runtime_session_id, command)`；`runtime_close(runtime_session_id)` → 持久边界 + 拆容器。`scope ∈ {project, ephemeral}`：`project` 挂工作副本；`ephemeral` 空工作区，**取代被删的 `run_code`**（O-12）—— 从此只有**一套**沙箱代码（`app/sandbox/runner.py` 与 `project_sandbox.py` 合并为 `app/sandbox/runtime.py`）。
   4. **未来沙箱内专用 coding agent 的接缝（零重写）**：以 **sub-agent 适配器**形态出现（[api.md §7.4](contracts/api.md) 早已契约保留）：`delegate.code_task(runtime_session_id, goal, max_steps, budget_tokens)`。它拿到**同一个** `runtime_session_id`、在同一容器里跑、每步仍产出 change set 进**同一个 overlay**、预算/取消/审计走**同一条路**（子 agent 共享父预算，[docs/09](09-roadmap.md) 生产就绪清单）。**唯一前置** = `RuntimeSession` 必须从一开始就是显式可传递对象，而不是 `project_run` 那种"每次调用内部临时起一个容器"的隐式生命周期。**这就是 v1 就要引入 `runtime_open/close` 的根本原因。** 本条**修订 [ADR-040] §决策8**（"不嵌 coding agent" → "v1 不嵌，接缝预留"）。
@@ -984,6 +1002,17 @@
   8. **流式与取消**：`sh_exec` 期间向事件总线发 `runtime.output` 增量帧（`durability: debug`，有界、可丢，**不进 append-only journal 的正确性路径** —— 符合 [ADR-016]「pub/sub 永不是正确性关键」）。取消 = 现有 run 取消信号 → 编排方 `container.kill()` → `termination_reason="cancelled"`。
   9. **/Project UX（O-8）**：Project-bound Chat 使用**三栏工作台**（左文件树 / 中对话 / 右「Changes · Runs · Artifacts」）。人工泳道必须补齐 **Run 控件 + 流式日志面板 + Stop**（今天 `frontend/src/api.ts:1293` 的 `createSandboxRun` 是死代码）；文件树**可编辑**，人的手改与 agent 的手改**落进同一个 overlay**、一起评审。**Plan 对象后置到 v1.5**（目录层预留 `ui.*` 类工具，O-10）。
   10. **不变**：真相源层级（snapshot head → overlay → scratch/容器为可丢缓存）、single-writer lease + 单调 fence、`head_generation` CAS Save（`409 head_moved`）、Save/checkpoint/Discard **人工专属**、change set 有界 + 显式 `truncated`、artifacts 默认 `ephemeral` 不计配额、无包安装、无开网 —— [ADR-040] 这些决策**全部保留**。
+  11. **`fs_*` 的并发与有界 schema（修订 C）**：
+      - `fs_list(path=".", max_entries=200)`：最多 500 条，按 path 排序，明确
+        `truncated`；只查 Postgres 的 snapshot/overlay 元数据，不需要对象存储或沙箱。
+      - `fs_read(path, start_line=1, max_lines=500)`：返回当前 `content_hash`，供后续写入作
+        乐观保护。
+      - `fs_grep(pattern, path=".", max_results=100)`：P4 首版是有界、大小受限的**字面**
+        UTF-8 搜索；不把模型输入交给无超时的回溯型正则引擎。
+      - `fs_write` / `fs_delete` 增加可选 `if_hash`；提供时必须匹配 effective tree 当前
+        内容，否则零修改地返回冲突。`fs_edit` 继续以 `old_text` +
+        `expect_occurrences` 作锚定 CAS。目录删除必须显式 `recursive=true`，根目录永不允许删。
+      - 读操作在没有 working copy 时读取当前 head；首个 mutation 才惰性打开 working copy。
 
 - **验收关键**：agent 泳道完成一个真实循环（读代码 → 改 → 跑测试 → 看到失败 → 再改 → 通过）；**沙箱强制关闭时 `fs.*` 全部仍可用**（降级不瘫痪）；`sh_exec("rm -rf /work")` 触发审批且预览含确切命令；每个失败注入映射到唯一具名 `termination_reason` 并在 UI 与模型观察里可区分；人工泳道能点 Run、看到流式日志、能 Stop；能力矩阵（docs/11 §9）相关行 UI 单元格**经真实点击验证**后才置 ✅。
 

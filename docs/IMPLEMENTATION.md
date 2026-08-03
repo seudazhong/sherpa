@@ -648,7 +648,12 @@ a deliberate act that **requires raising the compose worker's `mem_limit` by twi
 work** for this image — it is built locally and never pushed, so `RepoDigests` is empty. Use
 `--format '{{.Id}}'`.
 
-### TR.9 P4 — RuntimeSession + `fs`/`sh`/`run` (product half of B-8)
+### TR.9 P4 — RuntimeSession + `fs`/`sh` (product half of B-8) — 🚧 **AUTHORIZED 2026-08-03**
+
+> **Owner sequencing decision (2026-08-03):** P2 remains deferred. Register the P4 tools in
+> today's FULL flat registry (`safe=False`) and let P2 wrap them in descriptors later. This resolves
+> TR.4's former hard dependency without changing the target catalog architecture. The temporary
+> byte/visibility debt is measured and B-2 remains open.
 
 > **P4.5 dropped 2026-07-30** ([ADR-046 §决策10](decisions.md#adr-046), from the owner's P2 design review):
 > `run_test`/`run_lint` are pure sugar over `sh_exec("pytest")` / `sh_exec("ruff check")` and CLI agents
@@ -658,14 +663,15 @@ work** for this image — it is built locally and never pushed, so `RepoDigests`
 
 | # | Task | Paths | TDD / AC |
 |---|---|---|---|
-| P4.1 | Schema: `project_runtime_sessions` + `project_exec_runs` (**fold into `0001_baseline`** — there is no second migration in a clean break) | `backend/app/models/projects.py`, `backend/migrations/versions/0001_baseline.py` | `uq_prs_live` blocks a second live session per working copy; `ck_prs_scope_binding` holds |
+| P4.0 | Reconcile ADR/contracts/plan before code: flat-registry sequencing, complete fs schemas (`fs_list`/`fs_delete`/`if_hash`), remove stale `run_test`/`run_lint`, runtime liveness + sweeper protection + committed dispatch | `docs/decisions.md`, `docs/contracts/*`, this file, `STATUS.md` | No target/current fork remains |
+| P4.1 | Extend the already-shipped runtime tables with exec invocation/output/cancel fields using a normal forward migration | `backend/app/models/projects.py`, `backend/migrations/versions/0004_runtime_exec.py` | unique non-null `invocation_id`; bounded stdout/stderr; committed cancel signal; one Alembic head |
 | P4.2 | `runtime_open` / `runtime_close` service + tools | `backend/app/services/project_runtime.py`, `backend/app/tools/runtime_tools.py` | Open acquires lease + bumps fence, probes capabilities, records `ingress_bytes`; close persists the boundary **before** teardown |
-| P4.3 | `fs.*` host-side tools over the working-copy effective tree | `backend/app/tools/fs_tools.py`, `backend/app/services/project_workcopy.py` | **Key test: with `SANDBOX_KIND=disabled`, every `fs.*` tool still works** (the degradation guarantee); `fs_read` after `fs_write` returns the new content without any Save |
-| P4.4 | `sh_exec` with streaming + cancel | `backend/app/tools/sh_tools.py`, `backend/app/services/project_runtime.py`, `backend/app/api/projects.py` | `202` + `runtime.output` SSE frames + `POST /runtime/{rid}/cancel` settles `cancelled` **after** the persistence boundary runs |
-| ~~P4.5~~ | ~~`run_test` / `run_lint` over probed capabilities~~ | ~~`backend/app/tools/run_tools.py`~~ | **DROPPED** (see the note above). The AC moves to `sh_exec`: a missing tool → `environment_missing_dependencies` **naming what the image does have**, never a bare exit 127 |
+| P4.3 | `fs.*` host-side tools over the working-copy effective tree | `backend/app/services/project_fs.py`, `backend/app/tools/fs_tools.py`, `backend/app/services/project_workcopy.py` | With `SANDBOX_KIND=disabled`, every `fs.*` works; `if_hash`/anchored edit conflict is zero-write; running runtime ⇒ `runtime_busy`; ready runtime is invalidated atomically and rematerialized on next exec |
+| P4.4 | `sh_exec` with hot-container reuse, incremental committed state/output, cancel and crash recovery | `backend/app/tools/sh_tools.py`, `backend/app/services/project_runtime.py`, `backend/app/sandbox/runtime.py`, `backend/app/api/projects.py`, `backend/app/worker.py` | `202` + bounded SSE frames; agent invocation committed before Docker; cancel persists boundary then `cancelled`; maintenance recovers expired live rows; sweeper never removes an unexpired DB-live container |
+| ~~P4.5~~ | ~~`run_test` / `run_lint` over probed capabilities~~ | ~~`backend/app/tools/run_tools.py`~~ | **DROPPED**. The AC moves to `sh_exec`: a missing tool → `environment_missing_dependencies` **naming what the image does have**, never a bare exit 127 |
 | P4.6 | Delete `project_run` / `project_tree` / `project_read`; rewrite REST to the runtime routes; delete `POST /projects/{id}/sandbox-runs` | `backend/app/tools/project_tools.py`, `backend/app/api/projects.py` | Route inventory shows the new routes and none of the old |
 | P4.7 | Route-inventory generator + CI step (O-13) | new `backend/scripts/route_inventory.py`, `docs/contracts/route-inventory.md`, `.github/workflows/ci.yml` | CI fails on undeclared route drift; `/files/*` and `sandbox-runs` cannot reappear |
-| P4.V | Full gate + agent-lane Playwright | — | One chat drives read → edit → `sh_exec("pytest")` fail → edit → pass, with the approval card appearing for a non-allowlisted command |
+| P4.V | Full gate + real-Docker + agent-lane Playwright | — | One chat drives read → edit → `sh_exec("pytest")` fail → edit → rematerialize → pass; sensitive-path preview contains no content; adversarial shell corpus never auto-allows operators/substitution; mid-exec cancel persists edits and settles `cancelled` |
 
 **P4 exit:** the agent completes a real edit/test loop; `fs.*` provably survives a disabled sandbox;
 `sh_exec` approval preview shows the exact command and paths; the old tools and route are gone and

@@ -15,7 +15,7 @@
 | B-5 | gap | [Drive cannot upload a folder](#b-5-drive-cannot-upload-a-folder) | ✅ done |
 | B-6 | feature | [Chat attachments: image upload/paste + attach from Drive](#b-6-chat-attachments-image-uploadpaste--attach-from-drive) | ✅ done |
 | B-7 | ux | [`Inbox` nav label collides with the email inbox](#b-7-inbox-nav-label-collides-with-the-email-inbox) | ✅ done |
-| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | **open** · ✅ **symptom fixed; Phase TR P3 COMPLETE and owner-accepted 2026-08-01** — tar transport + first-party runner image + real-Docker lane; `project_run` really runs. **Still open: no human Run/Stop lane (P4 + P5)** |
+| B-8 | bug | [`project_run` always fails with `sandbox_unavailable`](#b-8-project_run-always-fails-with-sandbox_unavailable) | **open** · ✅ symptom fixed/P3 accepted; 🚧 **P4 authorized 2026-08-03 and in progress** with temporary flat-registry registration; still closes only after P5 human Run/Stop |
 | B-9 | bug/dx | [The test suite deletes the owner tenant in the dev database](#b-9-the-test-suite-deletes-the-owner-tenant-in-the-dev-database) | ✅ done |
 | B-10 | design | [Tool-surface slimming: dead tools, prose diet, and *vertical* (workflow) consolidation](#b-10-tool-surface-slimming-dead-tools-prose-diet-and-vertical-workflow-consolidation) | open — feeds [Phase TR](IMPLEMENTATION.md) **P2** |
 | B-11 | gap | [No tool-use evaluation harness (decisions are argued, not measured)](#b-11-no-tool-use-evaluation-harness-decisions-are-argued-not-measured) | open |
@@ -236,6 +236,12 @@ change, not a rename — not done here.
 ## B-8 `project_run` always fails with `sandbox_unavailable`
 
 *Reported 2026-07-28 (manual test) · kind: bug · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-047](decisions.md#adr-047)/[ADR-048](decisions.md#adr-048)); **P0 (named exits + logging) + P1 (baseline squash) shipped 2026-07-30; P3 (tar transport + first-party runner image + real-Docker lane) shipped 2026-07-31 — the original symptom is GONE and `project_run` really runs**; still **open** because the close criterion is the *human* Run lane, which is [Phase TR](IMPLEMENTATION.md) **P5***
+
+> **P4 started 2026-08-03.** The owner resolved the deferred-P2 sequencing question:
+> `fs_*` / `runtime_*` / `sh_exec` temporarily register in the existing FULL flat registry and
+> self-enforce binding/ownership; P2 later wraps them in descriptors. Runtime liveness recovery,
+> DB-live container sweep protection, host-edit/runtime serialization and committed exec dispatch
+> were added to the contract before code.
 
 > **✅ Phase TR P3 shipped 2026-07-31 — the reported symptom is fixed, the item is not closed.**
 > The bind mount is gone; the disposable copy is tar-injected into an anonymous `/work` volume,

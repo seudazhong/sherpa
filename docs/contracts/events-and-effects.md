@@ -939,6 +939,19 @@ observe or mutate each other's pending working copies (isolated rows, per-sessio
 (ADR-019/039); the scratch tree, the container and the prepared image are rebuildable caches, never the
 recovery source of truth.
 
+Before an agent-driven runtime tool touches Docker, the core commits its prepared
+`effect_invocations` row and the `tool-call` event. The corresponding
+`project_exec_runs.invocation_id` is unique when non-null. A redelivery therefore resumes or
+observes the already queued/running/persisted exec; it never blindly starts a second command.
+Runtime state/output boundary events are committed incrementally while the command runs, so SSE does
+not wait for the outer model loop to settle.
+
+`project_runtime_sessions.expires_at` is also the crash-recovery deadline. Maintenance converts an
+expired `opening|ready|executing|closing` row into a named failed/closed outcome, removes any
+rebuildable container and releases the working-copy lease. The orphan sweeper must protect
+unexpired DB-live container refs; age alone is not proof of orphanhood once RuntimeSessions outlive
+one P3 command.
+
 ## 3. Delivery and SSE
 
 ### 3.1 Required path

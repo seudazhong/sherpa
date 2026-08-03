@@ -1345,6 +1345,12 @@ general write tool.
 The catalog is the **registered** set, grouped into toolsets. What a given turn actually
 sees is the **visible** subset chosen by the resolver (§7.5) — the two are no longer equal.
 
+> **P4 sequencing amendment (2026-08-03).** P2's resolver remains deferred. Until it lands,
+> `fs_*`, `runtime_*` and `sh_exec` are registered in today's FULL flat registry (`safe=False`)
+> and enforce their `requires` checks inside the adapter. P2 later wraps the same tools in
+> descriptors; it does not rename or redesign them. This temporary visibility debt is measured
+> and does not close B-2.
+
 | Toolset | Tools (`domain.verb`) | `requires` | Default policy |
 |---|---|---|---|
 | `tools` (core) | `tools_search`, `tools_load` | — | allow |
@@ -1353,8 +1359,7 @@ sees is the **visible** subset chosen by the resolver (§7.5) — the two are no
 | `todo` (core) | `todo_list`, `todo_create`, `todo_update` | — | allow |
 | `project` (core, project-bound) | `project_list`, `project_create`, `project_review_changes` | `project_binding` for review | allow |
 | `fs` (core, project-bound) | `fs_list`, `fs_read`, `fs_grep`, `fs_write`, `fs_edit`, `fs_delete` | `project_binding` | allow; sensitive paths `ask` |
-| `sh` (loadable, project-bound) | `sh_exec` | `runtime_session` | **`ask`** + safe-command grants |
-| `run` (loadable, project-bound) | `run_test`, `run_lint` | `runtime_session` | inherits `sh_exec` |
+| `sh` (temporarily FULL-flat; later loadable, project-bound) | `sh_exec` | `runtime_session` | **`ask`** + safe-command grants |
 | `runtime` (core, project-bound) | `runtime_open`, `runtime_close` | `project_binding` | allow |
 | `schedule` (loadable) | `schedule_create_reminder`, `schedule_create_digest`, `schedule_create_task`, `schedule_list`, `schedule_cancel` | — | allow |
 | `memory` (loadable) | `memory_set`, `memory_recall`, `memory_delete`, `memory_note`, `memory_search` | — | allow |
@@ -1473,13 +1478,17 @@ class ToolsLoadArgs(StrictModel):
 ALLOWED and EXECUTABLE independently) but is **audited**, because a change to the visible
 set is a security-relevant event.
 
-### 7.6 `fs.*`, `runtime.*`, `sh.*`, `run.*` **`[target]`** (ADR-048)
+### 7.6 `fs.*`, `runtime.*`, `sh.*` **`[target]`** (ADR-048)
 
 `fs.*` runs **host-side** against the Project working copy's effective tree
 (`base snapshot + persisted overlay`). It needs no container, so **a sandbox outage costs
 the ability to *run* code, not the ability to *edit* it.**
 
 ```python
+class FsListArgs(StrictModel):
+    path: Annotated[str, Field(max_length=1024)] = "."
+    max_entries: Annotated[int, Field(ge=1, le=500)] = 200
+
 class FsReadArgs(StrictModel):
     path: Annotated[str, Field(min_length=1, max_length=1024)]
     start_line: Annotated[int, Field(ge=1)] = 1
@@ -1494,6 +1503,7 @@ class FsWriteArgs(StrictModel):
     path: Annotated[str, Field(min_length=1, max_length=1024)]
     content: Annotated[str, Field(max_length=1_000_000)]
     executable: bool = False
+    if_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
 
 class FsEditArgs(StrictModel):
     # Anchored replacement, so a large file is not rewritten wholesale into the prompt.
@@ -1501,6 +1511,11 @@ class FsEditArgs(StrictModel):
     old_text: Annotated[str, Field(min_length=1, max_length=100_000)]
     new_text: Annotated[str, Field(max_length=100_000)]
     expect_occurrences: Annotated[int, Field(ge=1, le=100)] = 1
+
+class FsDeleteArgs(StrictModel):
+    path: Annotated[str, Field(min_length=1, max_length=1024)]
+    recursive: bool = False
+    if_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
 
 class RuntimeOpenArgs(StrictModel):
     scope: Literal["project", "ephemeral"] = "project"
@@ -1514,16 +1529,25 @@ class ShExecArgs(StrictModel):
 
 - Every `path` is a normalized project-relative path. Absolute paths, `..` escape, NUL,
   device paths, and symlinks resolving outside the project root are rejected.
+- `fs_list` reads only the persisted snapshot/overlay metadata, ordered by path and bounded by
+  `max_entries`; it needs neither a container nor object-store bytes. `fs_read` returns the
+  effective entry's SHA-256 `content_hash`. `fs_grep` P4 uses bounded literal UTF-8 matching;
+  regex is not implied by the field name.
+- When `if_hash` is supplied it is a per-file optimistic guard against the effective tree.
+  A mismatch returns a conflict and mutates nothing. `fs_edit` has the equivalent anchored
+  guard: the actual occurrence count must equal `expect_occurrences`.
 - `fs_write`/`fs_edit`/`fs_delete` write the **reviewable overlay**, never the Project
   head, so they are `idempotent_write`/allow — except paths matching the sensitive set
   (`.env*`, `*.pem`, `*.key`, `id_*`, `.github/workflows/**`), which are forced to `ask`.
 - `sh_exec` is `non_idempotent_write`/**`ask`**, auto-released by a platform safe-command
   grant (ADR-034 matcher). It requires an open `RuntimeSession`; it never installs packages
   and never enables the network (ADR-047).
-- `run_test` / `run_lint` are bounded semantic wrappers over `sh_exec` that consult the
-  runtime's probed `capabilities` first, so a missing tool returns
-  `environment_missing_dependencies` with the list of what the image does provide, rather
-  than a bare exit 127.
+- `run_test` / `run_lint` are deleted (ADR-046 §决策10). `runtime_open` probes capabilities,
+  and `sh_exec` returns `environment_missing_dependencies` plus that bounded capability list
+  rather than a bare exit 127.
+- Until P2 lands, these tools are visible in every authenticated FULL turn. `fs_*` rejects a
+  non-Project-bound chat; `sh_exec` requires
+  `(tenant_id,user_id,session_id) == RuntimeSession owner` and one non-terminal session.
 
 
 ## 8. `CONNECTOR_ANALYSIS` no-tool mode (ADR-009)
@@ -2243,6 +2267,10 @@ the current `project_sandbox_runs` path; the routes and payloads in this section
   (`events-and-effects.md` §2.11). No REST handler ever blocks on a container.
   `POST /runtime/{rid}/cancel` kills the container and settles the exec with
   `termination_reason='cancelled'`.
+- **Agent tool dispatch is durable before execution.** The core commits the prepared effect
+  invocation + tool-call before `runtime_open`/`sh_exec` touches Docker. Agent-driven exec rows
+  carry that `invocation_id`, so a crash/replay observes the existing queued/running/persisted
+  exec rather than blindly starting the command again.
 - **Working copy is lazy + isolated per chat.** A Project-bound chat reads the head until
   its **first mutating action** (`fs_write`/`fs_edit`/`fs_delete` or `runtime_open`), which
   atomically opens the durable working copy at `base_snapshot_id = current_snapshot_id`
@@ -2264,8 +2292,8 @@ the current `project_sandbox_runs` path; the routes and payloads in this section
   `(current_snapshot_id, head_generation)` returning **`409` `SaveConflict` (`head_moved`)**
   and applying nothing if the head moved; artifacts are `ephemeral` until Keep/Export.
 - **Tool surface** — see §7.3/§7.6. `fs.*` (host-side, works without a container),
-  `runtime_open`/`runtime_close`, `sh_exec` (**`ask`** + safe-command grants), `run_test`/
-  `run_lint`, and `project_review_changes` (read-only). **Not given to the agent:**
+  `runtime_open`/`runtime_close`, `sh_exec` (**`ask`** + safe-command grants), and
+  `project_review_changes` (read-only). **Not given to the agent:**
   `Save` / `Save + checkpoint` / `Discard` / artifact `keep`·`export` remain **user-only**
   (advancing the head is a human Change-Review decision, ADR-040 §决策6); `project_push`
   (W4), destructive purge and dependency installation are also excluded. Project files and
@@ -2274,6 +2302,20 @@ the current `project_sandbox_runs` path; the routes and payloads in this section
   conversation / `Changes · Runs · Artifacts`), with an editable tree, a real **Run**
   control, a streaming log panel and **Stop**. Human edits and agent edits land in the
   **same overlay** and are reviewed together. A Plan object is deferred (ADR-048 §决策9).
+
+**Runtime liveness and host-edit synchronization `[target]`.**
+
+- `expires_at` is authoritative for live-row recovery, not only UI idle display. In
+  `ready` it is the idle TTL; in `opening`/`executing` it is extended beyond the bounded
+  operation deadline. Maintenance marks an expired live row `failed`, clears the container,
+  and releases the working-copy lease so `uq_prs_live` cannot wedge the project forever.
+- The orphan-container sweep receives the set of unexpired DB-live `container_ref`s and MUST
+  never remove them merely because they are older than P3's one-shot threshold.
+- `fs_write`/`fs_edit`/`fs_delete` lock the live RuntimeSession row with the working copy.
+  `executing` returns `409 runtime_busy`. `ready` writes under that session's existing fence,
+  discards the hot container and returns the session to `opening`; the next `sh_exec`
+  rematerializes from the latest effective tree. This chooses correctness over an incremental
+  in-container sync protocol; consecutive execs without host edits still reuse the hot container.
 
 **Change-review schemas `[shipped]`** (unchanged by ADR-048):
 
