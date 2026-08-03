@@ -47,6 +47,31 @@ def nonce_hash(nonce: str) -> bytes:
 
 def build_preview(tool_name: str, args: dict[str, object]) -> dict[str, object]:
     """Bounded, plain-text, redacted preview for human display (never markup)."""
+    if tool_name in ("fs_write", "fs_edit", "fs_delete"):
+        path = str(args.get("path") or "")[:1000]
+        details: list[dict[str, str]] = [{"label": "path", "value": path}]
+        if tool_name == "fs_delete":
+            details.append({"label": "recursive", "value": str(bool(args.get("recursive", False)))})
+        return {
+            "action": tool_name,
+            "summary": f"Approve {tool_name} for {path}"[:2000],
+            "details": details,
+            "risk": "Sensitive Project path; changes remain reviewable until Save.",
+        }
+    if tool_name == "sh_exec":
+        command = str(args.get("command") or "")[:2000]
+        return {
+            "action": tool_name,
+            "summary": f"Approve sandbox command: {command}"[:2000],
+            "details": [
+                {"label": "command", "value": command},
+                {
+                    "label": "runtime_session_id",
+                    "value": str(args.get("runtime_session_id") or "")[:1000],
+                },
+            ],
+            "risk": "Command executes inside the offline Project sandbox.",
+        }
     details = [{"label": str(k)[:100], "value": str(v)[:1000]} for k, v in list(args.items())[:20]]
     return {
         "action": tool_name[:200],
@@ -98,7 +123,7 @@ async def request_approval(
         session_id=session_id,
         invocation_id=invocation_id,
         tool_name=tool_name,
-        permission_scope=policy.permission_scope(tool_name),
+        permission_scope=policy.permission_scope(tool_name, args),
         effect_class=effect_class,
         args_hash=args_hash(args),
         policy_version=policy.POLICY_VERSION,

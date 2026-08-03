@@ -20,6 +20,7 @@ from app.permissions import policy
 from app.providers import Finish, MockProvider, TextDelta, ToolCall
 from app.tools import ToolFlags
 from app.tools.builtin import GetTimeTool, SendEmailTool
+from app.tools.fs_tools import FsDeleteTool, FsWriteTool
 
 
 class _Dummy:
@@ -42,6 +43,19 @@ def test_evaluate_external_action_asks() -> None:
     assert policy.evaluate(SendEmailTool()) == "ask"
     assert policy.requires_approval(SendEmailTool()) is True
     assert policy.requires_approval(GetTimeTool()) is False
+
+
+def test_sensitive_fs_paths_ask_without_making_all_fs_writes_ask() -> None:
+    assert policy.evaluate(FsWriteTool(), {"path": "src/app.py"}) == "allow"
+    assert policy.evaluate(FsWriteTool(), {"path": "nested/.env.local"}) == "ask"
+    assert policy.evaluate(FsDeleteTool(), {"path": ".github/workflows/ci.yml"}) == "ask"
+    assert policy.evaluate(FsWriteTool(), {"path": "./.github//workflows/ci.yml"}) == "ask"
+    assert policy.evaluate(FsDeleteTool(), {"path": ".github", "recursive": True}) == "ask"
+    assert policy.evaluate(FsDeleteTool(), {"path": "src", "recursive": True}) == "ask"
+    assert (
+        policy.permission_scope("fs_write", {"path": "nested/.env.local"})
+        == "tool:fs_write:path:nested/.env.local"
+    )
 
 
 async def _seed(s: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, Run]:
@@ -97,7 +111,7 @@ async def _seed(s: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, Run]:
 async def test_loop_deny_refuses_execution(monkeypatch: pytest.MonkeyPatch) -> None:
     if not await ping_db():
         pytest.skip("database not reachable")
-    monkeypatch.setattr(policy, "evaluate", lambda tool: "deny")
+    monkeypatch.setattr(policy, "evaluate", lambda tool, args=None: "deny")
     async with SessionLocal() as s:
         try:
             tid, rid, run = await _seed(s)

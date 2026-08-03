@@ -17,7 +17,12 @@ from app.core import execute_run
 from app.db import SessionLocal, ping_db
 from app.models import ApprovalEnvelope, AuditReceipt, EffectInvocation, Run, Tenant, User
 from app.models import Session as SessionModel
-from app.permissions.grants import find_matching_grant, rule_matches
+from app.permissions.grants import (
+    PlatformGrant,
+    find_matching_grant,
+    is_platform_safe_command,
+    rule_matches,
+)
 from app.providers import Finish, MockProvider, TextDelta, ToolCall
 from app.services import Forbidden
 from app.services import grants as grant_svc
@@ -68,6 +73,54 @@ def test_matcher_exact_recipient() -> None:
     assert not rule_matches("email_send", {"recipients": ["me@x.com"]}, {"to": "other@x.com"})
     assert not rule_matches("email_send", {"recipients": []}, {"to": "me@x.com"})
     assert not rule_matches("todo_list", {"recipients": ["me@x.com"]}, {"to": "me@x.com"})
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -q",
+        "python -m pytest tests/test_x.py",
+        "python -m compileall src",
+        "ruff check .",
+        "ruff format --check .",
+        "pwd",
+        "ls -la src",
+        "cat pyproject.toml",
+    ],
+)
+def test_platform_safe_commands(command: str) -> None:
+    assert is_platform_safe_command(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -q; rm -rf /work",
+        "pytest | tee out",
+        "ruff check . > result.txt",
+        "echo $(cat /etc/passwd)",
+        "X=1 pytest",
+        "python script.py",
+        "sh -c 'pytest'",
+        "pytest\nrm -rf /work",
+        "pytest &",
+    ],
+)
+def test_platform_safe_command_rejects_shell_composition(command: str) -> None:
+    assert not is_platform_safe_command(command)
+
+
+@pytest.mark.asyncio
+async def test_find_matching_grant_returns_platform_safe_command() -> None:
+    async with SessionLocal() as s:
+        grant = await find_matching_grant(
+            s,
+            tenant_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            tool_name="sh_exec",
+            args={"command": "pytest -q"},
+        )
+        assert isinstance(grant, PlatformGrant)
 
 
 @pytest.mark.asyncio

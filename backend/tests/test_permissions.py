@@ -28,12 +28,27 @@ from app.main import app
 from app.models import ApprovalEnvelope, EffectInvocation, EventJournal, Run, Tenant, User
 from app.models import Session as SessionModel
 from app.permissions import request_approval
+from app.permissions.service import build_preview
 from app.providers import Finish, MockProvider, TextDelta, ToolCall
 from app.redis_client import ping_redis
 from app.tools import build_default_registry
 from tests.db_guard import drop_owner_tenant
 
 _ARGS: dict[str, object] = {"to": "a@b.com", "subject": "Hi", "body": "Hello there"}
+
+
+def test_sensitive_fs_and_shell_previews_exclude_file_contents() -> None:
+    fs = build_preview(
+        "fs_write",
+        {"path": ".env", "content": "SECRET=do-not-persist", "if_hash": "0" * 64},
+    )
+    assert "SECRET" not in str(fs)
+    assert ".env" in str(fs)
+    sh = build_preview(
+        "sh_exec",
+        {"runtime_session_id": uuid.uuid4(), "command": "rm -rf /work/tmp"},
+    )
+    assert "rm -rf /work/tmp" in str(sh)
 
 
 async def _drop_owner() -> None:

@@ -227,7 +227,7 @@ async def _run_tool_impl(  # type: ignore[no-untyped-def]
     #   allow → execute;  ask → approval envelope (not performed);  deny → refuse.
     # Pre-authorization (ADR-034): a matching owner grant flips `ask` → auto-allow;
     # the action still records its effect + an audit receipt (auto_approved_by_grant).
-    decision = perm_policy.evaluate(tool)
+    decision = perm_policy.evaluate(tool, call.args)
     if decision == "ask" and decider_user_id is not None:
         grant = await find_matching_grant(
             session,
@@ -294,6 +294,7 @@ async def _run_tool_impl(  # type: ignore[no-untyped-def]
             return "gated"
         # Grant matched → auto-allow. Record the pre-authorized decision for audit,
         # then fall through to execute exactly like a normal allow.
+        grant_source = getattr(grant, "source", "owner")
         await record_receipt(
             session,
             tenant_id=run.tenant_id,
@@ -304,12 +305,13 @@ async def _run_tool_impl(  # type: ignore[no-untyped-def]
             outcome="auto_approved",
             run_id=run.id,
             invocation_id=handle.invocation_id,
-            subject_type="permission_grant",
+            subject_type="platform_grant" if grant_source == "platform" else "permission_grant",
             subject_id=grant.id,
             summary={
                 "auto_approved_by_grant": True,
                 "grant_id": str(grant.id),
-                "permission_scope": perm_policy.permission_scope(tool.name),
+                "grant_source": grant_source,
+                "permission_scope": perm_policy.permission_scope(tool.name, call.args),
             },
             reversible=True,
         )

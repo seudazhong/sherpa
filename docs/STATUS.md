@@ -45,6 +45,15 @@ is explicit, and reverting to the saved bytes removes the overlay instead of lea
 `modified` entry. The tools are FULL-flat and not SAFE, per the owner decision. The legacy
 `project_tree` / `project_read` / `project_run` remain until P4.6 cutover.
 
+**✅ P4.3a temporary args-aware policy shipped (2026-08-03).** The existing policy now accepts
+tool arguments without introducing P2 descriptors. Normal `fs_*` overlay writes remain allow;
+credential-shaped paths, `.github/workflows`, `.github` and recursive deletes ask. Approval previews
+show the normalized path but never `content` / `old_text` / `new_text`. `sh_exec` remains ask, with
+only a conservative platform matcher auto-allowing `pytest`, bounded `python -m pytest|compileall`,
+`ruff check`, `ruff format --check`, `pwd`, `ls` and `cat` when the command contains no composition,
+redirection, substitution, newline or environment assignment. The platform decision is audited with
+a stable grant identity; owner email grants are unchanged.
+
 **✅ Phase TR P3 is CLOSED (owner-accepted 2026-08-01).** The transport half of B-8 is done and
 the 128 MiB workspace/change-set cap is an accepted product trade-off (see the P3 block below).
 **B-8 itself stays OPEN** — its close criterion is the *human* Run/Stop lane, which is **P5**.

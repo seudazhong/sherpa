@@ -13,8 +13,11 @@ tool = register a matcher + a `derive` rule (for the `always` → persist-grant 
 
 from __future__ import annotations
 
+import dataclasses
+import shlex
 import uuid
 from collections.abc import Callable
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +27,44 @@ from app.models import PermissionGrant
 Rule = dict[str, object]
 Args = dict[str, object]
 Matcher = Callable[[Rule, Args], bool]
+
+_PLATFORM_SAFE_COMMAND_GRANT_ID = uuid.uuid5(
+    uuid.NAMESPACE_URL, "sherpa:platform-grant:sh-safe-command-v1"
+)
+_SHELL_META = (";", "&", "|", "<", ">", "`", "$(", "${", "\n", "\r", "\x00")
+
+
+@dataclasses.dataclass(frozen=True)
+class PlatformGrant:
+    id: uuid.UUID
+    source: Literal["platform"] = "platform"
+
+
+def is_platform_safe_command(command: object) -> bool:
+    """Conservative allowlist for common read/test commands inside the offline sandbox.
+
+    Any shell composition, redirection, substitution or environment assignment falls back
+    to the normal approval path. False negatives cost one approval; false positives execute.
+    """
+    raw = str(command or "").strip()
+    if not raw or any(token in raw for token in _SHELL_META):
+        return False
+    try:
+        argv = shlex.split(raw, posix=True)
+    except ValueError:
+        return False
+    if not argv or "=" in argv[0]:
+        return False
+    command_name = argv[0]
+    if command_name in {"pwd", "ls", "cat", "pytest"}:
+        return True
+    if argv[:3] == ["python", "-m", "pytest"]:
+        return True
+    if argv[:3] == ["python", "-m", "compileall"]:
+        return True
+    if argv[:2] == ["ruff", "check"]:
+        return True
+    return argv[:3] == ["ruff", "format", "--check"]
 
 
 def _recipients(rule: Rule) -> set[str]:
@@ -76,8 +117,10 @@ async def find_matching_grant(
     user_id: uuid.UUID,
     tool_name: str,
     args: Args,
-) -> PermissionGrant | None:
+) -> PermissionGrant | PlatformGrant | None:
     """Return an active owner grant whose rule matches this action, or None."""
+    if tool_name == "sh_exec" and is_platform_safe_command(args.get("command")):
+        return PlatformGrant(_PLATFORM_SAFE_COMMAND_GRANT_ID)
     matcher = _MATCHERS.get(tool_name)
     if matcher is None:
         return None
