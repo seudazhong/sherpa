@@ -691,11 +691,12 @@ human Run button, streaming log, Stop or Runs tab — those are P5, so B-8 remai
 
 | # | Task | Paths | AC |
 |---|---|---|---|
+| P5.0 | Reconcile human effective-tree/history/rebase contracts before code | ADR-048 revision F · api §10.7 · STATUS | Full-file read is non-truncating/refusing; one shared SSE; no duplicate file/runtime logic |
 | P5.1 | Three-column Project-bound chat layout | `frontend/src/views/ChatView.tsx`, `frontend/src/styles.css` | Tree / conversation / right panel; 390 px overflow = 0 |
-| P5.2 | Editable file tree writing the same overlay as the agent | new `frontend/src/components/ProjectTree.tsx`, `frontend/src/api.ts` | A human edit and an agent edit appear in **one** change set |
+| P5.2 | Editable effective-tree adapter + UI | backend session-bound project-files routes; new `frontend/src/components/ProjectTree.tsx`, `frontend/src/api.ts` | Whole-file/refuse semantics; hash guard; human+agent edits in one change set; never uses head-only tree |
 | P5.3 | Run control + streaming log panel + Stop | new `frontend/src/components/RunPanel.tsx` | Real streaming output; Stop cancels; the dead `createSandboxRun` client is replaced |
-| P5.4 | `Changes / Runs / Artifacts` tabs; Runs shows history with named termination reasons | `frontend/src/components/ChangeReview.tsx` + new `RunsPanel.tsx` | A failed run shows an explicit banner (the pre-existing observability gap noted in the W3 exit) |
-| P5.5 | One-click rebase-review on `409 head_moved` | `frontend/src/components/ChangeReview.tsx` | Conflict offers a path forward, not only a message |
+| P5.4 | `Changes / Runs / Artifacts` tabs + cross-runtime history API | `frontend/src/components/ChangeReview.tsx` + new `RunsPanel.tsx` | A failed run shows command/exit/reason/output; artifacts keep/export unchanged |
+| P5.5 | One-click rebase-review on `409 head_moved` | backend rebase service/route + `ChangeReview.tsx` + structured `ApiError.body` | Lock, rebase/canonicalize, supersede stale review, present fresh review; never auto-Save |
 | P5.V | **Two-lane Playwright + UX acceptance** (restart the stack first) | — | Agent lane and human lane both pass; matrix UI cells flip to ✅ only after a **real click**; UX notes recorded |
 
 **P5 exit (this closes B-8):** the human lane exists and works end-to-end; `docs/11` §9 has no

@@ -2217,6 +2217,33 @@ class ExecRun(StrictModel):
     created_at: datetime
 ```
 
+```python
+class ProjectFileEntry(StrictModel):
+    path: Annotated[str, Field(max_length=1024)]
+    entry_kind: Literal["file", "dir", "symlink"]
+    size_bytes: int
+    executable: bool
+    content_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None
+
+class ProjectFilePage(StrictModel):
+    entries: list[ProjectFileEntry]
+    returned_count: int
+    truncated: bool
+
+class ProjectFileContent(StrictModel):
+    path: Annotated[str, Field(max_length=1024)]
+    content: Annotated[str, Field(max_length=1_000_000)]
+    content_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    executable: bool
+    size_bytes: int
+
+class ProjectFileWrite(StrictModel):
+    path: Annotated[str, Field(min_length=1, max_length=1024)]
+    content: Annotated[str, Field(max_length=1_000_000)]
+    executable: bool = False
+    if_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+```
+
 `WorkingCopySummary` (shipped) replaces its `sandbox: SandboxRunState | None` field with
 `runtime: RuntimeSessionState | None` and `last_exec: ExecRun | None`.
 
@@ -2239,13 +2266,19 @@ the current `project_sandbox_runs` path; the routes and payloads in this section
 | Route | Body → response | Auth | Status |
 |---|---|---|---|
 | `GET /sessions/{id}/working-copy` | none → `WorkingCopySummary \| null` | Session | `200`, `401`, `404` |
+| `GET /sessions/{id}/project-files?path=&limit=` | none → `ProjectFilePage` (effective tree) | Session | `200`, `401`, `404`, `422` |
+| `GET /sessions/{id}/project-files/content?path=` | none → `ProjectFileContent` (whole UTF-8 file or `413`) | Session | `200`, `401`, `404`, `413`, `422` |
+| `PUT /sessions/{id}/project-files/content` | `ProjectFileWrite` → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404`, `409`, `413`, `422`, `507` |
+| `DELETE /sessions/{id}/project-files/content?path=&recursive=&if_hash=` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404`, `409`, `413`, `422` |
 | `POST /projects/{id}/runtime` | `RuntimeOpenRequest` → `RuntimeSessionState` | Session + CSRF | `202`, `401`, `404`, `409`, `422`, `507` |
 | `GET /runtime/{rid}` | none → `RuntimeSessionState` | Session | `200`, `401`, `404` |
 | `POST /runtime/{rid}/exec` | `ExecRequest` → `ExecRun` | Session + CSRF | `202`, `401`, `404`, `409`, `422` |
 | `GET /runtime/{rid}/exec/{eid}` | none → `ExecRun` | Session | `200`, `401`, `404` |
 | `POST /runtime/{rid}/cancel` | none → `RuntimeSessionState` | Session + CSRF | `202`, `401`, `404`, `409` |
 | `DELETE /runtime/{rid}` | none → `RuntimeSessionState` | Session + CSRF | `200`, `401`, `404` |
+| `GET /sessions/{id}/runtime-execs?limit=` | none → `list[ExecRun]` across runtimes | Session | `200`, `401`, `404`, `422` |
 | `GET /projects/{id}/working-copies/{wc_id}` | none → `WorkingCopySummary` | Session | `200`, `401`, `404` |
+| `POST /projects/{id}/working-copies/{wc_id}/rebase-review` | none → `WorkingCopySummary` | Session + CSRF | `200`, `401`, `404`, `409`, `422`, `507` |
 | `GET /projects/{id}/change-sets/{cs_id}?cursor=&limit=` | none → `ChangeSet` | Session | `200`, `401`, `404`, `422` |
 | `GET /projects/{id}/change-sets/{cs_id}/entries/{entry_id}/diff` | none → bounded unified-diff text | Session | `200`, `401`, `404`, `413` |
 | `POST /projects/{id}/change-sets/{cs_id}/apply` | `ChangeSetApply` → `ProjectSummary` | Session + CSRF | `200`, `401`, `404`, `409`, `422`, `507` |
@@ -2270,6 +2303,13 @@ the current `project_sandbox_runs` path; the routes and payloads in this section
   atomically opens the durable working copy at `base_snapshot_id = current_snapshot_id`
   (recording `base_head_generation`). Multiple chats on one Project get **isolated** working
   copies; a General chat has none.
+- **Human file adapter `[target]` (P5).** The `/sessions/{id}/project-files*` routes read and
+  mutate the same effective tree/overlay as `fs_*`; they never use head-only
+  `/projects/{id}/tree` for the editor. Content GET either returns the entire UTF-8 file
+  (≤1,000,000 bytes) or refuses with `413` — no paginated/truncated content may be saved as a
+  whole file. PUT uses `if_hash` to reject stale editor buffers. A ready RuntimeSession cache
+  is invalidated by the shared host-side mutation service; an executing runtime returns `409
+  runtime_busy`.
 - **`POST /projects/{id}/runtime`** acquires the working copy's single-writer lease/fence,
   materializes `base snapshot + persisted overlay` into an **in-memory tar**, strips/asserts
   no credentials (`.env*`, `*.pem`, `*.key`, `id_*`, `.git/config`), and `put_archive`s it
@@ -2296,6 +2336,12 @@ the current `project_sandbox_runs` path; the routes and payloads in this section
   conversation / `Changes · Runs · Artifacts`), with an editable tree, a real **Run**
   control, a streaming log panel and **Stop**. Human edits and agent edits land in the
   **same overlay** and are reviewed together. A Plan object is deferred (ADR-048 §决策9).
+- **Rebase review `[target]` (P5).** A `409 head_moved` never auto-applies. The explicit
+  `rebase-review` action locks the conflicted working copy, requires no executing runtime,
+  captures its overlay, switches base snapshot/generation to the current head, restores a
+  live review state, canonicalizes the captured deltas through `persist_overlay`, marks stale
+  conflicted change sets `superseded`, and builds a fresh change set. The user must review and
+  press Save again.
 
 **Runtime liveness and host-edit synchronization `[target]`.**
 

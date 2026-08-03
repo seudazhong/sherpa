@@ -980,6 +980,20 @@
 > Docker，重复投递看到 claim 即退出。恢复 tick 只重发无 claim 的 pending job；
 > claim 超时由维护任务按失败/重建缓存处理。arq 的 runtime job 全部 `max_tries=1`，
 > exec job timeout 高于 API 允许的 900 秒加持久化尾部，禁止 arq 与 Sherpa 双重重试。
+>
+> **修订 F（2026-08-03，P5 human workspace）**：
+> ① ProjectTree 必须读取 **effective tree**，绝不复用 head-only 的
+> `GET /projects/{id}/tree`；新增 session-bound human file REST，直接调用
+> `project_fs`，人的编辑与 agent 编辑进入同一个 overlay。human `GET content` 返回
+> **完整** UTF-8 文件或明确 `413`，绝不把 tool 的 2000 行窗口误当完整文件再覆盖。
+> ② human edit 不关闭 RuntimeSession；existing `project_fs` 原子使 ready hot container
+> 失效，下一次 Run 在同一 runtime id 上重新物化；executing 时返回 `runtime_busy`。
+> ③ ChatView 保持唯一 session EventSource，并把 `runtime.state/output` 状态下发 RunPanel，
+> 不为右栏另开 SSE。
+> ④ Runs tab 按 chat 跨 RuntimeSession 列 `project_exec_runs`；Artifacts 复用既有 API。
+> ⑤ `head_moved` 的一键 rebase 在行锁内把 conflicted working copy 切到当前 head、
+> 先恢复 live state、再复用 canonical `persist_overlay` 重放旧 overlay，旧 conflicted
+> change set 标 `superseded`，生成新的 review；Save 仍人工专属。
 
 - **核心判断：file 与 shell 必须分层，不能一刀切**：
 
@@ -1026,6 +1040,10 @@
         内容，否则零修改地返回冲突。`fs_edit` 继续以 `old_text` +
         `expect_occurrences` 作锚定 CAS。目录删除必须显式 `recursive=true`，根目录永不允许删。
       - 读操作在没有 working copy 时读取当前 head；首个 mutation 才惰性打开 working copy。
+  12. **P5 human adapter（修订 F）**：UI 不是第二套文件/执行逻辑。ProjectTree 调
+      session-bound effective-tree REST；RunPanel 调 P4 worker-owned runtime REST；Changes /
+      Runs / Artifacts 只是已有 durable rows 的投影。桌面三栏，移动端折叠为 pane tabs，
+      General Chat 保持单栏。
 
 - **验收关键**：agent 泳道完成一个真实循环（读代码 → 改 → 跑测试 → 看到失败 → 再改 → 通过）；**沙箱强制关闭时 `fs.*` 全部仍可用**（降级不瘫痪）；`sh_exec("rm -rf /work")` 触发审批且预览含确切命令；每个失败注入映射到唯一具名 `termination_reason` 并在 UI 与模型观察里可区分；人工泳道能点 Run、看到流式日志、能 Stop；能力矩阵（docs/11 §9）相关行 UI 单元格**经真实点击验证**后才置 ✅。
 
