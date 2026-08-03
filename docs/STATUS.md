@@ -48,6 +48,15 @@ the same reviewable overlay as agent `fs_*`. The editor uses content hashes, ser
 Browser acceptance created `p5_human.txt`, edited it, and immediately showed the same file in the
 tree and Change Review. P5.3 now connects Run/stream/Stop to the shared session SSE.
 
+**✅ P5.3 Run / streaming log / Stop shipped (2026-08-03).** RunPanel uses ChatView's single
+session EventSource for `runtime.output`, while durable REST polling owns ready/terminal state.
+It opens or rematerializes the P4 RuntimeSession, posts worker-owned execs, streams bounded
+stdout/stderr, exposes Stop, and refreshes the working copy on settlement. Real click acceptance
+showed `stop-now` while a 120-second command was still active, then Stop settled it
+`cancelled` without `never-print`. The pass also caught and fixed a missing Vite `/runtime`
+proxy that P4's tool-only lane could not expose. New work is blocked on a conflicted working copy
+until P5.5 rebase-review.
+
 **✅ P4.3 host-side `fs_*` shipped (2026-08-03).** `fs_list` / `fs_read` / `fs_grep` read
 the Project-bound chat's persisted effective tree without opening a container; `fs_write` /
 `fs_edit` / `fs_delete` lazily open the working copy and stage content-addressed, fence-guarded

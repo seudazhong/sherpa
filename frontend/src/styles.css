@@ -986,6 +986,95 @@ input[type="file"]::file-selector-button {
   margin: 8px 10px 10px;
 }
 
+.run-panel {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 14px 14px;
+  background: var(--surface);
+}
+
+.run-panel > header,
+.run-panel > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.run-panel > header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.run-panel > header strong {
+  font-size: 13px;
+}
+
+.run-panel > header span,
+.run-panel > footer {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.run-command {
+  display: flex;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.run-command input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: #fbfbfa;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.run-output {
+  min-height: 96px;
+  max-height: 260px;
+  overflow: auto;
+  margin-top: 9px;
+  border: 1px solid #26332d;
+  border-radius: 9px;
+  padding: 9px 10px;
+  background: #17211d;
+  color: #dce8e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.run-output pre {
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-output pre.stderr {
+  color: #ffb4aa;
+}
+
+.run-output .muted {
+  color: #8da198;
+}
+
+.run-panel > footer {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 7px;
+}
+
+.run-panel > footer span + span::before {
+  content: "·";
+  margin-right: 7px;
+}
+
 .project-pane-tabs {
   display: none;
 }

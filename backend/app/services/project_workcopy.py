@@ -136,6 +136,16 @@ async def open_working_copy(
     existing = await get_live(db, ctx, session_id=session_id)
     if existing is not None:
         return existing
+    conflicted = await db.scalar(
+        select(ProjectWorkingCopy.id).where(
+            ProjectWorkingCopy.tenant_id == ctx.tenant_id,
+            ProjectWorkingCopy.session_id == session_id,
+            ProjectWorkingCopy.user_id == uid,
+            ProjectWorkingCopy.state == "conflicted",
+        )
+    )
+    if conflicted is not None:
+        raise Conflict("working_copy_conflicted")
     if session.project_id is None:
         raise Invalid("session is not bound to a project (General chat has no working copy)")
     project = await db.get(Project, (ctx.tenant_id, session.project_id))

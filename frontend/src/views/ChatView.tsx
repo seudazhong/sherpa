@@ -25,6 +25,10 @@ import { useAuth } from "../auth";
 import { ChangeReview } from "../components/ChangeReview";
 import { ModelSwitcher } from "../components/ModelSwitcher";
 import { ProjectTree } from "../components/ProjectTree";
+import {
+  RunPanel,
+  type RuntimeStreamFrame,
+} from "../components/RunPanel";
 import Sidebar from "../components/Sidebar";
 import {
   MAX_ATTACHMENTS,
@@ -62,8 +66,9 @@ interface Activity {
 
 interface Envelope {
   event_id: string;
+  id?: string;
   type: string;
-  session_seq: number;
+  session_seq?: number;
   payload: Record<string, unknown>;
 }
 
@@ -328,6 +333,7 @@ export default function ChatView() {
   const [pickerNodes, setPickerNodes] = useState<DriveNode[]>([]);
   const [pickerQuery, setPickerQuery] = useState("");
   const [visionOk, setVisionOk] = useState(true);
+  const [runtimeFrames, setRuntimeFrames] = useState<RuntimeStreamFrame[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const insufficientRef = useRef(false);
   const esRef = useRef<EventSource | null>(null);
@@ -351,8 +357,15 @@ export default function ChatView() {
   const openStream = useCallback((sid: string, cursor: string) => {
     const es = new EventSource(eventsUrl(sid, cursor));
     esRef.current = es;
-    const parse = (e: Event) =>
-      JSON.parse((e as MessageEvent).data) as Envelope;
+    const parse = (e: Event) => {
+      const raw = JSON.parse((e as MessageEvent).data) as Partial<Envelope>;
+      return {
+        ...raw,
+        event_id: raw.event_id ?? raw.id ?? crypto.randomUUID(),
+        type: raw.type ?? "",
+        payload: raw.payload ?? {},
+      } as Envelope;
+    };
 
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
@@ -445,6 +458,19 @@ export default function ChatView() {
         },
       ]);
     });
+    const pushRuntimeFrame = (type: RuntimeStreamFrame["type"], event: Event) => {
+      const env = parse(event);
+      const key = env.event_id ?? env.id ?? crypto.randomUUID();
+      setRuntimeFrames((frames) =>
+        [...frames.slice(-499), { key, type, payload: env.payload }],
+      );
+    };
+    es.addEventListener("runtime.state", (event) =>
+      pushRuntimeFrame("runtime.state", event),
+    );
+    es.addEventListener("runtime.output", (event) =>
+      pushRuntimeFrame("runtime.output", event),
+    );
   }, [ingestCitations]);
 
   // R1: rebuild the citation map for an already-persisted transcript by replaying
@@ -529,6 +555,7 @@ export default function ChatView() {
       setCites({});
       setProjectCtx(null);
       setWorkingCopy(null);
+      setRuntimeFrames([]);
       setProjectPane("conversation");
       insufficientRef.current = false;
       setRunning(false);
@@ -1167,18 +1194,35 @@ export default function ChatView() {
                 </div>
               </header>
               {workingCopy ? (
-                <ChangeReview
-                  projectId={projectCtx.project_id}
-                  csrf={csrf}
-                  workingCopy={workingCopy}
-                  onChanged={() => void refreshWorkingCopy()}
-                />
+                <>
+                  {sessionId && (
+                    <RunPanel
+                      projectId={projectCtx.project_id}
+                      sessionId={sessionId}
+                      csrf={csrf}
+                      workingCopy={workingCopy}
+                      frames={runtimeFrames}
+                      onWorkingCopy={setWorkingCopy}
+                    />
+                  )}
+                  <ChangeReview
+                    projectId={projectCtx.project_id}
+                    csrf={csrf}
+                    workingCopy={workingCopy}
+                    onChanged={() => void refreshWorkingCopy()}
+                  />
+                </>
               ) : (
-                <div className="project-pane-empty">
-                  <span aria-hidden="true">✓</span>
-                  <strong>No pending workspace</strong>
-                  <p>Edits and run results will appear here.</p>
-                </div>
+                sessionId && (
+                  <RunPanel
+                    projectId={projectCtx.project_id}
+                    sessionId={sessionId}
+                    csrf={csrf}
+                    workingCopy={null}
+                    frames={runtimeFrames}
+                    onWorkingCopy={setWorkingCopy}
+                  />
+                )
               )}
             </aside>
           )}

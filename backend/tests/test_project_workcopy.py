@@ -245,6 +245,8 @@ async def test_save_conflicts_when_head_moved() -> None:
                 await wc_svc.save(s, ctx, wc)
             assert ei.value.message == "head_moved"
             assert wc.state == "conflicted"
+            with pytest.raises(Conflict, match="working_copy_conflicted"):
+                await wc_svc.open_working_copy(s, ctx, session_id=session.id)
         finally:
             await s.rollback()
 
