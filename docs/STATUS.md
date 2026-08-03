@@ -36,6 +36,15 @@ P4.0 contracts, then P4.1 forward migration, P4.3 host-side `fs_*`, P4.2/P4.4 Ru
 `sh_exec` + worker REST, P4.6 cutover and P4.7 route inventory. Then P5 supplies the human
 three-column Run/Stop lane and closes B-8.
 
+**✅ P4.3 host-side `fs_*` shipped (2026-08-03).** `fs_list` / `fs_read` / `fs_grep` read
+the Project-bound chat's persisted effective tree without opening a container; `fs_write` /
+`fs_edit` / `fs_delete` lazily open the working copy and stage content-addressed, fence-guarded
+overlay changes plus a rebuilt Change Set. Reads do not create a working copy, `fs_read` returns
+the current hash, `if_hash` and anchored-edit conflicts mutate nothing, recursive directory delete
+is explicit, and reverting to the saved bytes removes the overlay instead of leaving a false
+`modified` entry. The tools are FULL-flat and not SAFE, per the owner decision. The legacy
+`project_tree` / `project_read` / `project_run` remain until P4.6 cutover.
+
 **✅ Phase TR P3 is CLOSED (owner-accepted 2026-08-01).** The transport half of B-8 is done and
 the 128 MiB workspace/change-set cap is an accepted product trade-off (see the P3 block below).
 **B-8 itself stays OPEN** — its close criterion is the *human* Run/Stop lane, which is **P5**.

@@ -68,6 +68,7 @@ def build_default_registry() -> ToolRegistry:
     from app.tools.candidate_tools import candidate_tools
     from app.tools.connector_tools import connector_tools
     from app.tools.drive_tools import drive_tools
+    from app.tools.fs_tools import fs_tools
     from app.tools.insight_tools import insight_tools
     from app.tools.knowledge_tools import knowledge_tools
     from app.tools.memory_tools import memory_tools
@@ -83,6 +84,7 @@ def build_default_registry() -> ToolRegistry:
         *insight_tools(),
         *memory_tools(),
         *drive_tools(),
+        *fs_tools(),
         *knowledge_tools(),
         *project_tools(),
     ]:

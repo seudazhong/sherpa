@@ -48,10 +48,13 @@ from app.models import (
 from app.models import Session as SessionModel
 from app.services import drive as drive_svc
 from app.services import projects as projects_svc
+from app.services.archive import ArchiveError, _normalize_path
 from app.services.context import CallerContext
 from app.services.errors import Conflict, InsufficientStorage, Invalid, NotFound
 
 _LIVE_STATES = ("open", "ready_for_review")
+_MAX_PATH_DEPTH = 64
+_MAX_PATH_LENGTH = 1024
 
 
 def _now() -> datetime.datetime:
@@ -307,10 +310,12 @@ async def persist_overlay(
     if fence_token < wc.fence_token:
         return False  # stale fence — cannot publish
 
+    base = await _base_entries(db, ctx.tenant_id, wc.base_snapshot_id)
     for d in deltas:
-        path = d.path.strip().strip("/")
-        if not path or path.startswith("/") or ".." in path:
-            raise Invalid(f"unsafe overlay path: {d.path}")
+        try:
+            path = _normalize_path(d.path, depth_cap=_MAX_PATH_DEPTH, length_cap=_MAX_PATH_LENGTH)
+        except ArchiveError as exc:
+            raise Invalid(f"unsafe overlay path: {d.path}") from exc
         if d.change_kind not in ("added", "modified", "deleted"):
             raise Invalid(f"bad change_kind: {d.change_kind}")
         existing = await db.scalar(
@@ -323,6 +328,29 @@ async def persist_overlay(
         if existing is not None:
             await db.delete(existing)
             await db.flush()
+
+        base_entry = base.get(path)
+        if d.change_kind == "deleted":
+            # Deleting a path created only in the overlay reverts it to absence; a whiteout
+            # is required only when the saved base actually contains the path.
+            if base_entry is None:
+                continue
+            canonical_kind = "deleted"
+        else:
+            if d.content_hash is None:
+                raise Invalid(f"content_hash required for {d.change_kind}: {path}")
+            if (
+                base_entry is not None
+                and base_entry.entry_kind == d.entry_kind
+                and base_entry.content_hash == d.content_hash
+                and base_entry.executable == d.executable
+                and base_entry.symlink_target == d.symlink_target
+            ):
+                # The mutation restored the saved bytes exactly. Removing the old overlay
+                # entry is the canonical representation; do not leave a fake "modified".
+                continue
+            canonical_kind = "modified" if base_entry is not None else "added"
+
         db.add(
             ProjectWorkingCopyEntry(
                 tenant_id=ctx.tenant_id,
@@ -330,7 +358,7 @@ async def persist_overlay(
                 working_copy_id=wc.id,
                 user_id=wc.user_id,
                 path=path,
-                change_kind=d.change_kind,
+                change_kind=canonical_kind,
                 entry_kind=d.entry_kind,
                 content_hash=d.content_hash,
                 size_bytes=d.size_bytes,
@@ -346,8 +374,7 @@ async def persist_overlay(
     if run_id is not None:
         wc.last_run_id = run_id
     wc.expires_at = _now() + datetime.timedelta(seconds=settings.working_copy_idle_ttl_seconds)
-    if wc.overlay_entry_count > 0:
-        wc.state = "ready_for_review"
+    wc.state = "ready_for_review" if wc.overlay_entry_count > 0 else "open"
     await db.flush()
     return True
 
