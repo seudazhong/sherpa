@@ -3134,6 +3134,8 @@ CREATE TABLE project_runtime_sessions (
     base_snapshot_id uuid,                            -- snapshot materialized into the tar
     fence_token      bigint,                          -- working-copy fence held by this session
     state            text NOT NULL DEFAULT 'opening', -- opening|ready|executing|closing|closed|failed
+    operation_id     uuid,                            -- cross-worker open/close claim
+    operation_kind   text,                            -- open|close; nullable with operation_id
     container_ref    text,                            -- docker container id (operational only)
     image            text NOT NULL,
     image_digest     text,                            -- pinned digest actually started
@@ -3158,6 +3160,10 @@ CREATE TABLE project_runtime_sessions (
         REFERENCES users (tenant_id, id) ON DELETE CASCADE,
     CONSTRAINT ck_prs_scope CHECK (scope IN ('project','ephemeral')),
     CONSTRAINT ck_prs_state CHECK (state IN ('opening','ready','executing','closing','closed','failed')),
+    CONSTRAINT ck_prs_operation CHECK (
+        (operation_id IS NULL AND operation_kind IS NULL)
+     OR (operation_id IS NOT NULL AND operation_kind IN ('open','close'))
+    ),
     -- a project-scoped session must carry its project/working copy; an ephemeral one must not
     CONSTRAINT ck_prs_scope_binding CHECK (
         (scope = 'project'   AND project_id IS NOT NULL AND working_copy_id IS NOT NULL)
@@ -3277,6 +3283,10 @@ Notes:
   unexpired live `container_ref`; the P3 one-shot age threshold is not sufficient for a P4 session.
   `project_exec_runs.invocation_id` makes agent exec dispatch idempotent after the effect invocation
   is committed. `cancel_requested_at` is the committed cross-process cancellation signal.
+- **Open/close worker claim.** `operation_id` + `operation_kind` serialize Docker I/O across
+  explicit enqueue, recovery enqueue and duplicate delivery. Product state alone is insufficient:
+  two workers may both observe `opening`. A worker claims in one transaction, performs Docker I/O
+  outside it, then settles only if its claim still matches.
 - **Isolation & credentials (ADR-039 + ADR-047; report §10.7/§11).** The sandbox receives the working
   copy as a **tar-injected disposable copy in an anonymous `/work` volume** and **mounts no host path
   at all** — never the Project snapshot, `storage_blobs`/MinIO, another Project,

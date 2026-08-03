@@ -65,7 +65,13 @@ the persist-before-dispatch effect invocation.
 need carry only the exec row id; the worker never reconstructs work from queue payloads or a
 truncated preview. The full command remains outside journal/log/API projections.
 
-**✅ P4.2 + P4.4 core RuntimeSession shipped (2026-08-03; REST job adapter still pending).**
+**✅ P4.1c cross-worker RuntimeSession claim shipped (2026-08-03).** Migration `0006` adds
+nullable-together `operation_id` / `operation_kind(open|close)`. Open/close workers claim before
+Docker I/O; duplicate or recovery delivery exits instead of creating/removing the same cache twice.
+Runtime arq jobs use `max_tries=1`; the exec job timeout exceeds the API's 900-second maximum plus
+the bounded persistence tail.
+
+**✅ P4.2 + P4.4 core RuntimeSession shipped (2026-08-03).**
 `runtime_open` creates a durable opening row before Docker, tar-injects the effective tree into one
 hardened long-lived container, probes `capabilities.json`, and returns a reusable runtime id.
 `sh_exec` commits the agent invocation before Docker exec, streams bounded cursor-less debug frames,
@@ -74,7 +80,15 @@ Host `fs_*` edits atomically invalidate/remove the hot container; the next exec 
 the latest overlay. Cancel is a committed cross-process signal; timeout/cancel/OOM persist the egress
 boundary before the stopped container is removed. Runtime `expires_at` now drives crash recovery,
 and maintenance protects unexpired DB-live container refs from the P3 orphan age sweep. The P3
-one-shot path remains green. Remaining P4.4 work is the human REST/queue `202` adapter.
+one-shot path remains green.
+
+**✅ P4.4 worker-owned REST adapter shipped (2026-08-03).** The synchronous web-process
+`POST /projects/{id}/sandbox-runs` is gone. The replacement routes prepare durable rows and return
+immediately: `POST /projects/{id}/runtime`, `POST /runtime/{id}/exec`, cancel and close; arq workers
+perform all Docker I/O. Redis jobs carry only durable row ids, a 30-second recovery tick re-arms the
+commit→enqueue crash gap, open/close use cross-worker operation claims, prepared exec uses a locked
+queued→running claim, and arq retries are disabled in favor of Sherpa's recovery state machine.
+Frontend API types/client now use RuntimeSession/ExecRun; P5 still needs the actual Run/log/Stop UI.
 
 **✅ Phase TR P3 is CLOSED (owner-accepted 2026-08-01).** The transport half of B-8 is done and
 the 128 MiB workspace/change-set cap is an accepted product trade-off (see the P3 block below).

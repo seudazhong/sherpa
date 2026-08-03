@@ -42,6 +42,7 @@ _LIVE_RUNTIME_STATES = ("opening", "ready", "executing", "closing")
 _COMMAND_PREVIEW_MAX = 2000
 _OUTPUT_FIELD_MAX = 50_000
 _OPERATION_GRACE_SECONDS = 300
+_OPEN_CLOSE_JOB_TIMEOUT_SECONDS = 900
 
 
 @dataclasses.dataclass(frozen=True)
@@ -178,6 +179,8 @@ async def _activate_container(
     ctx: CallerContext,
     runtime: ProjectRuntimeSession,
     workspace: sbx.Workspace,
+    *,
+    operation_id: uuid.UUID,
 ) -> RuntimeAction:
     outcome = await sbx.open_runtime_workspace(workspace, session_label=str(runtime.id))
     runtime = await _owned_runtime(
@@ -187,10 +190,16 @@ async def _activate_container(
         session_id=runtime.session_id,
         lock=True,
     )
+    if runtime.operation_id != operation_id or runtime.operation_kind != "open":
+        if outcome.container_ref is not None:
+            await sbx.remove_runtime_container(outcome.container_ref)
+        raise Conflict("runtime_operation_lost")
     if outcome.result.error is not None or outcome.container_ref is None:
         runtime.state = "failed"
         runtime.termination_reason = outcome.result.error or sbx.RUNTIME_START_FAILED
         runtime.container_ref = None
+        runtime.operation_id = None
+        runtime.operation_kind = None
         runtime.expires_at = _now()
         await db.commit()
         note = failure_note(runtime.termination_reason)
@@ -205,6 +214,8 @@ async def _activate_container(
         await _publish_state(runtime)
         return RuntimeAction(runtime, note)
     runtime.container_ref = outcome.container_ref
+    runtime.operation_id = None
+    runtime.operation_kind = None
     runtime.image_digest = outcome.image_digest
     runtime.capabilities = outcome.capabilities
     runtime.ingress_bytes = outcome.result.ingress_bytes
@@ -288,7 +299,7 @@ async def prepare_runtime(
             if existing.state == "ready":
                 if existing.container_ref is None:
                     existing.state = "opening"
-                    existing.expires_at = _operation_expiry(settings.sandbox_run_timeout_seconds)
+                    existing.expires_at = _operation_expiry(_OPEN_CLOSE_JOB_TIMEOUT_SECONDS)
                     await db.commit()
                     await _publish_state(existing)
                     return RuntimeAction(existing), True
@@ -322,7 +333,7 @@ async def prepare_runtime(
         fence_token=fence,
         state="opening",
         image=settings.sandbox_image or "",
-        expires_at=_operation_expiry(settings.sandbox_run_timeout_seconds),
+        expires_at=_operation_expiry(_OPEN_CLOSE_JOB_TIMEOUT_SECONDS),
     )
     if wc is not None:
         wc.lease_owner = f"runtime:{runtime.id}"
@@ -351,6 +362,12 @@ async def activate_runtime(
         return RuntimeAction(runtime)
     if runtime.state != "opening":
         raise Conflict("runtime_not_opening")
+    if runtime.operation_id is not None:
+        raise Conflict("runtime_operation_in_progress")
+    operation_id = uuid.uuid4()
+    runtime.operation_id = operation_id
+    runtime.operation_kind = "open"
+    runtime.expires_at = _operation_expiry(_OPEN_CLOSE_JOB_TIMEOUT_SECONDS)
     await db.commit()
     try:
         workspace = await _workspace(db, ctx, runtime)
@@ -364,10 +381,12 @@ async def activate_runtime(
         )
         runtime.state = "failed"
         runtime.termination_reason = exc.code
+        runtime.operation_id = None
+        runtime.operation_kind = None
         runtime.expires_at = _now()
         await db.commit()
         return RuntimeAction(runtime, failure_note(exc.code))
-    return await _activate_container(db, ctx, runtime, workspace)
+    return await _activate_container(db, ctx, runtime, workspace, operation_id=operation_id)
 
 
 async def _ensure_ready(
@@ -393,11 +412,15 @@ async def _ensure_ready(
     if runtime.state != "ready" or runtime.container_ref is not None:
         raise Conflict("runtime_not_ready")
     runtime.state = "opening"
-    runtime.expires_at = _operation_expiry(settings.sandbox_run_timeout_seconds)
+    runtime.expires_at = _operation_expiry(_OPEN_CLOSE_JOB_TIMEOUT_SECONDS)
     await db.commit()
     await _publish_state(runtime)
-    workspace = await _workspace(db, ctx, runtime)
-    action = await _activate_container(db, ctx, runtime, workspace)
+    action = await activate_runtime(
+        db,
+        ctx,
+        session_id=runtime.session_id,
+        runtime_session_id=runtime.id,
+    )
     return action.runtime_session, action
 
 
@@ -466,6 +489,72 @@ async def _stage_delta(
     return change_set.id if change_set is not None else None, None
 
 
+def _validated_exec_request(command: str, timeout_seconds: int | None) -> tuple[str, int]:
+    cleaned = command.strip()
+    if not cleaned or len(cleaned) > 4000:
+        raise Invalid("command must be 1..4000 characters")
+    timeout = timeout_seconds or settings.sandbox_run_timeout_seconds
+    if not 1 <= timeout <= 900:
+        raise Invalid("timeout_seconds must be between 1 and 900")
+    return cleaned, timeout
+
+
+async def _next_exec_seq(
+    db: AsyncSession, ctx: CallerContext, runtime_session_id: uuid.UUID
+) -> int:
+    last_seq = await db.scalar(
+        select(func.coalesce(func.max(ProjectExecRun.seq), 0)).where(
+            ProjectExecRun.tenant_id == ctx.tenant_id,
+            ProjectExecRun.runtime_session_id == runtime_session_id,
+        )
+    )
+    return int(last_seq or 0) + 1
+
+
+async def prepare_exec(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    session_id: uuid.UUID,
+    runtime_session_id: uuid.UUID,
+    command: str,
+    timeout_seconds: int | None = None,
+) -> ProjectExecRun:
+    """Persist one human REST exec and mark the runtime busy without touching Docker."""
+    command, timeout = _validated_exec_request(command, timeout_seconds)
+    runtime = await _owned_runtime(
+        db,
+        ctx,
+        runtime_session_id=runtime_session_id,
+        session_id=session_id,
+        lock=True,
+    )
+    if runtime.state != "ready" or runtime.container_ref is None:
+        raise Conflict("runtime_not_ready")
+    exec_run = ProjectExecRun(
+        tenant_id=ctx.tenant_id,
+        id=uuid.uuid4(),
+        runtime_session_id=runtime.id,
+        run_id=None,
+        invocation_id=None,
+        seq=await _next_exec_seq(db, ctx, runtime.id),
+        command_text=command,
+        command_preview=command[:_COMMAND_PREVIEW_MAX],
+        timeout_seconds=timeout,
+        state="queued",
+    )
+    db.add(exec_run)
+    runtime.state = "executing"
+    runtime.expires_at = _operation_expiry(timeout)
+    if runtime.working_copy_id is not None:
+        wc = await db.get(ProjectWorkingCopy, (ctx.tenant_id, runtime.working_copy_id))
+        if wc is not None:
+            wc.lease_expires_at = runtime.expires_at
+    await db.commit()
+    await _publish_state(runtime, exec_run=exec_run)
+    return exec_run
+
+
 async def exec_runtime(
     db: AsyncSession,
     ctx: CallerContext,
@@ -476,89 +565,126 @@ async def exec_runtime(
     timeout_seconds: int | None = None,
     run_id: uuid.UUID | None = None,
     invocation_id: uuid.UUID | None = None,
+    prepared_exec_id: uuid.UUID | None = None,
 ) -> ExecAction:
-    command = command.strip()
-    if not command or len(command) > 4000:
-        raise Invalid("command must be 1..4000 characters")
-    timeout = timeout_seconds or settings.sandbox_run_timeout_seconds
-    if not 1 <= timeout <= 900:
-        raise Invalid("timeout_seconds must be between 1 and 900")
-    runtime = await _owned_runtime(
-        db,
-        ctx,
-        runtime_session_id=runtime_session_id,
-        session_id=session_id,
-        lock=True,
-    )
-    if invocation_id is not None:
-        existing = await db.scalar(
-            select(ProjectExecRun).where(
+    if prepared_exec_id is not None:
+        runtime = await _owned_runtime(
+            db,
+            ctx,
+            runtime_session_id=runtime_session_id,
+            session_id=session_id,
+            lock=True,
+        )
+        exec_run = await db.scalar(
+            select(ProjectExecRun)
+            .where(
                 ProjectExecRun.tenant_id == ctx.tenant_id,
-                ProjectExecRun.invocation_id == invocation_id,
+                ProjectExecRun.id == prepared_exec_id,
+                ProjectExecRun.runtime_session_id == runtime_session_id,
             )
+            .with_for_update()
         )
-        if existing is not None:
-            if existing.state in ("persisted", "failed", "cancelled"):
-                return ExecAction(
-                    runtime,
-                    existing,
-                    existing.stdout_head or "",
-                    existing.stderr_tail or "",
-                    (
-                        failure_note(existing.termination_reason)
-                        if existing.termination_reason not in (None, "done")
-                        else None
-                    ),
-                )
+        if exec_run is None:
+            raise NotFound("exec run not found")
+        if exec_run.state in ("persisted", "failed", "cancelled"):
+            return ExecAction(
+                runtime,
+                exec_run,
+                exec_run.stdout_head or "",
+                exec_run.stderr_tail or "",
+                (
+                    failure_note(exec_run.termination_reason)
+                    if exec_run.termination_reason not in (None, "done")
+                    else None
+                ),
+            )
+        if exec_run.state != "queued" or runtime.state != "executing":
             raise Conflict("exec_in_progress")
-
-    runtime, open_action = await _ensure_ready(db, ctx, runtime)
-    if open_action is not None and open_action.failure_note is not None:
-        raise Conflict(open_action.runtime_session.termination_reason or "runtime_open_failed")
-    if runtime.container_ref is None:
-        raise Conflict("runtime_not_ready")
-    try:
+        if runtime.container_ref is None:
+            raise Conflict("runtime_not_ready")
+        command = exec_run.command_text
+        timeout = exec_run.timeout_seconds
+        run_id = exec_run.run_id
         baseline = await _workspace(db, ctx, runtime)
-    except sbx.ScratchError as exc:
-        raise Conflict(exc.code) from exc
-
-    runtime = await _owned_runtime(
-        db,
-        ctx,
-        runtime_session_id=runtime.id,
-        session_id=session_id,
-        lock=True,
-    )
-    if runtime.state != "ready" or runtime.container_ref is None:
-        raise Conflict("runtime_not_ready")
-    last_seq = await db.scalar(
-        select(func.coalesce(func.max(ProjectExecRun.seq), 0)).where(
-            ProjectExecRun.tenant_id == ctx.tenant_id,
-            ProjectExecRun.runtime_session_id == runtime.id,
+        exec_run.state = "running"
+        await db.commit()
+        await _publish_state(runtime, exec_run=exec_run)
+    else:
+        command, timeout = _validated_exec_request(command, timeout_seconds)
+        runtime = await _owned_runtime(
+            db,
+            ctx,
+            runtime_session_id=runtime_session_id,
+            session_id=session_id,
+            lock=True,
         )
-    )
-    exec_run = ProjectExecRun(
-        tenant_id=ctx.tenant_id,
-        id=uuid.uuid4(),
-        runtime_session_id=runtime.id,
-        run_id=run_id,
-        invocation_id=invocation_id,
-        seq=int(last_seq or 0) + 1,
-        command_text=command,
-        command_preview=command[:_COMMAND_PREVIEW_MAX],
-        timeout_seconds=timeout,
-        state="running",
-    )
-    db.add(exec_run)
-    runtime.state = "executing"
-    runtime.expires_at = _operation_expiry(timeout)
-    if runtime.working_copy_id is not None:
-        wc = await db.get(ProjectWorkingCopy, (ctx.tenant_id, runtime.working_copy_id))
-        if wc is not None:
-            wc.lease_expires_at = runtime.expires_at
-    await db.commit()  # queued/running exec is visible before docker exec
-    await _publish_state(runtime, exec_run=exec_run)
+        if invocation_id is not None:
+            existing = await db.scalar(
+                select(ProjectExecRun).where(
+                    ProjectExecRun.tenant_id == ctx.tenant_id,
+                    ProjectExecRun.invocation_id == invocation_id,
+                )
+            )
+            if existing is not None:
+                if existing.state in ("persisted", "failed", "cancelled"):
+                    return ExecAction(
+                        runtime,
+                        existing,
+                        existing.stdout_head or "",
+                        existing.stderr_tail or "",
+                        (
+                            failure_note(existing.termination_reason)
+                            if existing.termination_reason not in (None, "done")
+                            else None
+                        ),
+                    )
+                raise Conflict("exec_in_progress")
 
+        runtime, open_action = await _ensure_ready(db, ctx, runtime)
+        if open_action is not None and open_action.failure_note is not None:
+            raise Conflict(open_action.runtime_session.termination_reason or "runtime_open_failed")
+        if runtime.container_ref is None:
+            raise Conflict("runtime_not_ready")
+        try:
+            baseline = await _workspace(db, ctx, runtime)
+        except sbx.ScratchError as exc:
+            raise Conflict(exc.code) from exc
+
+        runtime = await _owned_runtime(
+            db,
+            ctx,
+            runtime_session_id=runtime.id,
+            session_id=session_id,
+            lock=True,
+        )
+        if runtime.state != "ready" or runtime.container_ref is None:
+            raise Conflict("runtime_not_ready")
+        exec_run = ProjectExecRun(
+            tenant_id=ctx.tenant_id,
+            id=uuid.uuid4(),
+            runtime_session_id=runtime.id,
+            run_id=run_id,
+            invocation_id=invocation_id,
+            seq=await _next_exec_seq(db, ctx, runtime.id),
+            command_text=command,
+            command_preview=command[:_COMMAND_PREVIEW_MAX],
+            timeout_seconds=timeout,
+            state="running",
+        )
+        db.add(exec_run)
+        runtime.state = "executing"
+        runtime.expires_at = _operation_expiry(timeout)
+        if runtime.working_copy_id is not None:
+            wc = await db.get(ProjectWorkingCopy, (ctx.tenant_id, runtime.working_copy_id))
+            if wc is not None:
+                wc.lease_expires_at = runtime.expires_at
+        await db.commit()
+        await _publish_state(runtime, exec_run=exec_run)
+
+    assert exec_run is not None
+    assert runtime.container_ref is not None
+    active_exec: ProjectExecRun = exec_run
+    container_ref: str = runtime.container_ref
     output_seq = 0
 
     async def on_output(stream: str, delta: str) -> None:
@@ -572,7 +698,7 @@ async def exec_runtime(
                 event_type="runtime.output",
                 payload={
                     "runtime_session_id": str(runtime.id),
-                    "exec_run_id": str(exec_run.id),
+                    "exec_run_id": str(active_exec.id),
                     "stream": stream,
                     "seq": output_seq,
                     "delta": delta,
@@ -581,16 +707,16 @@ async def exec_runtime(
         except Exception as exc:  # noqa: BLE001 - debug acceleration only
             logger.warning(
                 "runtime output publish failed",
-                extra={"exec_run_id": str(exec_run.id), "error_type": type(exc).__name__},
+                extra={"exec_run_id": str(active_exec.id), "error_type": type(exc).__name__},
             )
 
     async def cancel_requested() -> bool:
-        await db.refresh(exec_run, attribute_names=["cancel_requested_at"])
-        return exec_run.cancel_requested_at is not None
+        await db.refresh(active_exec, attribute_names=["cancel_requested_at"])
+        return active_exec.cancel_requested_at is not None
 
     exec_started = time.monotonic()
     outcome = await sbx.exec_runtime_command(
-        runtime.container_ref,
+        container_ref,
         command,
         timeout_seconds=timeout,
         on_output=on_output,
@@ -732,7 +858,7 @@ async def request_cancel(
         .where(
             ProjectExecRun.tenant_id == ctx.tenant_id,
             ProjectExecRun.runtime_session_id == runtime.id,
-            ProjectExecRun.state == "running",
+            ProjectExecRun.state.in_(("queued", "running")),
         )
         .order_by(ProjectExecRun.seq.desc())
         .limit(1)
@@ -745,7 +871,115 @@ async def request_cancel(
     return runtime
 
 
+async def recover_pending_jobs(
+    db: AsyncSession,
+) -> tuple[
+    list[tuple[uuid.UUID, uuid.UUID]],
+    list[tuple[uuid.UUID, uuid.UUID]],
+    list[tuple[uuid.UUID, uuid.UUID]],
+]:
+    """Re-arm committed REST jobs lost between Postgres commit and Redis enqueue."""
+    now = _now()
+    open_jobs: list[tuple[uuid.UUID, uuid.UUID]] = []
+    exec_jobs: list[tuple[uuid.UUID, uuid.UUID]] = []
+    close_jobs: list[tuple[uuid.UUID, uuid.UUID]] = []
+    runtimes = (
+        (
+            await db.execute(
+                select(ProjectRuntimeSession)
+                .where(
+                    ProjectRuntimeSession.expires_at <= now,
+                    ProjectRuntimeSession.state.in_(("opening", "executing", "closing")),
+                )
+                .with_for_update(skip_locked=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for runtime in runtimes:
+        if (
+            runtime.state == "opening"
+            and runtime.container_ref is None
+            and runtime.operation_id is None
+        ):
+            runtime.expires_at = _operation_expiry(_OPEN_CLOSE_JOB_TIMEOUT_SECONDS)
+            open_jobs.append((runtime.tenant_id, runtime.id))
+            continue
+        if runtime.state == "closing" and runtime.operation_id is None:
+            runtime.expires_at = _operation_expiry(_OPEN_CLOSE_JOB_TIMEOUT_SECONDS)
+            close_jobs.append((runtime.tenant_id, runtime.id))
+            continue
+        if runtime.state == "executing":
+            queued = await db.scalar(
+                select(ProjectExecRun)
+                .where(
+                    ProjectExecRun.tenant_id == runtime.tenant_id,
+                    ProjectExecRun.runtime_session_id == runtime.id,
+                    ProjectExecRun.state == "queued",
+                )
+                .order_by(ProjectExecRun.seq.desc())
+                .limit(1)
+            )
+            if queued is not None:
+                runtime.expires_at = _operation_expiry(queued.timeout_seconds)
+                exec_jobs.append((runtime.tenant_id, queued.id))
+    await db.commit()
+    return open_jobs, exec_jobs, close_jobs
+
+
 async def close_runtime(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    session_id: uuid.UUID,
+    runtime_session_id: uuid.UUID,
+) -> RuntimeAction:
+    action, needs_close = await prepare_close(
+        db,
+        ctx,
+        session_id=session_id,
+        runtime_session_id=runtime_session_id,
+    )
+    if not needs_close:
+        return action
+    return await finish_close(
+        db,
+        ctx,
+        session_id=session_id,
+        runtime_session_id=runtime_session_id,
+    )
+
+
+async def prepare_close(
+    db: AsyncSession,
+    ctx: CallerContext,
+    *,
+    session_id: uuid.UUID,
+    runtime_session_id: uuid.UUID,
+) -> tuple[RuntimeAction, bool]:
+    """Persist ``closing`` for a worker-owned teardown without touching Docker."""
+    runtime = await _owned_runtime(
+        db,
+        ctx,
+        runtime_session_id=runtime_session_id,
+        session_id=session_id,
+        lock=True,
+    )
+    if runtime.state == "executing":
+        raise Conflict("runtime_busy")
+    if runtime.state == "closing":
+        raise Conflict("runtime_closing")
+    if runtime.state == "closed":
+        return RuntimeAction(runtime), False
+    runtime.state = "closing"
+    runtime.expires_at = _operation_expiry(_OPEN_CLOSE_JOB_TIMEOUT_SECONDS)
+    await db.commit()
+    await _publish_state(runtime)
+    return RuntimeAction(runtime), True
+
+
+async def finish_close(
     db: AsyncSession,
     ctx: CallerContext,
     *,
@@ -759,17 +993,18 @@ async def close_runtime(
         session_id=session_id,
         lock=True,
     )
-    if runtime.state == "executing":
-        raise Conflict("runtime_busy")
-    if runtime.state == "closing":
-        raise Conflict("runtime_closing")
     if runtime.state == "closed":
         return RuntimeAction(runtime)
+    if runtime.state != "closing":
+        raise Conflict("runtime_not_closing")
+    if runtime.operation_id is not None:
+        raise Conflict("runtime_operation_in_progress")
+    operation_id = uuid.uuid4()
+    runtime.operation_id = operation_id
+    runtime.operation_kind = "close"
+    runtime.expires_at = _operation_expiry(_OPEN_CLOSE_JOB_TIMEOUT_SECONDS)
     container_ref = runtime.container_ref
-    runtime.state = "closing"
-    runtime.expires_at = _operation_expiry(settings.sandbox_run_timeout_seconds)
     await db.commit()
-    await _publish_state(runtime)
     close_failure: str | None = None
     if container_ref and runtime.scope == "project":
         try:
@@ -794,7 +1029,11 @@ async def close_runtime(
         session_id=session_id,
         lock=True,
     )
+    if runtime.operation_id != operation_id or runtime.operation_kind != "close":
+        raise Conflict("runtime_operation_lost")
     runtime.container_ref = None
+    runtime.operation_id = None
+    runtime.operation_kind = None
     runtime.state = "failed" if close_failure is not None else "closed"
     runtime.termination_reason = close_failure
     runtime.closed_at = _now()
@@ -846,10 +1085,37 @@ async def recover_expired(db: AsyncSession) -> tuple[int, list[str]]:
         .all()
     )
     refs: list[str] = []
+    failed = 0
     for runtime in rows:
+        queued_exec = None
+        if runtime.state == "executing":
+            queued_exec = await db.scalar(
+                select(ProjectExecRun)
+                .where(
+                    ProjectExecRun.tenant_id == runtime.tenant_id,
+                    ProjectExecRun.runtime_session_id == runtime.id,
+                    ProjectExecRun.state == "queued",
+                )
+                .order_by(ProjectExecRun.seq.desc())
+                .limit(1)
+            )
+        # These are committed-but-not-dispatched REST jobs. The 30s recovery tick
+        # re-arms them; they are not failed as crashed in-flight work.
+        if (
+            (
+                runtime.state == "opening"
+                and runtime.container_ref is None
+                and runtime.operation_id is None
+            )
+            or (runtime.state == "closing" and runtime.operation_id is None)
+            or queued_exec is not None
+        ):
+            continue
         if runtime.container_ref:
             refs.append(runtime.container_ref)
         runtime.container_ref = None
+        runtime.operation_id = None
+        runtime.operation_kind = None
         runtime.state = "failed"
         runtime.termination_reason = "error:RuntimeExpired"
         runtime.closed_at = now
@@ -871,5 +1137,6 @@ async def recover_expired(db: AsyncSession) -> tuple[int, list[str]]:
         if running_exec is not None:
             running_exec.state = "failed"
             running_exec.termination_reason = "error:RuntimeExpired"
+        failed += 1
     await db.commit()
-    return len(rows), refs
+    return failed, refs

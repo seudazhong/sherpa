@@ -237,11 +237,11 @@ change, not a rename — not done here.
 
 *Reported 2026-07-28 (manual test) · kind: bug · status: **open** — architecture approved 2026-07-30 ([ADR-045](decisions.md#adr-045)/[ADR-047](decisions.md#adr-047)/[ADR-048](decisions.md#adr-048)); **P0 (named exits + logging) + P1 (baseline squash) shipped 2026-07-30; P3 (tar transport + first-party runner image + real-Docker lane) shipped 2026-07-31 — the original symptom is GONE and `project_run` really runs**; still **open** because the close criterion is the *human* Run lane, which is [Phase TR](IMPLEMENTATION.md) **P5***
 
-> **P4 started 2026-08-03.** The owner resolved the deferred-P2 sequencing question:
+> **P4 backend shipped 2026-08-03.** The owner resolved the deferred-P2 sequencing question:
 > `fs_*` / `runtime_*` / `sh_exec` temporarily register in the existing FULL flat registry and
-> self-enforce binding/ownership; P2 later wraps them in descriptors. Runtime liveness recovery,
-> DB-live container sweep protection, host-edit/runtime serialization and committed exec dispatch
-> were added to the contract before code.
+> self-enforce binding/ownership; P2 later wraps them in descriptors. Host-side fs, explicit
+> RuntimeSession, worker-owned `202` REST, bounded output, cancel, recovery and DB-live sweep
+> protection now ship. B-8 remains open only because P5 has not supplied the human Run/log/Stop UI.
 
 > **✅ Phase TR P3 shipped 2026-07-31 — the reported symptom is fixed, the item is not closed.**
 > The bind mount is gone; the disposable copy is tar-injected into an anonymous `/work` volume,

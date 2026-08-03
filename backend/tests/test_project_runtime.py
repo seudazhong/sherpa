@@ -18,6 +18,7 @@ from app.services import project_fs as fs_svc
 from app.services import project_runtime as runtime_svc
 from app.services import projects as projects_svc
 from app.services.context import CallerContext
+from app.services.errors import Conflict
 from app.tools import build_default_registry
 from tests.db_guard import drop_tenant
 
@@ -284,4 +285,134 @@ async def test_concurrent_runtime_open_serializes_on_the_working_copy(
         assert first == second
         assert fake.opened == 1
     finally:
+        await drop_tenant(tid)
+
+
+@pytest.mark.asyncio
+async def test_recovery_rearms_committed_but_unenqueued_runtime_job() -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    tid, _uid, sid, ctx = await _seed()
+    try:
+        async with SessionLocal() as session:
+            action, needs_activation = await runtime_svc.prepare_runtime(
+                session, ctx, session_id=sid, scope="project"
+            )
+            assert needs_activation is True
+            runtime = action.runtime_session
+            runtime.expires_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=1)
+            await session.commit()
+
+            open_jobs, exec_jobs, close_jobs = await runtime_svc.recover_pending_jobs(session)
+            assert open_jobs == [(tid, runtime.id)]
+            assert exec_jobs == []
+            assert close_jobs == []
+            failed, refs = await runtime_svc.recover_expired(session)
+            assert failed == 0
+            assert refs == []
+            await session.refresh(runtime)
+            assert runtime.state == "opening"
+            assert runtime.expires_at > datetime.datetime.now(datetime.UTC)
+    finally:
+        await drop_tenant(tid)
+
+
+@pytest.mark.asyncio
+async def test_runtime_open_operation_claim_rejects_duplicate_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    tid, _uid, sid, ctx = await _seed()
+    fake = _FakeRuntime()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_open = fake.open
+
+    async def blocked_open(ws: sbx.Workspace, *, session_label: str):
+        started.set()
+        await release.wait()
+        return await original_open(ws, session_label=session_label)
+
+    fake.open = blocked_open  # type: ignore[method-assign]
+    _patch_runtime(monkeypatch, fake)
+    try:
+        async with SessionLocal() as session:
+            action, _ = await runtime_svc.prepare_runtime(
+                session, ctx, session_id=sid, scope="project"
+            )
+            runtime_id = action.runtime_session.id
+
+        async def activate() -> str:
+            async with SessionLocal() as session:
+                result = await runtime_svc.activate_runtime(
+                    session,
+                    ctx,
+                    session_id=sid,
+                    runtime_session_id=runtime_id,
+                )
+                return result.runtime_session.state
+
+        first = asyncio.create_task(activate())
+        await started.wait()
+        with pytest.raises(Conflict, match="runtime_operation_in_progress"):
+            await activate()
+        release.set()
+        assert await first == "ready"
+        assert fake.opened == 1
+    finally:
+        release.set()
+        await drop_tenant(tid)
+
+
+@pytest.mark.asyncio
+async def test_prepared_exec_row_lock_rejects_duplicate_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not await ping_db():
+        pytest.skip("database not reachable")
+    tid, _uid, sid, ctx = await _seed()
+    fake = _FakeRuntime()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_execute = fake.execute
+
+    async def blocked_execute(*args, **kwargs):  # type: ignore[no-untyped-def]
+        started.set()
+        await release.wait()
+        return await original_execute(*args, **kwargs)
+
+    fake.execute = blocked_execute  # type: ignore[method-assign]
+    _patch_runtime(monkeypatch, fake)
+    try:
+        async with SessionLocal() as session:
+            opened = await runtime_svc.open_runtime(session, ctx, session_id=sid, scope="project")
+            exec_run = await runtime_svc.prepare_exec(
+                session,
+                ctx,
+                session_id=sid,
+                runtime_session_id=opened.runtime_session.id,
+                command="pass",
+            )
+            runtime_id = opened.runtime_session.id
+
+        async def execute_once():
+            async with SessionLocal() as session:
+                return await runtime_svc.exec_runtime(
+                    session,
+                    ctx,
+                    session_id=sid,
+                    runtime_session_id=runtime_id,
+                    command=exec_run.command_text,
+                    prepared_exec_id=exec_run.id,
+                )
+
+        first = asyncio.create_task(execute_once())
+        await started.wait()
+        with pytest.raises(Conflict, match="exec_in_progress"):
+            await execute_once()
+        release.set()
+        assert (await first).exec_run.state == "persisted"
+    finally:
+        release.set()
         await drop_tenant(tid)

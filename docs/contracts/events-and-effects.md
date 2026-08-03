@@ -810,9 +810,10 @@ is an owner user-level operation and emits no `project.lifecycle` event (it touc
 > bind-mounted** (ADR-047), `project_sandbox_runs` is replaced by `project_runtime_sessions` +
 > `project_exec_runs` (ADR-048), and the named-exit list is expanded so that a start failure,
 > an unreachable daemon and a missing image are no longer all reported as `sandbox_unavailable`.
-> The **product** half stays **`[target]`**: `runtime_open` / `sh_exec` / `runtime_close` as
-> tools, async `202` + SSE `runtime.output` frames, and cancel land in **P4**; the human Run
-> lane lands in **P5**. Project **file bytes and all
+> The **product backend** is now **`[shipped]` (P4, 2026-08-03)**:
+> `runtime_open` / `sh_exec` / `runtime_close`, worker-owned async `202`, transient bounded
+> `runtime.output` frames, cancel and crash recovery. The human Run lane remains **`[target]`
+> P5**. Project **file bytes and all
 > credentials never enter the append-only journal** — bytes live in immutable ADR-030
 > `storage_blobs`; the journal/log carries only ids + bounded metadata + named termination
 > reasons (ADR-016/019/021).

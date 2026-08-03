@@ -30,7 +30,15 @@ from app.core import execute_run, resume_approval
 from app.core.lease import claim_run_lease, run_heartbeat, worker_identity
 from app.db import SessionLocal
 from app.events import append_event, relay_once
-from app.models import ApprovalEnvelope, Connector, Run, Schedule, ScheduleFiring
+from app.models import (
+    ApprovalEnvelope,
+    Connector,
+    ProjectExecRun,
+    ProjectRuntimeSession,
+    Run,
+    Schedule,
+    ScheduleFiring,
+)
 from app.models import Session as SessionModel
 from app.notifications import build_email_sender, deliver_due_firings
 from app.observability import (
@@ -44,6 +52,7 @@ from app.providers import ProviderError, build_provider
 from app.redis_client import client as redis_client
 from app.scheduler import dispatch_due_agent_tasks, fire_due_schedules, try_acquire_leader
 from app.scheduler.pipeline import sync_and_analyze
+from app.services import ServiceError
 from app.services import channels as chan_svc
 from app.services.model_providers import provider_for_session
 from app.tools import build_default_registry
@@ -452,8 +461,15 @@ async def _startup(ctx: dict[str, Any]) -> None:
         from app.services import project_sandbox as sbx_svc
 
         async with SessionLocal() as session:
+            open_jobs, exec_jobs, close_jobs = await runtime_svc.recover_pending_jobs(session)
             _recovered, expired_refs = await runtime_svc.recover_expired(session)
             protected = await runtime_svc.protected_container_refs(session)
+        for tenant_id, runtime_id in open_jobs:
+            await queue.enqueue_project_runtime_open(tenant_id, runtime_id)
+        for tenant_id, exec_id in exec_jobs:
+            await queue.enqueue_project_runtime_exec(tenant_id, exec_id)
+        for tenant_id, runtime_id in close_jobs:
+            await queue.enqueue_project_runtime_close(tenant_id, runtime_id)
         for ref in expired_refs:
             await sandbox_runtime.remove_runtime_container(ref)
         sbx_svc.sweep_orphan_scratch(protected_ids=protected)
@@ -699,6 +715,113 @@ async def project_import_tick(ctx: dict[str, Any]) -> str:
     return f"redispatched={len(jobs)}"
 
 
+async def project_runtime_open_job(
+    ctx: dict[str, Any], tenant_id: str, runtime_session_id: str
+) -> str:
+    from app.services import project_runtime as runtime_svc
+    from app.services.context import CallerContext
+
+    tid, runtime_id = uuid.UUID(tenant_id), uuid.UUID(runtime_session_id)
+    async with SessionLocal() as session:
+        runtime = await session.get(ProjectRuntimeSession, (tid, runtime_id))
+        if runtime is None:
+            return "unknown_runtime"
+        caller = CallerContext(
+            tenant_id=tid,
+            user_id=runtime.user_id,
+            actor="user",
+            session_id=runtime.session_id,
+        )
+        try:
+            action = await runtime_svc.activate_runtime(
+                session,
+                caller,
+                session_id=runtime.session_id,
+                runtime_session_id=runtime.id,
+            )
+            return action.runtime_session.state
+        except ServiceError as exc:
+            return exc.code
+
+
+async def project_runtime_exec_job(ctx: dict[str, Any], tenant_id: str, exec_run_id: str) -> str:
+    from app.services import project_runtime as runtime_svc
+    from app.services.context import CallerContext
+
+    tid, exec_id = uuid.UUID(tenant_id), uuid.UUID(exec_run_id)
+    async with SessionLocal() as session:
+        exec_run = await session.get(ProjectExecRun, (tid, exec_id))
+        if exec_run is None:
+            return "unknown_exec"
+        runtime = await session.get(ProjectRuntimeSession, (tid, exec_run.runtime_session_id))
+        if runtime is None:
+            return "unknown_runtime"
+        caller = CallerContext(
+            tenant_id=tid,
+            user_id=runtime.user_id,
+            actor="user",
+            session_id=runtime.session_id,
+        )
+        try:
+            action = await runtime_svc.exec_runtime(
+                session,
+                caller,
+                session_id=runtime.session_id,
+                runtime_session_id=runtime.id,
+                command=exec_run.command_text,
+                timeout_seconds=exec_run.timeout_seconds,
+                prepared_exec_id=exec_run.id,
+            )
+            return action.exec_run.state
+        except ServiceError as exc:
+            return exc.code
+
+
+async def project_runtime_close_job(
+    ctx: dict[str, Any], tenant_id: str, runtime_session_id: str
+) -> str:
+    from app.services import project_runtime as runtime_svc
+    from app.services.context import CallerContext
+
+    tid, runtime_id = uuid.UUID(tenant_id), uuid.UUID(runtime_session_id)
+    async with SessionLocal() as session:
+        runtime = await session.get(ProjectRuntimeSession, (tid, runtime_id))
+        if runtime is None:
+            return "unknown_runtime"
+        caller = CallerContext(
+            tenant_id=tid,
+            user_id=runtime.user_id,
+            actor="user",
+            session_id=runtime.session_id,
+        )
+        try:
+            action = await runtime_svc.finish_close(
+                session,
+                caller,
+                session_id=runtime.session_id,
+                runtime_session_id=runtime.id,
+            )
+            return action.runtime_session.state
+        except ServiceError as exc:
+            return exc.code
+
+
+async def project_runtime_tick(ctx: dict[str, Any]) -> str:
+    if not await try_acquire_leader("project_runtime_tick", ttl_ms=55_000):
+        return "not_leader"
+    from app.services import project_runtime as runtime_svc
+
+    async with SessionLocal() as session:
+        open_jobs, exec_jobs, close_jobs = await runtime_svc.recover_pending_jobs(session)
+    for tenant_id, runtime_id in open_jobs:
+        await queue.enqueue_project_runtime_open(tenant_id, runtime_id)
+    for tenant_id, exec_id in exec_jobs:
+        await queue.enqueue_project_runtime_exec(tenant_id, exec_id)
+    for tenant_id, runtime_id in close_jobs:
+        await queue.enqueue_project_runtime_close(tenant_id, runtime_id)
+    return f"open={len(open_jobs)} exec={len(exec_jobs)} close={len(close_jobs)}"
+
+
 async def project_workcopy_maintenance(ctx: dict[str, Any]) -> str:
     """Leader-gated: expire idle Project working copies (release their quota reservation in
     one atomic transition) + sweep sandbox containers left by crashed runs (ADR-040/039/047).
@@ -741,6 +864,24 @@ class WorkerSettings:
             max_tries=1,
         ),
         project_import_job,
+        func(
+            project_runtime_open_job,
+            name="project_runtime_open_job",
+            timeout=900,
+            max_tries=1,
+        ),
+        func(
+            project_runtime_exec_job,
+            name="project_runtime_exec_job",
+            timeout=1300,
+            max_tries=1,
+        ),
+        func(
+            project_runtime_close_job,
+            name="project_runtime_close_job",
+            timeout=900,
+            max_tries=1,
+        ),
     ]
     cron_jobs = [
         cron(scheduler_tick, second=0),
@@ -751,6 +892,7 @@ class WorkerSettings:
         cron(knowledge_ingest_tick, second={10, 40}),
         cron(knowledge_maintenance, minute=set(range(5, 60, 10))),
         cron(project_import_tick, second={20, 50}),
+        cron(project_runtime_tick, second={0, 30}),
         cron(project_workcopy_maintenance, minute=set(range(7, 60, 10))),
     ]
     on_startup = _startup

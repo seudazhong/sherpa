@@ -322,6 +322,8 @@ class ProjectRuntimeSession(Base):
     base_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     fence_token: Mapped[int | None] = mapped_column(BigInteger)
     state: Mapped[str] = mapped_column(Text, server_default="opening")
+    operation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    operation_kind: Mapped[str | None] = mapped_column(Text)
     container_ref: Mapped[str | None] = mapped_column(Text)
     image: Mapped[str] = mapped_column(Text)
     image_digest: Mapped[str | None] = mapped_column(Text)

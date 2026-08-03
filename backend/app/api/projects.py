@@ -39,7 +39,7 @@ from app.models import (
 from app.services import CallerContext, ServiceError
 from app.services import github_source as gh
 from app.services import project_changes as changes_svc
-from app.services import project_sandbox as sbx_svc
+from app.services import project_runtime as runtime_svc
 from app.services import project_workcopy as wc_svc
 from app.services import projects as svc
 from app.services import projects_import as pimp
@@ -123,17 +123,44 @@ class ProjectChatCreate(BaseModel):
     title: str | None = None
 
 
-class SandboxRunState(BaseModel):
-    """Interim projection of a working copy's latest runtime session plus its latest exec
-    run. ADR-048 replaces this response with `RuntimeSessionState` + `ExecRun` (api §10.6
-    `[target]`) in Phase TR P4; P1 only re-points it at the target tables. `warm` is gone —
-    it was never implemented in any code path (ADR-047 §7)."""
+class RuntimeCapabilitiesOut(BaseModel):
+    tools: dict[str, str | None]
+    image: str
+    image_digest: str
 
-    run_id: uuid.UUID | None
+
+class RuntimeSessionState(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID | None
+    working_copy_id: uuid.UUID | None
+    session_id: uuid.UUID
+    scope: Literal["project", "ephemeral"]
     state: Literal["opening", "ready", "executing", "closing", "closed", "failed"]
+    fence_token: int | None
+    capabilities: RuntimeCapabilitiesOut | None
+    ingress_bytes: int | None
+    entry_count: int | None
+    expires_at: datetime.datetime | None
+    termination_reason: str | None
+    created_at: datetime.datetime
+
+
+class ExecRunOut(BaseModel):
+    id: uuid.UUID
+    runtime_session_id: uuid.UUID
+    run_id: uuid.UUID | None
+    command_preview: str
+    state: Literal["queued", "running", "persisted", "failed", "cancelled"]
     exit_code: int | None
     timed_out: bool
     termination_reason: str | None
+    stdout_head: str | None
+    stderr_tail: str | None
+    output_truncated: bool
+    spill_ref: str | None
+    change_set_id: uuid.UUID | None
+    duration_ms: int | None
+    created_at: datetime.datetime
 
 
 class WorkingCopySummary(BaseModel):
@@ -147,7 +174,8 @@ class WorkingCopySummary(BaseModel):
     reserved_bytes: int
     head_moved: bool
     open_change_set_id: uuid.UUID | None
-    sandbox: SandboxRunState | None
+    runtime: RuntimeSessionState | None
+    last_exec: ExecRunOut | None
     last_boundary_at: datetime.datetime | None
     expires_at: datetime.datetime | None
     updated_at: datetime.datetime
@@ -556,8 +584,15 @@ async def get_project_context(
 # --- Workspace W3: working copy / sandbox / change review (api.md §10.7) -----
 
 
-class SandboxRunRequest(BaseModel):
+class RuntimeOpenRequest(BaseModel):
+    session_id: uuid.UUID
+    scope: Literal["project", "ephemeral"] = "project"
+    reason: Annotated[str, Field(max_length=200)] | None = None
+
+
+class ExecRequest(BaseModel):
     command: Annotated[str, Field(min_length=1, max_length=4000)]
+    timeout_seconds: Annotated[int, Field(ge=1, le=900)] | None = None
 
 
 class ChangeSetEntrySummary(BaseModel):
@@ -634,9 +669,9 @@ def _artifact_out(art: ProjectArtifact) -> ArtifactOut:
     )
 
 
-async def _sandbox_state(
+async def _latest_runtime(
     db: AsyncSession, ctx: CallerContext, wc: ProjectWorkingCopy
-) -> SandboxRunState | None:
+) -> tuple[ProjectRuntimeSession | None, ProjectExecRun | None]:
     rs = await db.scalar(
         select(ProjectRuntimeSession)
         .where(
@@ -647,7 +682,7 @@ async def _sandbox_state(
         .limit(1)
     )
     if rs is None:
-        return None
+        return None, None
     er = await db.scalar(
         select(ProjectExecRun)
         .where(
@@ -657,18 +692,67 @@ async def _sandbox_state(
         .order_by(ProjectExecRun.seq.desc())
         .limit(1)
     )
-    return _runtime_state(rs, er)
+    return rs, er
 
 
-def _runtime_state(rs: ProjectRuntimeSession, er: ProjectExecRun | None) -> SandboxRunState:
-    """The named exit lives on the exec run when a command ran and on the session
-    otherwise — never on both, so the UI shows exactly one reason."""
-    return SandboxRunState(
-        run_id=er.run_id if er is not None else None,
+def _capabilities(rs: ProjectRuntimeSession) -> RuntimeCapabilitiesOut | None:
+    if rs.capabilities is None or rs.image_digest is None:
+        return None
+    raw_tools = rs.capabilities.get("tools")
+    tools: dict[str, str | None] = {}
+    if isinstance(raw_tools, list):
+        for item in raw_tools:
+            if isinstance(item, dict) and item.get("name"):
+                tools[str(item["name"])] = (
+                    str(item["version"]) if item.get("version") is not None else None
+                )
+    elif isinstance(raw_tools, dict):
+        tools = {
+            str(name): (str(version) if version is not None else None)
+            for name, version in raw_tools.items()
+        }
+    return RuntimeCapabilitiesOut(
+        tools=tools,
+        image=rs.image,
+        image_digest=rs.image_digest,
+    )
+
+
+def _runtime_state(rs: ProjectRuntimeSession) -> RuntimeSessionState:
+    return RuntimeSessionState(
+        id=rs.id,
+        project_id=rs.project_id,
+        working_copy_id=rs.working_copy_id,
+        session_id=rs.session_id,
+        scope=rs.scope,  # type: ignore[arg-type]
         state=rs.state,  # type: ignore[arg-type]
-        exit_code=er.exit_code if er is not None else None,
-        timed_out=er.timed_out if er is not None else False,
-        termination_reason=(er.termination_reason if er is not None else rs.termination_reason),
+        fence_token=rs.fence_token,
+        capabilities=_capabilities(rs),
+        ingress_bytes=rs.ingress_bytes,
+        entry_count=rs.entry_count,
+        expires_at=rs.expires_at,
+        termination_reason=rs.termination_reason,
+        created_at=rs.created_at,
+    )
+
+
+def _exec_state(exec_run: ProjectExecRun) -> ExecRunOut:
+    return ExecRunOut(
+        id=exec_run.id,
+        runtime_session_id=exec_run.runtime_session_id,
+        run_id=exec_run.run_id,
+        command_preview=exec_run.command_preview,
+        state=exec_run.state,  # type: ignore[arg-type]
+        exit_code=exec_run.exit_code,
+        timed_out=exec_run.timed_out,
+        termination_reason=exec_run.termination_reason,
+        stdout_head=exec_run.stdout_head,
+        stderr_tail=exec_run.stderr_tail,
+        output_truncated=exec_run.output_truncated,
+        spill_ref=exec_run.spill_ref,
+        change_set_id=exec_run.change_set_id,
+        duration_ms=exec_run.duration_ms,
+        created_at=exec_run.created_at,
     )
 
 
@@ -682,7 +766,7 @@ async def _wc_summary(
     project = await db.get(Project, (ctx.tenant_id, wc.project_id))
     moved = bool(project is not None and wc_svc.head_moved(project, wc))
     open_cs = await changes_svc.open_change_set(db, ctx, wc)
-    sandbox = await _sandbox_state(db, ctx, wc)
+    runtime, last_exec = await _latest_runtime(db, ctx, wc)
     return WorkingCopySummary(
         id=wc.id,
         project_id=wc.project_id,
@@ -694,7 +778,8 @@ async def _wc_summary(
         reserved_bytes=wc.reserved_bytes,
         head_moved=moved,
         open_change_set_id=open_cs.id if open_cs is not None else None,
-        sandbox=sandbox,
+        runtime=_runtime_state(runtime) if runtime is not None else None,
+        last_exec=_exec_state(last_exec) if last_exec is not None else None,
         last_boundary_at=wc.last_boundary_at,
         expires_at=wc.expires_at,
         updated_at=wc.updated_at,
@@ -714,31 +799,143 @@ async def get_working_copy(
     return await _wc_summary(db, cc, wc)
 
 
-@router.post("/projects/{project_id}/sandbox-runs", status_code=status.HTTP_202_ACCEPTED)
-async def create_sandbox_run(
+@router.post("/projects/{project_id}/runtime", status_code=status.HTTP_202_ACCEPTED)
+async def create_runtime(
     project_id: uuid.UUID,
-    body: SandboxRunRequest,
+    body: RuntimeOpenRequest,
     ctx: Annotated[RequestContext, Depends(require_csrf)],
     db: Annotated[AsyncSession, Depends(get_session)],
-    session_id: Annotated[uuid.UUID, Query()],
-) -> SandboxRunState:
+) -> RuntimeSessionState:
     cc = _caller(ctx)
     try:
-        wc = await wc_svc.open_working_copy(db, cc, session_id=session_id)
-        if wc.project_id != project_id:
+        project_context = await svc.project_context(db, cc, session_id=body.session_id)
+        if body.scope == "project" and project_context.project_id != project_id:
             raise HTTPException(status_code=404, detail="not_found")
-        outcome = await sbx_svc.run_sandbox(
+        action, needs_activation = await runtime_svc.prepare_runtime(
             db,
             cc,
-            wc,
-            run_id=uuid.uuid4(),
-            request=sbx_svc.SandboxRequest(command=body.command),
+            session_id=body.session_id,
+            scope=body.scope,
+            reason=body.reason,
         )
-        await db.commit()
     except ServiceError as e:
         await db.rollback()
         raise _http(e) from None
-    return _runtime_state(outcome.runtime_session, outcome.exec_run)
+    if needs_activation:
+        try:
+            await queue.enqueue_project_runtime_open(ctx.tenant_id, action.runtime_session.id)
+        except Exception as exc:  # noqa: BLE001 - recovery tick re-enqueues the durable row
+            logger.warning("runtime open enqueue skipped: %s", exc)
+    return _runtime_state(action.runtime_session)
+
+
+@router.get("/runtime/{runtime_session_id}")
+async def get_runtime(
+    runtime_session_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> RuntimeSessionState:
+    runtime = await db.get(ProjectRuntimeSession, (ctx.tenant_id, runtime_session_id))
+    if runtime is None or runtime.user_id != ctx.user_id:
+        raise HTTPException(status_code=404, detail="not_found")
+    return _runtime_state(runtime)
+
+
+@router.post("/runtime/{runtime_session_id}/exec", status_code=status.HTTP_202_ACCEPTED)
+async def create_runtime_exec(
+    runtime_session_id: uuid.UUID,
+    body: ExecRequest,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ExecRunOut:
+    runtime = await db.get(ProjectRuntimeSession, (ctx.tenant_id, runtime_session_id))
+    if runtime is None or runtime.user_id != ctx.user_id:
+        raise HTTPException(status_code=404, detail="not_found")
+    try:
+        exec_run = await runtime_svc.prepare_exec(
+            db,
+            _caller(ctx),
+            session_id=runtime.session_id,
+            runtime_session_id=runtime.id,
+            command=body.command,
+            timeout_seconds=body.timeout_seconds,
+        )
+    except ServiceError as exc:
+        await db.rollback()
+        raise _http(exc) from None
+    try:
+        await queue.enqueue_project_runtime_exec(ctx.tenant_id, exec_run.id)
+    except Exception as exc:  # noqa: BLE001 - recovery tick re-enqueues the durable row
+        logger.warning("runtime exec enqueue skipped: %s", exc)
+    return _exec_state(exec_run)
+
+
+@router.get("/runtime/{runtime_session_id}/exec/{exec_run_id}")
+async def get_runtime_exec(
+    runtime_session_id: uuid.UUID,
+    exec_run_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ExecRunOut:
+    runtime = await db.get(ProjectRuntimeSession, (ctx.tenant_id, runtime_session_id))
+    exec_run = await db.get(ProjectExecRun, (ctx.tenant_id, exec_run_id))
+    if (
+        runtime is None
+        or runtime.user_id != ctx.user_id
+        or exec_run is None
+        or exec_run.runtime_session_id != runtime.id
+    ):
+        raise HTTPException(status_code=404, detail="not_found")
+    return _exec_state(exec_run)
+
+
+@router.post("/runtime/{runtime_session_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+async def cancel_runtime_exec(
+    runtime_session_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> RuntimeSessionState:
+    runtime = await db.get(ProjectRuntimeSession, (ctx.tenant_id, runtime_session_id))
+    if runtime is None or runtime.user_id != ctx.user_id:
+        raise HTTPException(status_code=404, detail="not_found")
+    try:
+        runtime = await runtime_svc.request_cancel(
+            db,
+            _caller(ctx),
+            session_id=runtime.session_id,
+            runtime_session_id=runtime.id,
+        )
+    except ServiceError as exc:
+        await db.rollback()
+        raise _http(exc) from None
+    return _runtime_state(runtime)
+
+
+@router.delete("/runtime/{runtime_session_id}")
+async def delete_runtime(
+    runtime_session_id: uuid.UUID,
+    ctx: Annotated[RequestContext, Depends(require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> RuntimeSessionState:
+    runtime = await db.get(ProjectRuntimeSession, (ctx.tenant_id, runtime_session_id))
+    if runtime is None or runtime.user_id != ctx.user_id:
+        raise HTTPException(status_code=404, detail="not_found")
+    try:
+        action, needs_close = await runtime_svc.prepare_close(
+            db,
+            _caller(ctx),
+            session_id=runtime.session_id,
+            runtime_session_id=runtime.id,
+        )
+    except ServiceError as exc:
+        await db.rollback()
+        raise _http(exc) from None
+    if needs_close:
+        try:
+            await queue.enqueue_project_runtime_close(ctx.tenant_id, runtime.id)
+        except Exception as exc:  # noqa: BLE001 - recovery tick re-enqueues the durable row
+            logger.warning("runtime close enqueue skipped: %s", exc)
+    return _runtime_state(action.runtime_session)
 
 
 @router.get("/projects/{project_id}/working-copies/{wc_id}")

@@ -534,8 +534,18 @@ export interface ProjectTemplate {
   description: string;
 }
 
-export interface SandboxRunState {
-  run_id: string | null;
+export interface RuntimeCapabilities {
+  tools: Record<string, string | null>;
+  image: string;
+  image_digest: string;
+}
+
+export interface RuntimeSessionState {
+  id: string;
+  project_id: string | null;
+  working_copy_id: string | null;
+  session_id: string;
+  scope: "project" | "ephemeral";
   state:
     | "opening"
     | "ready"
@@ -543,9 +553,31 @@ export interface SandboxRunState {
     | "closing"
     | "closed"
     | "failed";
+  fence_token: number | null;
+  capabilities: RuntimeCapabilities | null;
+  ingress_bytes: number | null;
+  entry_count: number | null;
+  expires_at: string | null;
+  termination_reason: string | null;
+  created_at: string;
+}
+
+export interface RuntimeExecRun {
+  id: string;
+  runtime_session_id: string;
+  run_id: string | null;
+  command_preview: string;
+  state: "queued" | "running" | "persisted" | "failed" | "cancelled";
   exit_code: number | null;
   timed_out: boolean;
   termination_reason: string | null;
+  stdout_head: string | null;
+  stderr_tail: string | null;
+  output_truncated: boolean;
+  spill_ref: string | null;
+  change_set_id: string | null;
+  duration_ms: number | null;
+  created_at: string;
 }
 
 export interface WorkingCopySummary {
@@ -565,7 +597,8 @@ export interface WorkingCopySummary {
   reserved_bytes: number;
   head_moved: boolean;
   open_change_set_id: string | null;
-  sandbox: SandboxRunState | null;
+  runtime: RuntimeSessionState | null;
+  last_exec: RuntimeExecRun | null;
   last_boundary_at: string | null;
   expires_at: string | null;
   updated_at: string;
@@ -1259,13 +1292,40 @@ export const api = {
     sid: string,
     body: { model_provider_id: string | null; model: string | null },
   ) => req<SessionModelState>(`/sessions/${sid}/model`, jsonInit("POST", csrf, body)),
-  // W3 — task working copy + one-time scratch sandbox + change review (ADR-040/039).
+  // W3/P4 — durable working copy + explicit worker-owned RuntimeSession.
   getWorkingCopy: (sid: string) =>
     req<WorkingCopySummary | null>(`/sessions/${sid}/working-copy`),
-  createSandboxRun: (csrf: string, pid: string, sid: string, command: string) =>
-    req<SandboxRunState>(
-      `/projects/${pid}/sandbox-runs?session_id=${encodeURIComponent(sid)}`,
-      jsonInit("POST", csrf, { command }),
+  openRuntime: (csrf: string, pid: string, sid: string) =>
+    req<RuntimeSessionState>(
+      `/projects/${pid}/runtime`,
+      jsonInit("POST", csrf, { session_id: sid, scope: "project" }),
+    ),
+  getRuntime: (runtimeId: string) =>
+    req<RuntimeSessionState>(`/runtime/${runtimeId}`),
+  execRuntime: (
+    csrf: string,
+    runtimeId: string,
+    command: string,
+    timeoutSeconds?: number,
+  ) =>
+    req<RuntimeExecRun>(
+      `/runtime/${runtimeId}/exec`,
+      jsonInit("POST", csrf, {
+        command,
+        timeout_seconds: timeoutSeconds,
+      }),
+    ),
+  getRuntimeExec: (runtimeId: string, execId: string) =>
+    req<RuntimeExecRun>(`/runtime/${runtimeId}/exec/${execId}`),
+  cancelRuntime: (csrf: string, runtimeId: string) =>
+    req<RuntimeSessionState>(
+      `/runtime/${runtimeId}/cancel`,
+      jsonInit("POST", csrf),
+    ),
+  closeRuntime: (csrf: string, runtimeId: string) =>
+    req<RuntimeSessionState>(
+      `/runtime/${runtimeId}`,
+      jsonInit("DELETE", csrf),
     ),
   getChangeSet: (pid: string, csId: string) =>
     req<ChangeSet>(`/projects/${pid}/change-sets/${csId}`),

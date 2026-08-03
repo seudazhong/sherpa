@@ -16,7 +16,7 @@ from app.core.admission import admit_prompt
 from app.db import SessionLocal, ping_db
 from app.models import EventJournal, Message, Run, Tenant, User
 from app.models import Session as SessionModel
-from app.worker import project_workcopy_maintenance, run_job
+from app.worker import WorkerSettings, project_workcopy_maintenance, run_job
 from tests.db_guard import drop_tenant
 
 
@@ -139,3 +139,20 @@ async def test_project_maintenance_protects_live_runtime_containers(
     assert removed == ["expired-container"]
     assert swept == [frozenset({"live-container"})]
     assert result == "expired=2 runtimes_recovered=1 containers_swept=3"
+
+
+def test_runtime_jobs_disable_arq_retries_and_cover_product_timeout() -> None:
+    wrapped = {
+        item.name: item
+        for item in WorkerSettings.functions
+        if item.__class__.__name__ == "Function"
+    }
+    assert wrapped["project_runtime_open_job"].timeout_s == 900
+    assert wrapped["project_runtime_exec_job"].timeout_s == 1300
+    assert wrapped["project_runtime_close_job"].timeout_s == 900
+    for name in (
+        "project_runtime_open_job",
+        "project_runtime_exec_job",
+        "project_runtime_close_job",
+    ):
+        assert wrapped[name].max_tries == 1

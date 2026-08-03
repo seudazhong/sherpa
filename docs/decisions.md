@@ -973,6 +973,13 @@
 > `project_exec_runs` 因此持久化有界 `command_text`（≤4000）和
 > `timeout_seconds`（1..900）；worker 只从该行执行。API/UI/审批仍只投影有界
 > `command_preview`，`command_text` 不进入 journal、日志或工具结果。
+>
+> **修订 E（2026-08-03，跨 worker claim）**：`opening` / `closing` 只是产品状态，
+> 不能证明哪个 worker 正在做 Docker I/O。RuntimeSession 增加 nullable-together 的
+> `operation_id` + `operation_kind(open|close)`；worker 先原子 claim 再离开事务做
+> Docker，重复投递看到 claim 即退出。恢复 tick 只重发无 claim 的 pending job；
+> claim 超时由维护任务按失败/重建缓存处理。arq 的 runtime job 全部 `max_tries=1`，
+> exec job timeout 高于 API 允许的 900 秒加持久化尾部，禁止 arq 与 Sherpa 双重重试。
 
 - **核心判断：file 与 shell 必须分层，不能一刀切**：
 

@@ -1478,7 +1478,7 @@ class ToolsLoadArgs(StrictModel):
 ALLOWED and EXECUTABLE independently) but is **audited**, because a change to the visible
 set is a security-relevant event.
 
-### 7.6 `fs.*`, `runtime.*`, `sh.*` **`[target]`** (ADR-048)
+### 7.6 `fs.*`, `runtime.*`, `sh.*` **`[shipped backend]`** (ADR-048)
 
 `fs.*` runs **host-side** against the Project working copy's effective tree
 (`base snapshot + persisted overlay`). It needs no container, so **a sandbox outage costs
@@ -2154,18 +2154,12 @@ class ProjectSource(StrictModel):
 
 ### 10.7 Projects — task working copy + RuntimeSession coding runtime (ADR-040 · ADR-047 · ADR-048)
 
-> **STATUS (2026-07-30).** The **working copy / change review / Save·checkpoint·Discard /
-> artifacts** half is **`[shipped]`** (migration `0030`, `/work/projects` Change Review UI).
-> The **execution** half is being replaced under ADR-045's clean break and is **`[target]`,
-> not implemented**:
-> - `POST /projects/{id}/sandbox-runs` is **deleted** — it ran the sandbox **synchronously
->   inside the web process** (blocking the HTTP request up to 120 s) while `SANDBOX_KIND`
->   is only set on the worker, so it could never have succeeded; its frontend client
->   (`frontend/src/api.ts::createSandboxRun`) has **no call site at all**, i.e. the human
->   Run lane never existed. The capability matrix cell claiming otherwise is corrected.
-> - `SandboxRunState` (with `warm`) is **deleted**. `warm` was never implemented anywhere.
-> - The replacement is an explicit **`RuntimeSession`** (open → exec* → close) executed by
->   the **worker**, with `202` + SSE streaming + cancellation.
+> **STATUS (2026-08-03).** The working-copy/change-review half and the P4 execution backend
+> are **`[shipped]`**. `POST /projects/{id}/sandbox-runs` and `SandboxRunState` are deleted.
+> The replacement is an explicit worker-owned RuntimeSession: durable open/exec/close rows,
+> `202` routes, bounded cursor-less runtime SSE frames, cancel, crash recovery, hot-container
+> reuse and host-edit rematerialization. The frontend API client is aligned, but the actual
+> human Run/log/Stop workspace remains **`[target]` P5**.
 >
 > The sandbox is hardened and **network-disabled** (ADR-025/ADR-039) and receives the
 > working copy as a **tar-injected disposable scratch copy in an anonymous volume — it

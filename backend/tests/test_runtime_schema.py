@@ -37,6 +37,23 @@ async def test_project_exec_run_dispatch_columns_and_unique_index_exist() -> Non
             "stderr_tail",
             "cancel_requested_at",
         } <= columns
+        runtime_columns = set(
+            (
+                await session.execute(
+                    text(
+                        """
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'project_runtime_sessions'
+                        """
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert {"operation_id", "operation_kind"} <= runtime_columns
         index = await session.scalar(
             text(
                 """

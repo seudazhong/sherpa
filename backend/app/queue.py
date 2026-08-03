@@ -93,3 +93,29 @@ async def enqueue_project_import(tenant_id: uuid.UUID, project_id: uuid.UUID) ->
         await pool.enqueue_job("project_import_job", str(tenant_id), str(project_id))
     finally:
         await pool.aclose()
+
+
+async def enqueue_project_runtime_open(tenant_id: uuid.UUID, runtime_session_id: uuid.UUID) -> None:
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job("project_runtime_open_job", str(tenant_id), str(runtime_session_id))
+    finally:
+        await pool.aclose()
+
+
+async def enqueue_project_runtime_exec(tenant_id: uuid.UUID, exec_run_id: uuid.UUID) -> None:
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job("project_runtime_exec_job", str(tenant_id), str(exec_run_id))
+    finally:
+        await pool.aclose()
+
+
+async def enqueue_project_runtime_close(
+    tenant_id: uuid.UUID, runtime_session_id: uuid.UUID
+) -> None:
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job("project_runtime_close_job", str(tenant_id), str(runtime_session_id))
+    finally:
+        await pool.aclose()

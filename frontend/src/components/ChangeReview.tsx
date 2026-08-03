@@ -202,12 +202,12 @@ export function ChangeReview({
           a path here does not mean it is unchanged.
         </div>
       )}
-      {workingCopy.sandbox &&
-        workingCopy.sandbox.termination_reason &&
-        workingCopy.sandbox.termination_reason !== "done" && (
+      {workingCopy.last_exec &&
+        workingCopy.last_exec.termination_reason &&
+        workingCopy.last_exec.termination_reason !== "done" && (
           <div className="cr-banner cr-warn">
             Last run ended with{" "}
-            <code>{workingCopy.sandbox.termination_reason}</code>.
+            <code>{workingCopy.last_exec.termination_reason}</code>.
           </div>
         )}
 
